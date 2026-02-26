@@ -299,8 +299,17 @@ pub fn is_directed(dataset_name: &str) -> bool {
     } else if lower.contains("directed") {
         true
     } else {
-        // Default to directed
-        true
+        // Known S-size datasets from LDBC Graphalytics
+        match dataset_name {
+            "datagen-7_5-fb" | "datagen-7_6-fb" | "datagen-8_0-fb"
+            | "datagen-8_1-fb" | "datagen-8_4-fb" | "datagen-8_5-fb"
+            | "datagen-8_9-fb" | "datagen-9_0-fb" | "datagen-9_1-fb"
+            | "datagen-9_4-fb" | "dota-league"
+            | "graph500-22" | "graph500-23" | "graph500-24"
+            | "graph500-25" | "graph500-26" => false,
+            // wiki-Talk, cit-Patents, twitter-*, kgs, etc. are directed
+            _ => true,
+        }
     }
 }
 

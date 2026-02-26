@@ -297,6 +297,8 @@ fn parse_match_statement(pair: pest::iterators::Pair<Rule>, query: &mut Query) -
                 query.where_clause = Some(parse_where_clause(inner)?);
             }
             Rule::with_clause => {
+                // Record where WITH splits pre-WITH from post-WITH match clauses
+                query.with_split_index = Some(query.match_clauses.len());
                 query.with_clause = Some(parse_with_clause(inner)?);
             }
             Rule::call_clause => {

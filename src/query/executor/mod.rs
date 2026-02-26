@@ -616,6 +616,104 @@ mod tests {
     }
 
     #[test]
+    fn test_with_alias_projection() {
+        // WITH n.name AS name RETURN name (alias only, no aggregation)
+        let mut store = GraphStore::new();
+        let alice = store.create_node("Person");
+        if let Some(node) = store.get_node_mut(alice) {
+            node.set_property("name", "Alice");
+            node.set_property("age", 30i64);
+        }
+        let bob = store.create_node("Person");
+        if let Some(node) = store.get_node_mut(bob) {
+            node.set_property("name", "Bob");
+            node.set_property("age", 25i64);
+        }
+
+        let query = parse_query("MATCH (n:Person) WITH n.name AS name RETURN name").unwrap();
+        let executor = QueryExecutor::new(&store);
+        let result = executor.execute(&query);
+        assert!(result.is_ok(), "WITH alias projection failed: {:?}", result.err());
+        let batch = result.unwrap();
+        assert_eq!(batch.records.len(), 2);
+    }
+
+    #[test]
+    fn test_with_aggregation() {
+        // WITH count(n) AS total RETURN total
+        let mut store = GraphStore::new();
+        for i in 0..5 {
+            let id = store.create_node("Person");
+            if let Some(node) = store.get_node_mut(id) {
+                node.set_property("name", format!("Person{}", i));
+            }
+        }
+
+        let query = parse_query("MATCH (n:Person) WITH count(n) AS total RETURN total").unwrap();
+        let executor = QueryExecutor::new(&store);
+        let result = executor.execute(&query);
+        assert!(result.is_ok(), "WITH aggregation failed: {:?}", result.err());
+        let batch = result.unwrap();
+        assert_eq!(batch.records.len(), 1);
+        // total should be 5
+        let total = batch.records[0].get("total").unwrap();
+        match total {
+            Value::Property(PropertyValue::Integer(n)) => assert_eq!(*n, 5),
+            _ => panic!("Expected integer, got {:?}", total),
+        }
+    }
+
+    #[test]
+    fn test_with_order_by_limit() {
+        // WITH n ORDER BY n.age DESC LIMIT 2 RETURN n.name
+        let mut store = GraphStore::new();
+        let ages = vec![("Alice", 30i64), ("Bob", 25), ("Charlie", 35)];
+        for (name, age) in &ages {
+            let id = store.create_node("Person");
+            if let Some(node) = store.get_node_mut(id) {
+                node.set_property("name", *name);
+                node.set_property("age", *age);
+            }
+        }
+
+        let query = parse_query(
+            "MATCH (n:Person) WITH n ORDER BY n.age DESC LIMIT 2 RETURN n.name"
+        ).unwrap();
+        let executor = QueryExecutor::new(&store);
+        let result = executor.execute(&query);
+        assert!(result.is_ok(), "WITH ORDER BY LIMIT failed: {:?}", result.err());
+        let batch = result.unwrap();
+        assert_eq!(batch.records.len(), 2, "Expected 2 results from WITH LIMIT 2");
+    }
+
+    #[test]
+    fn test_with_distinct() {
+        // WITH DISTINCT n.label AS label RETURN label
+        let mut store = GraphStore::new();
+        for _ in 0..3 {
+            let id = store.create_node("Person");
+            if let Some(node) = store.get_node_mut(id) {
+                node.set_property("category", "A");
+            }
+        }
+        for _ in 0..2 {
+            let id = store.create_node("Person");
+            if let Some(node) = store.get_node_mut(id) {
+                node.set_property("category", "B");
+            }
+        }
+
+        let query = parse_query(
+            "MATCH (n:Person) WITH DISTINCT n.category AS cat RETURN cat"
+        ).unwrap();
+        let executor = QueryExecutor::new(&store);
+        let result = executor.execute(&query);
+        assert!(result.is_ok(), "WITH DISTINCT failed: {:?}", result.err());
+        let batch = result.unwrap();
+        assert_eq!(batch.records.len(), 2, "Expected 2 distinct categories");
+    }
+
+    #[test]
     fn test_execute_delete() {
         let mut store = GraphStore::new();
 

@@ -389,6 +389,87 @@ CREATE (p1)-[:KNOWS {creationDate: 1709251200000}]->(p2)",
     ]
 }
 
+/// Build the list of 8 LDBC SNB Interactive v2 delete operations.
+///
+/// These mirror the INS1-INS8 inserts: they delete the entities created by
+/// the insert operations.  Execute order: reads -> INS1-8 -> DEL1-8.
+fn ldbc_deletes() -> Vec<LdbcQuery> {
+    vec![
+        // DEL-1: Remove a Person (cascading via DETACH DELETE)
+        LdbcQuery {
+            id: "DEL1",
+            name: "Delete Person",
+            category: "delete",
+            cypher: "\
+MATCH (p:Person {id: 999999})
+DETACH DELETE p",
+        },
+        // DEL-2: Remove LIKES edge from Person to Post
+        LdbcQuery {
+            id: "DEL2",
+            name: "Delete Like (Post)",
+            category: "delete",
+            cypher: "\
+MATCH (p:Person {id: 933})-[l:LIKES]->(m:Post {id: 1236950581248})
+DELETE l",
+        },
+        // DEL-3: Remove LIKES edge from Person to Comment
+        LdbcQuery {
+            id: "DEL3",
+            name: "Delete Like (Comment)",
+            category: "delete",
+            cypher: "\
+MATCH (p:Person {id: 933})-[l:LIKES]->(c:Comment {id: 1236950581249})
+DELETE l",
+        },
+        // DEL-4: Remove a Forum (cascading via DETACH DELETE)
+        LdbcQuery {
+            id: "DEL4",
+            name: "Delete Forum",
+            category: "delete",
+            cypher: "\
+MATCH (f:Forum {id: 999998})
+DETACH DELETE f",
+        },
+        // DEL-5: Remove HAS_MEMBER edge
+        LdbcQuery {
+            id: "DEL5",
+            name: "Delete Forum Member",
+            category: "delete",
+            cypher: "\
+MATCH (f:Forum {id: 999998})-[m:HAS_MEMBER]->(p:Person {id: 933})
+DELETE m",
+        },
+        // DEL-6: Remove a Post (cascading via DETACH DELETE)
+        LdbcQuery {
+            id: "DEL6",
+            name: "Delete Post",
+            category: "delete",
+            cypher: "\
+MATCH (m:Post {id: 999997})
+DETACH DELETE m",
+        },
+        // DEL-7: Remove a Comment (cascading via DETACH DELETE)
+        LdbcQuery {
+            id: "DEL7",
+            name: "Delete Comment",
+            category: "delete",
+            cypher: "\
+MATCH (c:Comment {id: 999996})
+DETACH DELETE c",
+        },
+        // DEL-8: Remove KNOWS edge
+        LdbcQuery {
+            id: "DEL8",
+            name: "Delete Friendship",
+            category: "delete",
+            cypher: "\
+MATCH (p1:Person {id: 933})-[k:KNOWS]->(p2:Person {id: 999999})
+DELETE k",
+        },
+    ]
+}
+
 // ============================================================================
 // BENCHMARK RUNNER
 // ============================================================================
@@ -421,7 +502,7 @@ async fn run_benchmark(
     query: &LdbcQuery,
     runs: usize,
 ) -> BenchResult {
-    let is_update = query.category == "update";
+    let is_update = query.category == "update" || query.category == "delete";
     // Warm-up: 1 run, discard (skip for updates — they mutate state)
     let warmup = if is_update {
         client.query("default", query.cypher).await
@@ -479,8 +560,8 @@ async fn run_benchmark(
         name: query.name,
         rows: row_count,
         min: timings[0],
-        median: timings[runs / 2],
-        max: timings[runs - 1],
+        median: timings[timings.len() / 2],
+        max: timings[timings.len() - 1],
         error: None,
     }
 }
@@ -515,6 +596,7 @@ async fn main() -> Result<(), Error> {
     };
 
     let include_updates = args.iter().any(|a| a == "--updates");
+    let include_deletes = args.iter().any(|a| a == "--deletes");
 
     if !data_dir.exists() {
         eprintln!("ERROR: Data directory not found: {}", data_dir.display());
@@ -552,6 +634,14 @@ async fn main() -> Result<(), Error> {
     if include_updates {
         all_queries.extend(ldbc_updates());
     }
+    if include_deletes {
+        // Deletes require inserts to have run first (they delete INS-created entities)
+        if !include_updates {
+            eprintln!("NOTE: --deletes implies --updates (insert before delete)");
+            all_queries.extend(ldbc_updates());
+        }
+        all_queries.extend(ldbc_deletes());
+    }
     let queries: Vec<&LdbcQuery> = if let Some(ref filter) = filter_query {
         all_queries.iter().filter(|q| q.id == filter.as_str()).collect()
     } else {
@@ -560,7 +650,7 @@ async fn main() -> Result<(), Error> {
 
     if queries.is_empty() {
         eprintln!("ERROR: No matching query found for filter '{}'", filter_query.unwrap_or_default());
-        eprintln!("Available: IS1-IS7, IC1-IC14, INS1-INS8 (with --updates)");
+        eprintln!("Available: IS1-IS7, IC1-IC14, INS1-INS8 (with --updates), DEL1-DEL8 (with --deletes)");
         std::process::exit(1);
     }
 
@@ -583,6 +673,7 @@ async fn main() -> Result<(), Error> {
                 "short"   => "--- Short Reads ---",
                 "complex" => "--- Complex Reads ---",
                 "update"  => "--- Update Operations ---",
+                "delete"  => "--- Delete Operations ---",
                 other     => other,
             };
             println!("{}", label);

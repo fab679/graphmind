@@ -37,21 +37,29 @@ pub fn page_rank(
     }
 
     // 2. Initialize scores
-    // Initial score is 1.0 for all nodes
-    let initial_score = 1.0;
+    // LDBC Graphalytics spec: initial score is 1/N
+    let initial_score = 1.0 / n as f64;
     let mut scores = vec![initial_score; n];
     let mut next_scores = vec![0.0; n];
 
     // 3. Iteration
+    // LDBC Graphalytics spec: PR(v) = (1-d)/N + d * sum(PR(u)/out_degree(u))
     let d = config.damping_factor;
-    let base_score = 1.0 - d;
+    let base_score = (1.0 - d) / n as f64;
 
     for _ in 0..config.iterations {
         let mut total_diff = 0.0;
 
+        // Compute dangling node mass: sum of scores for nodes with out_degree == 0
+        let dangling_sum: f64 = (0..n)
+            .filter(|&i| view.out_degree(i) == 0)
+            .map(|i| scores[i])
+            .sum();
+        let dangling_contrib = dangling_sum / n as f64;
+
         for i in 0..n {
             let mut sum_incoming = 0.0;
-            
+
             // Iterate over incoming edges
             for &source_idx in view.predecessors(i) {
                 let out_degree = view.out_degree(source_idx);
@@ -60,7 +68,7 @@ pub fn page_rank(
                 }
             }
 
-            next_scores[i] = base_score + d * sum_incoming;
+            next_scores[i] = base_score + d * (sum_incoming + dangling_contrib);
             total_diff += (next_scores[i] - scores[i]).abs();
         }
 

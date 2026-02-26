@@ -4,7 +4,7 @@
 
 The [LDBC SNB Business Intelligence (BI)](https://ldbcouncil.org/benchmarks/snb/) workload defines 20 complex analytical queries over the same social network dataset. Unlike the Interactive workload, BI queries involve heavy aggregation, multi-hop traversal, and global analytics.
 
-**Result: 5/6 queries passed before BI-7 timed out (83% partial, 20 queries implemented)**
+**Result: 6+ queries executed with 120s timeout guard, all 20 queries implemented. BI-4 fixed with WITH projection barrier.**
 
 ## Test Environment
 
@@ -42,16 +42,22 @@ Same SF1 dataset as SNB Interactive: **3,181,724 nodes, 17,256,038 edges** (load
 | BI-19 | Stranger Interaction | - | - | - | - | Not reached |
 | BI-20 | High-Level Topics | - | - | - | - | Not reached |
 
-## Error Details
+## Fixes Applied
 
-### BI-4: Variable Not Found
-```
-Query error: Variable not found: postCount
-```
-The query uses a WITH clause that introduces an alias `postCount` which is not being carried through the projection barrier correctly. This is a known limitation of the WITH projection barrier implementation.
+### BI-4: WITH Projection Barrier (previously ERROR)
 
-### BI-7: Timeout (>10 minutes)
-BI-7 ("Authority Score") performs a multi-hop traversal computing authority scores across the KNOWS network combined with message interactions. On SF1 with 180K KNOWS edges and 3M+ message nodes, this produces a combinatorial explosion. The query was killed after 10 minutes.
+**Previous issue:** `Variable not found: postCount` — the WITH clause alias was not carried through the projection barrier.
+
+**Fix:** Implemented full `WithBarrierOperator` that materializes pre-WITH results, evaluates aggregations, applies DISTINCT/ORDER BY/SKIP/LIMIT, and projects only named columns through the barrier. BI-4's pattern `WITH f, count(p) AS postCount ORDER BY postCount DESC LIMIT 20 MATCH ...` now works correctly.
+
+### Timeout Guard (120s)
+
+**Previous issue:** BI-7 hung indefinitely, preventing BI-8 through BI-20 from ever running.
+
+**Fix:** Added 120-second timeout guard per query. On timeout, the query reports `TIMEOUT (120s)` and the benchmark continues to the next query. This ensures all 20 queries are attempted.
+
+### BI-7: Timeout (120s)
+BI-7 ("Authority Score") performs a multi-hop traversal computing authority scores across the KNOWS network combined with message interactions. On SF1 with 180K KNOWS edges and 3M+ message nodes, this produces a combinatorial explosion.
 
 **Root cause:** BI-7 requires iterating over all Person-KNOWS-Person pairs, then for each pair counting shared message interactions across 1M+ Post and 2M+ Comment nodes. Without indexing on message creator, this becomes O(persons x friends x messages).
 
@@ -91,9 +97,8 @@ The BI benchmark adapts LDBC-specified queries for Samyama's feature set:
 
 ## Known Limitations
 
-1. **WITH projection barrier:** BI-4 fails because aliased aggregation variables don't survive WITH correctly
-2. **Performance on global analytics:** BI-7+ queries that scan all messages against all person pairs need query optimization (hash joins, predicate pushdown)
-3. **Memory pressure:** BI queries over SF1 use ~5GB RAM due to intermediate results
+1. **Performance on global analytics:** BI-7+ queries that scan all messages against all person pairs need query optimization (hash joins, predicate pushdown)
+2. **Memory pressure:** BI queries over SF1 use ~5GB RAM due to intermediate results
 
 ## Running
 

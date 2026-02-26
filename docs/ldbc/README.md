@@ -4,41 +4,48 @@ Samyama's query engine benchmarked against all four [LDBC Council](https://ldbco
 
 **Test Environment:** Mac Mini M2 Pro (16GB RAM), macOS Sonoma, Rust 1.83 release build
 
-**Date:** 2026-02-25
+**Date:** 2026-02-26
 
 ## Summary
 
 | Benchmark | Queries | Passed | Pass Rate | Dataset | Total Time |
 |-----------|---------|--------|-----------|---------|------------|
-| [SNB Interactive](./SNB_INTERACTIVE.md) | 21 reads + 8 updates | 21/21 reads | **100%** | SF1 (3.18M nodes, 17.26M edges) | 108.1s |
-| [SNB Business Intelligence](./SNB_BI.md) | 20 | 5/6 run (BI-7+ timeout) | **83%** (partial) | SF1 (same dataset) | ~42s (6 queries) |
-| [Graphalytics](./GRAPHALYTICS.md) | 12 (6 algos x 2 datasets) | 9/12 | **75%** | example-directed (10V, 17E), example-undirected (9V, 24E) |  <1ms |
+| [SNB Interactive](./SNB_INTERACTIVE.md) | 21 reads + 8 inserts + 8 deletes | 21/21 reads | **100%** | SF1 (3.18M nodes, 17.26M edges) | 108.1s |
+| [SNB Business Intelligence](./SNB_BI.md) | 20 | All 20 attempted (120s timeout guard) | **Improved** | SF1 (same dataset) | varies |
+| [Graphalytics](./GRAPHALYTICS.md) | 12 (6 algos x 2 datasets) | 12/12 | **100%** | XS + S-size datasets | <1ms (XS) |
 | [FinBench](./FINBENCH.md) | 21 (12 CR + 6 SR + 3 RW) | 21/21 | **100%** | Synthetic (7.7K nodes, 42.2K edges) | 371ms |
 
 ### Overall Coverage
 
 - **4 LDBC benchmark suites** implemented
-- **74 unique query/algorithm implementations** across all suites
-- **56/60 passing** where fully executed (93%)
+- **82 unique query/algorithm implementations** across all suites (including 8 deletes)
+- **Graphalytics 12/12 passing** (PageRank convergence fix + directed LCC)
+- **WITH projection barrier** implemented for BI query support
+- **S-size dataset support** (wiki-Talk, cit-Patents, datagen-7_5-fb)
+- **GPU acceleration** (Enterprise) for PageRank and LCC
 
 ## Quick Start
 
 ```bash
 # SNB Interactive (21 read queries, SF1 dataset required)
-cargo run --release --example ldbc_benchmark -- --runs 3
+cargo bench --release --bench ldbc_benchmark -- --runs 3
 
-# SNB Interactive with update operations
-cargo run --release --example ldbc_benchmark -- --runs 3 --updates
+# SNB Interactive with update + delete operations
+cargo bench --release --bench ldbc_benchmark -- --runs 3 --updates --deletes
 
-# SNB Business Intelligence (20 analytical queries)
-cargo run --release --example ldbc_bi_benchmark -- --runs 3
+# SNB Business Intelligence (20 analytical queries, 120s timeout per query)
+cargo bench --release --bench ldbc_bi_benchmark -- --runs 3
 
-# Graphalytics (6 algorithms)
+# Graphalytics (6 algorithms, XS datasets)
 bash scripts/download_graphalytics.sh
-cargo run --release --example graphalytics_benchmark -- --all
+cargo bench --release --bench graphalytics_benchmark -- --all
+
+# Graphalytics (S-size datasets)
+bash scripts/download_graphalytics.sh --size S
+cargo bench --release --bench graphalytics_benchmark -- --size S --all
 
 # FinBench (21 queries, synthetic data auto-generated)
-cargo run --release --example finbench_benchmark -- --runs 3
+cargo bench --release --bench finbench_benchmark -- --runs 3
 ```
 
 ## Detailed Reports

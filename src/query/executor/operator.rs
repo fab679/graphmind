@@ -5137,6 +5137,283 @@ impl PhysicalOperator for ShortestPathOperator {
     }
 }
 
+// ============================================================================
+// WITH BARRIER OPERATOR
+// ============================================================================
+
+/// WITH projection barrier operator.
+///
+/// Materializes all input records, evaluates WITH items (expressions +
+/// aggregations), applies DISTINCT / ORDER BY / SKIP / LIMIT, and projects
+/// only the named WITH columns — forming a "barrier" that hides upstream
+/// variables from downstream operators.
+pub struct WithBarrierOperator {
+    input: OperatorBox,
+    items: Vec<(Expression, String)>, // (expr, alias)
+    aggregates: Vec<AggregateFunction>,
+    group_by: Vec<(Expression, String)>,
+    has_aggregation: bool,
+    distinct: bool,
+    where_predicate: Option<Expression>,
+    sort_items: Vec<(Expression, bool)>, // (expr, ascending)
+    skip: Option<usize>,
+    limit: Option<usize>,
+    results: std::vec::IntoIter<Record>,
+    executed: bool,
+}
+
+impl WithBarrierOperator {
+    pub fn new(
+        input: OperatorBox,
+        items: Vec<(Expression, String)>,
+        aggregates: Vec<AggregateFunction>,
+        group_by: Vec<(Expression, String)>,
+        has_aggregation: bool,
+        distinct: bool,
+        where_predicate: Option<Expression>,
+        sort_items: Vec<(Expression, bool)>,
+        skip: Option<usize>,
+        limit: Option<usize>,
+    ) -> Self {
+        Self {
+            input,
+            items,
+            aggregates,
+            group_by,
+            has_aggregation,
+            distinct,
+            where_predicate,
+            sort_items,
+            skip,
+            limit,
+            results: Vec::new().into_iter(),
+            executed: false,
+        }
+    }
+
+    fn evaluate_expression(expr: &Expression, record: &Record, store: &GraphStore) -> ExecutionResult<Value> {
+        match expr {
+            Expression::Variable(var) => {
+                Ok(record.get(var).cloned().unwrap_or(Value::Null))
+            }
+            Expression::Property { variable, property } => {
+                let val = record.get(variable).unwrap_or(&Value::Null);
+                let prop = val.resolve_property(property, store);
+                Ok(Value::Property(prop))
+            }
+            Expression::Literal(lit) => Ok(Value::Property(lit.clone())),
+            Expression::Binary { left, op, right } => {
+                let left_val = Self::evaluate_expression(left, record, store)?;
+                let right_val = Self::evaluate_expression(right, record, store)?;
+                eval_binary_op(op, left_val, right_val)
+            }
+            Expression::Unary { op, expr } => {
+                let val = Self::evaluate_expression(expr, record, store)?;
+                eval_unary_op(op, val)
+            }
+            Expression::Function { name, args, .. } => {
+                let arg_vals: Vec<Value> = args.iter()
+                    .map(|a| Self::evaluate_expression(a, record, store))
+                    .collect::<ExecutionResult<Vec<_>>>()?;
+                eval_function(name, &arg_vals)
+            }
+            Expression::Case { operand, when_clauses, else_result } => {
+                eval_case(operand.as_deref(), when_clauses, else_result.as_deref(), |e| Self::evaluate_expression(e, record, store))
+            }
+            Expression::Index { expr, index } => {
+                let collection = Self::evaluate_expression(expr, record, store)?;
+                let idx = Self::evaluate_expression(index, record, store)?;
+                eval_index(collection, idx)
+            }
+            Expression::ExistsSubquery { pattern, where_clause } => {
+                eval_exists_subquery(pattern, where_clause.as_deref(), record, store)
+            }
+            Expression::ListComprehension { variable, list_expr, filter, map_expr } => {
+                eval_list_comprehension(variable, list_expr, filter.as_deref(), map_expr, record, store)
+            }
+            Expression::PredicateFunction { name, variable, list_expr, predicate } => {
+                eval_predicate_function(name, variable, list_expr, predicate, record, store)
+            }
+            Expression::Reduce { accumulator, init, variable, list_expr, expression } => {
+                eval_reduce(accumulator, init, variable, list_expr, expression, record, store)
+            }
+            Expression::PatternComprehension { pattern, filter, projection } => {
+                eval_pattern_comprehension(pattern, filter.as_deref(), projection, record, store)
+            }
+            Expression::PathVariable(var) => {
+                record.get(var).cloned()
+                    .ok_or_else(|| ExecutionError::VariableNotFound(var.clone()))
+            }
+        }
+    }
+
+    fn execute_all(&mut self, store: &GraphStore) -> ExecutionResult<()> {
+        let mut output_records = if self.has_aggregation {
+            // Aggregation path: group by non-aggregate items
+            let mut groups: HashMap<Vec<Value>, Vec<AggregatorState>> = HashMap::new();
+
+            let batch_size = 1024;
+            while let Some(batch) = self.input.next_batch(store, batch_size)? {
+                for record in batch.records {
+                    let mut key = Vec::new();
+                    for (expr, _) in &self.group_by {
+                        key.push(Self::evaluate_expression(expr, &record, store)?);
+                    }
+
+                    let states = groups.entry(key).or_insert_with(|| {
+                        self.aggregates.iter().map(|agg| AggregatorState::new(&agg.func, agg.distinct)).collect()
+                    });
+
+                    for (i, agg) in self.aggregates.iter().enumerate() {
+                        let val = Self::evaluate_expression(&agg.expr, &record, store)?;
+                        states[i].update(&val);
+                    }
+                }
+            }
+
+            let mut records = Vec::new();
+            for (key, states) in groups {
+                let mut record = Record::new();
+                for (i, (_, alias)) in self.group_by.iter().enumerate() {
+                    record.bind(alias.clone(), key[i].clone());
+                }
+                for (i, agg) in self.aggregates.iter().enumerate() {
+                    record.bind(agg.alias.clone(), states[i].result());
+                }
+                records.push(record);
+            }
+            records
+        } else {
+            // Non-aggregation path: project each row
+            let mut records = Vec::new();
+            let batch_size = 1024;
+            while let Some(batch) = self.input.next_batch(store, batch_size)? {
+                for record in batch.records {
+                    let mut new_record = Record::new();
+                    for (expr, alias) in &self.items {
+                        let value = Self::evaluate_expression(expr, &record, store)?;
+                        new_record.bind(alias.clone(), value);
+                    }
+                    records.push(new_record);
+                }
+            }
+            records
+        };
+
+        // Apply WHERE filter (if present in WITH ... WHERE ...)
+        if let Some(ref predicate) = self.where_predicate {
+            output_records.retain(|record| {
+                match Self::evaluate_expression(predicate, record, store) {
+                    Ok(Value::Property(PropertyValue::Boolean(b))) => b,
+                    Ok(Value::Null) | Ok(Value::Property(PropertyValue::Null)) => false,
+                    _ => false,
+                }
+            });
+        }
+
+        // Apply DISTINCT
+        if self.distinct {
+            let mut seen: HashSet<Vec<Value>> = HashSet::new();
+            output_records.retain(|record| {
+                let mut key: Vec<(String, Value)> = record.bindings().iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect();
+                key.sort_by(|a, b| a.0.cmp(&b.0));
+                let vals: Vec<Value> = key.into_iter().map(|(_, v)| v).collect();
+                seen.insert(vals)
+            });
+        }
+
+        // Apply ORDER BY
+        if !self.sort_items.is_empty() {
+            let sort_items = &self.sort_items;
+            output_records.sort_by(|a, b| {
+                for (expr, ascending) in sort_items {
+                    let val_a = Self::evaluate_expression(expr, a, store).unwrap_or(Value::Null);
+                    let val_b = Self::evaluate_expression(expr, b, store).unwrap_or(Value::Null);
+                    let prop_a = val_a.as_property().unwrap_or(&PropertyValue::Null);
+                    let prop_b = val_b.as_property().unwrap_or(&PropertyValue::Null);
+                    let ord = prop_a.cmp(prop_b);
+                    if ord != std::cmp::Ordering::Equal {
+                        return if *ascending { ord } else { ord.reverse() };
+                    }
+                }
+                std::cmp::Ordering::Equal
+            });
+        }
+
+        // Apply SKIP
+        if let Some(skip) = self.skip {
+            if skip < output_records.len() {
+                output_records = output_records.split_off(skip);
+            } else {
+                output_records.clear();
+            }
+        }
+
+        // Apply LIMIT
+        if let Some(limit) = self.limit {
+            output_records.truncate(limit);
+        }
+
+        self.results = output_records.into_iter();
+        self.executed = true;
+        Ok(())
+    }
+}
+
+impl PhysicalOperator for WithBarrierOperator {
+    fn next(&mut self, store: &GraphStore) -> ExecutionResult<Option<Record>> {
+        if !self.executed {
+            self.execute_all(store)?;
+        }
+        Ok(self.results.next())
+    }
+
+    fn next_batch(&mut self, store: &GraphStore, batch_size: usize) -> ExecutionResult<Option<RecordBatch>> {
+        if !self.executed {
+            self.execute_all(store)?;
+        }
+
+        let mut batch = Vec::with_capacity(batch_size);
+        for _ in 0..batch_size {
+            if let Some(record) = self.results.next() {
+                batch.push(record);
+            } else {
+                break;
+            }
+        }
+
+        if batch.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(RecordBatch { records: batch, columns: Vec::new() }))
+        }
+    }
+
+    fn reset(&mut self) {
+        self.input.reset();
+        self.executed = false;
+        self.results = Vec::new().into_iter();
+    }
+
+    fn describe(&self) -> OperatorDescription {
+        let item_strs: Vec<String> = self.items.iter().map(|(e, a)| {
+            format!("{} AS {}", format_expression(e), a)
+        }).collect();
+        let mut details = format!("items=[{}]", item_strs.join(", "));
+        if self.distinct { details.push_str(", DISTINCT"); }
+        if !self.sort_items.is_empty() { details.push_str(", ORDER BY"); }
+        if self.skip.is_some() { details.push_str(&format!(", SKIP {}", self.skip.unwrap())); }
+        if self.limit.is_some() { details.push_str(&format!(", LIMIT {}", self.limit.unwrap())); }
+        OperatorDescription {
+            name: "WithBarrier".to_string(),
+            details,
+            children: vec![self.input.describe()],
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

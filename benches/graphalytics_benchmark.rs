@@ -29,7 +29,7 @@ use samyama_graph_algorithms::{
     page_rank, PageRankConfig,
     weakly_connected_components,
     cdlp, CdlpConfig,
-    local_clustering_coefficient,
+    local_clustering_coefficient_directed,
 };
 
 #[path = "bench_setup.rs"]
@@ -153,6 +153,12 @@ fn sssp_single_source(view: &GraphView, source_id: u64) -> HashMap<u64, f64> {
 
 const ALL_ALGOS: &[&str] = &["BFS", "PR", "WCC", "CDLP", "LCC", "SSSP"];
 
+/// XS-size (example) datasets for correctness testing.
+const XS_DATASETS: &[&str] = &["example-directed", "example-undirected"];
+
+/// S-size datasets for performance benchmarking.
+const S_DATASETS: &[&str] = &["wiki-Talk", "cit-Patents", "datagen-7_5-fb"];
+
 /// Default datasets to run when --all is specified without --dataset.
 const DEFAULT_DATASETS: &[&str] = &["example-directed", "example-undirected"];
 
@@ -165,6 +171,7 @@ fn main() {
         .unwrap_or_else(|| "data/graphalytics".to_string());
     let dataset_arg = get_arg(&args, "--dataset");
     let algo_arg = get_arg(&args, "--algo");
+    let size_arg = get_arg(&args, "--size");
     let run_all = args.iter().any(|a| a == "--all");
     let validate = !args.iter().any(|a| a == "--no-validate");
 
@@ -173,9 +180,48 @@ fn main() {
         return;
     }
 
-    // Determine which datasets to run
+    // Determine which datasets to run based on --dataset and/or --size
     let datasets: Vec<String> = if let Some(ds) = dataset_arg {
         vec![ds]
+    } else if let Some(ref size) = size_arg {
+        match size.to_uppercase().as_str() {
+            "XS" => XS_DATASETS.iter().map(|s| s.to_string()).collect(),
+            "S" => {
+                // Auto-discover S-size datasets present in data directory
+                let data_path = Path::new(&data_dir);
+                let mut found: Vec<String> = S_DATASETS
+                    .iter()
+                    .filter(|ds| {
+                        let dir = data_path.join(ds);
+                        dir.join(format!("{}.v", ds)).exists()
+                            && dir.join(format!("{}.e", ds)).exists()
+                    })
+                    .map(|s| s.to_string())
+                    .collect();
+                if found.is_empty() {
+                    eprintln!("WARNING: No S-size datasets found in {}", data_dir);
+                    eprintln!("Run: scripts/download_graphalytics.sh --size S");
+                    return;
+                }
+                found.sort();
+                found
+            }
+            "ALL" => {
+                let data_path = Path::new(&data_dir);
+                let mut all: Vec<String> = XS_DATASETS.iter().map(|s| s.to_string()).collect();
+                for ds in S_DATASETS {
+                    let dir = data_path.join(ds);
+                    if dir.join(format!("{}.v", ds)).exists() {
+                        all.push(ds.to_string());
+                    }
+                }
+                all
+            }
+            other => {
+                eprintln!("Unknown size '{}'. Valid: XS, S, all", other);
+                return;
+            }
+        }
     } else {
         DEFAULT_DATASETS.iter().map(|s| s.to_string()).collect()
     };
@@ -255,7 +301,7 @@ fn main() {
 
         // Run each requested algorithm
         for algo in &algos {
-            let result = run_algorithm(algo, view, dataset, &props, data_path, validate);
+            let result = run_algorithm(algo, view, dataset, &props, data_path, validate, directed);
             if let Some(r) = result {
                 let status = if r.validated {
                     if r.validation_passed { "  PASS" } else { "  FAIL" }
@@ -337,6 +383,7 @@ fn run_algorithm(
     props: &DatasetProperties,
     data_dir: &Path,
     validate: bool,
+    directed: bool,
 ) -> Option<BenchmarkResult> {
     match algo {
         "BFS" => {
@@ -379,7 +426,7 @@ fn run_algorithm(
             let config = PageRankConfig {
                 damping_factor: damping,
                 iterations,
-                tolerance: 0.0, // Use fixed iteration count
+                tolerance: 0.0, // LDBC spec: fixed iteration count, no early exit
             };
 
             let start = Instant::now();
@@ -480,7 +527,7 @@ fn run_algorithm(
 
         "LCC" => {
             let start = Instant::now();
-            let result = local_clustering_coefficient(view);
+            let result = local_clustering_coefficient_directed(view, directed);
             let duration = start.elapsed();
 
             let non_zero = result.coefficients.values().filter(|&&cc| cc > 0.0).count();
@@ -803,12 +850,14 @@ fn print_usage() {
     println!("Usage:");
     println!("  cargo bench --release --bench graphalytics_benchmark -- --all");
     println!("  cargo bench --release --bench graphalytics_benchmark -- --dataset example-directed --algo BFS");
+    println!("  cargo bench --release --bench graphalytics_benchmark -- --size S --all");
     println!("  cargo bench --release --bench graphalytics_benchmark -- --data-dir data/graphalytics/ --all");
     println!();
     println!("Options:");
     println!("  --all              Run all algorithms on all default datasets");
-    println!("  --dataset <name>   Specify a dataset (e.g., example-directed)");
+    println!("  --dataset <name>   Specify a dataset (e.g., example-directed, wiki-Talk)");
     println!("  --algo <name>      Run a specific algorithm: BFS, PR, WCC, CDLP, LCC, SSSP");
+    println!("  --size <XS|S|all>  Dataset size: XS (default), S (performance), all (both)");
     println!("  --data-dir <path>  Dataset directory (default: data/graphalytics/)");
     println!("  --no-validate      Skip result validation against expected outputs");
     println!();
@@ -816,5 +865,7 @@ fn print_usage() {
     println!("  <data-dir>/<dataset>/<dataset>.v   -- one vertex ID per line");
     println!("  <data-dir>/<dataset>/<dataset>.e   -- source|target[|weight] per line");
     println!();
-    println!("Download datasets with: scripts/download_graphalytics.sh");
+    println!("Download datasets:");
+    println!("  scripts/download_graphalytics.sh                 # XS datasets");
+    println!("  scripts/download_graphalytics.sh --size S        # S-size datasets");
 }

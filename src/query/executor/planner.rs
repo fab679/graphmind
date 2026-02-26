@@ -8,7 +8,7 @@ use crate::query::ast::*;
 use crate::query::executor::{
     ExecutionError, ExecutionResult, OperatorBox,
     // Added CreateNodeOperator and CreateNodesAndEdgesOperator for CREATE statement support
-    operator::{NodeScanOperator, FilterOperator, ExpandOperator, ProjectOperator, LimitOperator, SkipOperator, CreateNodeOperator, CreateNodesAndEdgesOperator, CartesianProductOperator, VectorSearchOperator, JoinOperator, LeftOuterJoinOperator, CreateVectorIndexOperator, CreateIndexOperator, AlgorithmOperator, IndexScanOperator, AggregateOperator, AggregateType, AggregateFunction, SortOperator, DeleteOperator, SetPropertyOperator, RemovePropertyOperator, UnwindOperator, MergeOperator, ForeachOperator, ShortestPathOperator},
+    operator::{NodeScanOperator, FilterOperator, ExpandOperator, ProjectOperator, LimitOperator, SkipOperator, CreateNodeOperator, CreateNodesAndEdgesOperator, CartesianProductOperator, VectorSearchOperator, JoinOperator, LeftOuterJoinOperator, CreateVectorIndexOperator, CreateIndexOperator, AlgorithmOperator, IndexScanOperator, AggregateOperator, AggregateType, AggregateFunction, SortOperator, DeleteOperator, SetPropertyOperator, RemovePropertyOperator, UnwindOperator, MergeOperator, ForeachOperator, ShortestPathOperator, WithBarrierOperator},
 };
 use crate::graph::EdgeType;  // Added for CREATE edge support
 use std::collections::{HashMap, HashSet};  // Added for CREATE properties and JOIN logic
@@ -117,11 +117,15 @@ impl QueryPlanner {
         let mut operator: Option<OperatorBox> = None;
         let mut known_vars: HashSet<String> = HashSet::new();
 
-        // 1. Handle MATCH clauses — use JoinOperator when clauses share variables
-        for match_clause in &query.match_clauses {
+        // Determine split point for WITH barrier
+        let split = query.with_split_index.unwrap_or(query.match_clauses.len());
+        let pre_with_clauses = &query.match_clauses[..split];
+        let post_with_clauses = &query.match_clauses[split..];
+
+        // 1a. Handle pre-WITH MATCH clauses
+        for match_clause in pre_with_clauses {
             let match_op = self.plan_match(match_clause, query.where_clause.as_ref(), _store)?;
 
-            // Collect variables from this MATCH clause
             let mut clause_vars = HashSet::new();
             for path in &match_clause.pattern.paths {
                 if let Some(v) = &path.start.variable { clause_vars.insert(v.clone()); }
@@ -136,7 +140,132 @@ impl QueryPlanner {
                     let shared: Vec<String> = known_vars.intersection(&clause_vars).cloned().collect();
                     if !shared.is_empty() {
                         if match_clause.optional {
-                            // OPTIONAL MATCH uses left outer join — unmatched left rows get NULLs
+                            let right_only: Vec<String> = clause_vars.difference(&known_vars).cloned().collect();
+                            Box::new(LeftOuterJoinOperator::new(existing, match_op, shared[0].clone(), right_only)) as OperatorBox
+                        } else {
+                            Box::new(JoinOperator::new(existing, match_op, shared[0].clone())) as OperatorBox
+                        }
+                    } else {
+                        Box::new(CartesianProductOperator::new(existing, match_op)) as OperatorBox
+                    }
+                }
+                None => match_op,
+            });
+            known_vars.extend(clause_vars);
+        }
+
+        // 1b. Insert WITH barrier if WITH clause is present and has post-WITH clauses
+        if let Some(with_clause) = &query.with_clause {
+            if let Some(op) = operator {
+                // Parse WITH items into projections and aggregations
+                let mut items = Vec::new();
+                let mut aggregates = Vec::new();
+                let mut group_by = Vec::new();
+                let mut has_aggregation = false;
+
+                for (idx, item) in with_clause.items.iter().enumerate() {
+                    let alias = item.alias.clone().unwrap_or_else(|| {
+                        match &item.expression {
+                            Expression::Variable(var) => var.clone(),
+                            Expression::Property { variable, property } => format!("{}.{}", variable, property),
+                            Expression::Function { name, args, distinct } => {
+                                let arg_strs: Vec<String> = args.iter().map(|a| match a {
+                                    Expression::Variable(v) => v.clone(),
+                                    Expression::Property { variable, property } => format!("{}.{}", variable, property),
+                                    _ => "?".to_string(),
+                                }).collect();
+                                if *distinct {
+                                    format!("{}(DISTINCT {})", name, arg_strs.join(", "))
+                                } else {
+                                    format!("{}({})", name, arg_strs.join(", "))
+                                }
+                            },
+                            _ => format!("col_{}", idx),
+                        }
+                    });
+
+                    items.push((item.expression.clone(), alias.clone()));
+
+                    let mut is_agg_func = false;
+                    if let Expression::Function { name, args, distinct } = &item.expression {
+                        let func_type = match name.to_lowercase().as_str() {
+                            "count" => Some(AggregateType::Count),
+                            "sum" => Some(AggregateType::Sum),
+                            "avg" => Some(AggregateType::Avg),
+                            "min" => Some(AggregateType::Min),
+                            "max" => Some(AggregateType::Max),
+                            "collect" => Some(AggregateType::Collect),
+                            _ => None,
+                        };
+
+                        if let Some(func) = func_type {
+                            is_agg_func = true;
+                            has_aggregation = true;
+                            let arg_expr = args.first().cloned()
+                                .unwrap_or(Expression::Literal(PropertyValue::Null));
+                            aggregates.push(AggregateFunction {
+                                func,
+                                expr: arg_expr,
+                                alias: alias.clone(),
+                                distinct: *distinct,
+                            });
+                        }
+                    }
+
+                    if !is_agg_func {
+                        group_by.push((item.expression.clone(), alias));
+                    }
+                }
+
+                // Parse WITH ORDER BY
+                let sort_items: Vec<(Expression, bool)> = with_clause.order_by.as_ref()
+                    .map(|ob| ob.items.iter().map(|i| (i.expression.clone(), i.ascending)).collect())
+                    .unwrap_or_default();
+
+                // Parse WITH WHERE
+                let where_predicate = with_clause.where_clause.as_ref()
+                    .map(|wc| wc.predicate.clone());
+
+                operator = Some(Box::new(WithBarrierOperator::new(
+                    op,
+                    items.clone(),
+                    aggregates,
+                    group_by,
+                    has_aggregation,
+                    with_clause.distinct,
+                    where_predicate,
+                    sort_items,
+                    with_clause.skip,
+                    with_clause.limit,
+                )));
+
+                // Reset known_vars to only WITH output aliases
+                known_vars.clear();
+                for (_, alias) in &items {
+                    known_vars.insert(alias.clone());
+                }
+            }
+        }
+
+        // 1c. Handle post-WITH MATCH clauses (join on variables from WITH output)
+        for match_clause in post_with_clauses {
+            // Post-WITH clauses do NOT use the original WHERE (it was applied before WITH)
+            let match_op = self.plan_match(match_clause, None, _store)?;
+
+            let mut clause_vars = HashSet::new();
+            for path in &match_clause.pattern.paths {
+                if let Some(v) = &path.start.variable { clause_vars.insert(v.clone()); }
+                for seg in &path.segments {
+                    if let Some(v) = &seg.node.variable { clause_vars.insert(v.clone()); }
+                    if let Some(v) = &seg.edge.variable { clause_vars.insert(v.clone()); }
+                }
+            }
+
+            operator = Some(match operator {
+                Some(existing) => {
+                    let shared: Vec<String> = known_vars.intersection(&clause_vars).cloned().collect();
+                    if !shared.is_empty() {
+                        if match_clause.optional {
                             let right_only: Vec<String> = clause_vars.difference(&known_vars).cloned().collect();
                             Box::new(LeftOuterJoinOperator::new(existing, match_op, shared[0].clone(), right_only)) as OperatorBox
                         } else {
