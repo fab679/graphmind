@@ -48,6 +48,9 @@ pub struct Query {
     pub union_queries: Vec<(Query, bool)>, // (query, is_union_all)
     /// EXPLAIN clause (optional)
     pub explain: bool,
+    /// Index into match_clauses where WITH clause splits pre-WITH from post-WITH.
+    /// match_clauses[..split] belong to pre-WITH, match_clauses[split..] to post-WITH.
+    pub with_split_index: Option<usize>,
 }
 
 /// CREATE VECTOR INDEX clause
@@ -506,6 +509,7 @@ impl Query {
             merge_clause: None,
             union_queries: Vec::new(),
             explain: false,
+            with_split_index: None,
         }
     }
 

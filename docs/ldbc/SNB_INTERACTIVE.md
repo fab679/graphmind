@@ -92,6 +92,25 @@ The [LDBC Social Network Benchmark (SNB) Interactive](https://ldbcouncil.org/ben
 
 **Note:** INS1 has a runtime bug (index out of bounds) that needs investigation. The underlying CREATE engine works correctly — the issue is in the benchmark parameter extraction.
 
+## Delete Operations (DEL-1 through DEL-8)
+
+8 delete operations following the LDBC SNB Interactive v2 specification:
+
+| ID | Name | Description | Status |
+|----|------|-------------|--------|
+| DEL-1 | Remove Person | `MATCH (p:Person {id: $id}) DETACH DELETE p` (cascading) | Defined |
+| DEL-2 | Remove Like on Post | `MATCH (p:Person {id: $pid})-[r:LIKES]->(m:Post {id: $mid}) DELETE r` | Defined |
+| DEL-3 | Remove Like on Comment | `MATCH (p:Person {id: $pid})-[r:LIKES]->(c:Comment {id: $cid}) DELETE r` | Defined |
+| DEL-4 | Remove Forum | `MATCH (f:Forum {id: $id}) DETACH DELETE f` (cascading) | Defined |
+| DEL-5 | Remove Forum Member | `MATCH (f:Forum {id: $fid})-[r:HAS_MEMBER]->(p:Person {id: $pid}) DELETE r` | Defined |
+| DEL-6 | Remove Post | `MATCH (p:Post {id: $id}) DETACH DELETE p` | Defined |
+| DEL-7 | Remove Comment | `MATCH (c:Comment {id: $id}) DETACH DELETE c` | Defined |
+| DEL-8 | Remove Friendship | `MATCH (a:Person {id: $aid})-[r:KNOWS]->(b:Person {id: $bid}) DELETE r` | Defined |
+
+Run with: `cargo bench --release --bench ldbc_benchmark -- --updates --deletes`
+
+The benchmark executes in order: reads, then INS1-8 (creates test entities), then DEL1-8 (removes them).
+
 ## Data Model Adaptations
 
 LDBC defines `:Message` as a supertype of `:Post` and `:Comment`. Since Samyama loads them as separate labels, queries referencing `:Message` are adapted:

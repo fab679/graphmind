@@ -437,23 +437,44 @@ fn format_ms(d: Duration) -> String {
     }
 }
 
+/// Per-query timeout to prevent hangs (e.g. BI-7) from blocking the entire benchmark run.
+const QUERY_TIMEOUT: Duration = Duration::from_secs(120);
+
 async fn run_benchmark(
     client: &EmbeddedClient,
     query: &LdbcBiQuery,
     runs: usize,
 ) -> BenchResult {
-    // Warm-up: 1 run, discard
-    let warmup = client.query_readonly("default", query.cypher).await;
-    if let Err(e) = &warmup {
-        return BenchResult {
-            id: query.id,
-            name: query.name,
-            rows: 0,
-            min: Duration::ZERO,
-            median: Duration::ZERO,
-            max: Duration::ZERO,
-            error: Some(e.to_string()),
-        };
+    // Warm-up: 1 run, discard (with timeout guard)
+    let warmup = tokio::time::timeout(
+        QUERY_TIMEOUT,
+        client.query_readonly("default", query.cypher),
+    )
+    .await;
+    match warmup {
+        Err(_) => {
+            return BenchResult {
+                id: query.id,
+                name: query.name,
+                rows: 0,
+                min: Duration::ZERO,
+                median: Duration::ZERO,
+                max: Duration::ZERO,
+                error: Some(format!("TIMEOUT ({}s)", QUERY_TIMEOUT.as_secs())),
+            };
+        }
+        Ok(Err(e)) => {
+            return BenchResult {
+                id: query.id,
+                name: query.name,
+                rows: 0,
+                min: Duration::ZERO,
+                median: Duration::ZERO,
+                max: Duration::ZERO,
+                error: Some(e.to_string()),
+            };
+        }
+        Ok(Ok(_)) => {} // warmup succeeded
     }
 
     let mut timings = Vec::with_capacity(runs);
@@ -461,13 +482,24 @@ async fn run_benchmark(
 
     for _ in 0..runs {
         let start = Instant::now();
-        let run_result = client.query_readonly("default", query.cypher).await;
+        let run_result = tokio::time::timeout(
+            QUERY_TIMEOUT,
+            client.query_readonly("default", query.cypher),
+        )
+        .await;
         match run_result {
-            Ok(result) => {
-                row_count = result.records.len();
-                timings.push(start.elapsed());
+            Err(_) => {
+                return BenchResult {
+                    id: query.id,
+                    name: query.name,
+                    rows: 0,
+                    min: Duration::ZERO,
+                    median: Duration::ZERO,
+                    max: Duration::ZERO,
+                    error: Some(format!("TIMEOUT ({}s)", QUERY_TIMEOUT.as_secs())),
+                };
             }
-            Err(e) => {
+            Ok(Err(e)) => {
                 return BenchResult {
                     id: query.id,
                     name: query.name,
@@ -477,6 +509,10 @@ async fn run_benchmark(
                     max: Duration::ZERO,
                     error: Some(e.to_string()),
                 };
+            }
+            Ok(Ok(result)) => {
+                row_count = result.records.len();
+                timings.push(start.elapsed());
             }
         }
     }
