@@ -18,8 +18,18 @@ cargo test                     # All tests
 cargo test graph::node         # Specific module tests
 cargo test -- --nocapture      # Tests with output
 
-# Benchmarks (Criterion)
-cargo bench                    # 15 benchmarks across 5 groups
+# Benchmarks (all in benches/)
+cargo bench                                    # All benchmarks
+cargo bench --bench graph_benchmarks           # Criterion micro-benchmarks (15 benches)
+cargo bench --bench full_benchmark             # Full suite (ingestion, vector, traversal, algorithms)
+cargo bench --bench vector_benchmark           # HNSW vector search
+cargo bench --bench graphalytics_benchmark     # LDBC Graphalytics algorithms
+cargo bench --bench mvcc_benchmark             # MVCC & arena allocation
+cargo bench --bench late_materialization_bench  # Late materialization traversal
+cargo bench --bench graph_optimization_benchmark # Metaheuristic optimization solvers
+cargo bench --bench ldbc_benchmark             # LDBC SNB Interactive queries (needs data)
+cargo bench --bench ldbc_bi_benchmark          # LDBC SNB BI queries (needs data)
+cargo bench --bench finbench_benchmark         # LDBC FinBench queries (synthetic data)
 
 # Run examples
 cargo run --example banking_demo              # Banking fraud detection + NLQ
@@ -32,6 +42,8 @@ cargo run --example enterprise_soc_demo       # Security operations center
 cargo run --example agentic_enrichment_demo   # GAK (Generation-Augmented Knowledge)
 cargo run --example persistence_demo          # Persistence & multi-tenancy
 cargo run --example cluster_demo              # Raft clustering
+cargo run --example ldbc_loader               # Load LDBC SNB SF1 dataset
+cargo run --example finbench_loader           # Load/generate FinBench dataset
 
 # Start RESP server
 cargo run                      # RESP on 127.0.0.1:6379, HTTP on :8080
@@ -149,7 +161,8 @@ graph.create_edge(source_id, target_id, "KNOWS")?;
 
 ## Testing
 
-- **248 unit tests** across all modules
-- **15 Criterion benchmarks** (node insertion, label scan, traversal, WHERE filter, Cypher parse)
+- **251 unit tests** across all modules
+- **10 benchmark binaries** in `benches/` (Criterion micro-benchmarks + domain benchmarks)
 - **Integration tests**: Python scripts in `tests/integration/`
 - **8 domain-specific example demos** with NLQ integration
+- **2 data loaders** (LDBC SNB, FinBench) in `examples/`

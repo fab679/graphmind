@@ -6,12 +6,15 @@ use rand::Rng;
 use std::sync::{Arc, RwLock};
 use std::time::Instant;
 
+#[path = "bench_setup.rs"]
+mod bench_setup;
+
 /// A Problem definition that wraps a reference to the Graph Store.
 struct HospitalGraphProblem {
     graph: Arc<RwLock<GraphStore>>,
     dept_ids: Vec<NodeId>,
     resource_ids: Vec<NodeId>,
-    edge_ids: Vec<EdgeId>, 
+    edge_ids: Vec<EdgeId>,
     budget: f64,
 }
 
@@ -35,7 +38,7 @@ impl Problem for HospitalGraphProblem {
         let num_resources_per_dept = self.resource_ids.len();
 
         let store = self.graph.read().unwrap();
-        
+
         for (i, &dept_id) in self.dept_ids.iter().enumerate() {
             let dept_node = store.get_node(dept_id).expect("Node missing");
             let demand = match dept_node.properties.get("demand").unwrap() {
@@ -47,7 +50,7 @@ impl Problem for HospitalGraphProblem {
             for j in 0..num_resources_per_dept {
                 let var_idx = i * num_resources_per_dept + j;
                 let quantity = variables[var_idx];
-                
+
                 let res_id = self.resource_ids[j];
                 let res_node = store.get_node(res_id).expect("Res missing");
                 let efficiency = match res_node.properties.get("efficiency").unwrap() {
@@ -68,7 +71,7 @@ impl Problem for HospitalGraphProblem {
     fn penalty(&self, variables: &Array1<f64>) -> f64 {
         let mut total_cost = 0.0;
         let num_resources_per_dept = self.resource_ids.len();
-        
+
         let store = self.graph.read().unwrap();
 
         for j in 0..num_resources_per_dept {
@@ -94,12 +97,14 @@ impl Problem for HospitalGraphProblem {
 }
 
 fn main() {
+    bench_setup::init();
+
     let num_departments = 50;
     let num_resources = 20;
     let total_vars = num_departments * num_resources;
     let budget = 1_000_000.0;
 
-    println!("🏥 High-Scale Graph Optimization Benchmark");
+    println!("High-Scale Graph Optimization Benchmark");
     println!("========================================");
     println!("Departments: {}", num_departments);
     println!("Resource Types: {}", num_resources);
@@ -168,7 +173,7 @@ fn main() {
         };
 
         let start_solve = Instant::now();
-        
+
         let result = match algo_name {
             "Jaya" => JayaSolver::new(config.clone()).solve(&problem),
             "Rao3" => RaoSolver::new(config.clone(), RaoVariant::Rao3).solve(&problem),
@@ -184,13 +189,13 @@ fn main() {
             "FPA" => FPASolver::new(config.clone()).solve(&problem),
             _ => panic!("Unknown algorithm"),
         };
-        
+
         let solve_time = start_solve.elapsed();
         let evals_sec = (config.population_size * config.max_iterations) as f64 / solve_time.as_secs_f64();
-        
-        println!("| {:<9} | {:<8.2} | {:<12.4} | {:<9.0} |", 
+
+        println!("| {:<9} | {:<8.2} | {:<12.4} | {:<9.0} |",
             algo_name, solve_time.as_secs_f64(), result.best_fitness, evals_sec);
-            
+
         results.push((algo_name, solve_time, result.best_fitness));
     }
     println!("----------------------------------------------------------------");

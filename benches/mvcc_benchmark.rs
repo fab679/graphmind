@@ -13,6 +13,9 @@ use samyama::graph::{GraphStore, Label, PropertyValue};
 use std::time::Instant;
 use std::hint::black_box;
 
+#[path = "bench_setup.rs"]
+mod bench_setup;
+
 const ARENA_NODES: usize = 1_000_000;
 const MVCC_READS: usize = 1_000_000;
 const VERSION_COUNT: u64 = 100;
@@ -284,6 +287,8 @@ fn format_number(n: usize) -> String {
 }
 
 fn main() {
+    bench_setup::init();
+
     println!("╔══════════════════════════════════════════════════════════════╗");
     println!("║   SAMYAMA MVCC & Arena Allocation Benchmark Suite           ║");
     println!("╚══════════════════════════════════════════════════════════════╝");

@@ -95,6 +95,30 @@ harness = false
 name = "graphalytics_benchmark"
 harness = false
 
+[[bench]]
+name = "ldbc_benchmark"
+harness = false
+
+[[bench]]
+name = "ldbc_bi_benchmark"
+harness = false
+
+[[bench]]
+name = "finbench_benchmark"
+harness = false
+
+[[bench]]
+name = "mvcc_benchmark"
+harness = false
+
+[[bench]]
+name = "late_materialization_bench"
+harness = false
+
+[[bench]]
+name = "graph_optimization_benchmark"
+harness = false
+
 [profile.release]
 opt-level = 3
 lto = true

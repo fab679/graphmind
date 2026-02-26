@@ -11,11 +11,16 @@ use std::time::Instant;
 use std::collections::HashSet;
 use rand::Rng;
 
+#[path = "bench_setup.rs"]
+mod bench_setup;
+
 const NUM_NODES: usize = 10_000;
 const EDGES_PER_NODE: usize = 5;
 const NUM_QUERIES: usize = 500;
 
 fn main() {
+    bench_setup::init();
+
     println!("╔══════════════════════════════════════════════════════════════════╗");
     println!("║   Late Materialization Micro-Benchmark                          ║");
     println!("╚══════════════════════════════════════════════════════════════════╝");
