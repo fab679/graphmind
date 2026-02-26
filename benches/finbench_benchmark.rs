@@ -9,16 +9,19 @@
 //! repayments, sign-ins, investments, and guarantees.
 //!
 //! Usage:
-//!   cargo run --release --example finbench_benchmark
-//!   cargo run --release --example finbench_benchmark -- --runs 10
-//!   cargo run --release --example finbench_benchmark -- --query CR-1
-//!   cargo run --release --example finbench_benchmark -- --data-dir /path/to/data
-//!   cargo run --release --example finbench_benchmark -- --writes   # include write operations
+//!   cargo bench --bench finbench_benchmark
+//!   cargo bench --bench finbench_benchmark -- --runs 10
+//!   cargo bench --bench finbench_benchmark -- --query CR-1
+//!   cargo bench --bench finbench_benchmark -- --data-dir /path/to/data
+//!   cargo bench --bench finbench_benchmark -- --writes   # include write operations
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use samyama_sdk::{EmbeddedClient, SamyamaClient};
+
+#[path = "bench_setup.rs"]
+mod bench_setup;
 
 mod finbench_common;
 use finbench_common::{format_duration, format_num, GeneratorConfig};
@@ -527,6 +530,8 @@ async fn run_benchmark(
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
+    bench_setup::init();
+
     let args: Vec<String> = std::env::args().collect();
 
     let data_dir = if let Some(pos) = args.iter().position(|a| a == "--data-dir") {

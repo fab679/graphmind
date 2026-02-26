@@ -8,15 +8,18 @@
 //!     data/ldbc-sf1/social_network-sf1-CsvBasic-LongDateFormatter/
 //!
 //! Usage:
-//!   cargo run --release --example ldbc_benchmark
-//!   cargo run --release --example ldbc_benchmark -- --runs 10
-//!   cargo run --release --example ldbc_benchmark -- --query IS1
-//!   cargo run --release --example ldbc_benchmark -- --data-dir /path/to/data
+//!   cargo bench --bench ldbc_benchmark
+//!   cargo bench --bench ldbc_benchmark -- --runs 10
+//!   cargo bench --bench ldbc_benchmark -- --query IS1
+//!   cargo bench --bench ldbc_benchmark -- --data-dir /path/to/data
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use samyama_sdk::{EmbeddedClient, SamyamaClient};
+
+#[path = "bench_setup.rs"]
+mod bench_setup;
 
 mod ldbc_common;
 use ldbc_common::{format_duration, format_num};
@@ -488,6 +491,8 @@ async fn run_benchmark(
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
+    bench_setup::init();
+
     let args: Vec<String> = std::env::args().collect();
 
     let default_dir = "data/ldbc-sf1/social_network-sf1-CsvBasic-LongDateFormatter";
