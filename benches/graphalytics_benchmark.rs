@@ -425,9 +425,9 @@ fn run_algorithm(
 
             let config = PageRankConfig {
                 damping_factor: damping,
-                iterations: iterations.max(1000), // Ensure enough iterations for convergence on large graphs
-                tolerance: 1e-7, // Converge to match LDBC reference outputs
-                dangling_redistribution: false, // LDBC Graphalytics reference outputs use no dangling redistribution
+                iterations, // Use exact iteration count from LDBC properties
+                tolerance: 0.0, // No early termination — run exactly num-iterations
+                dangling_redistribution: false, // LDBC Graphalytics spec: no dangling redistribution
             };
 
             let start = Instant::now();
