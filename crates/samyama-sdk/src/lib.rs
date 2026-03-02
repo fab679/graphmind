@@ -78,7 +78,7 @@ pub use samyama::algo::{
     build_view, page_rank, weakly_connected_components, strongly_connected_components,
     bfs, dijkstra, edmonds_karp, prim_mst, count_triangles, pca,
     PageRankConfig, PathResult, WccResult, SccResult, FlowResult, MSTResult,
-    PcaConfig, PcaResult,
+    PcaConfig, PcaResult, PcaSolver,
 };
 pub use samyama_graph_algorithms::GraphView;
 

@@ -12,7 +12,7 @@ use samyama::algo::{
     bfs, dijkstra, bfs_all_shortest_paths, edmonds_karp, prim_mst, count_triangles,
     cdlp, local_clustering_coefficient, pca,
     PageRankConfig, PathResult, WccResult, SccResult, FlowResult, MSTResult,
-    CdlpConfig, CdlpResult, LccResult, PcaConfig, PcaResult,
+    CdlpConfig, CdlpResult, LccResult, PcaConfig, PcaResult, PcaSolver,
 };
 use samyama_graph_algorithms::GraphView;
 
@@ -285,20 +285,20 @@ impl AlgorithmClient for EmbeddedClient {
             store.all_nodes().into_iter().collect()
         };
 
-        // Build feature matrix: extract numeric properties from each node
-        let mut data: Vec<Vec<f64>> = Vec::with_capacity(nodes.len());
-        for node in &nodes {
-            let mut row = Vec::with_capacity(properties.len());
-            for &prop in properties {
-                let val = match node.get_property(prop) {
-                    Some(PropertyValue::Integer(i)) => *i as f64,
-                    Some(PropertyValue::Float(f)) => *f,
+        // Build feature matrix: flat allocation then reshape into rows
+        let n = nodes.len();
+        let d = properties.len();
+        let mut data_flat = vec![0.0f64; n * d];
+        for (i, node) in nodes.iter().enumerate() {
+            for (j, &prop) in properties.iter().enumerate() {
+                data_flat[i * d + j] = match node.get_property(prop) {
+                    Some(PropertyValue::Integer(v)) => *v as f64,
+                    Some(PropertyValue::Float(v)) => *v,
                     _ => 0.0,
                 };
-                row.push(val);
             }
-            data.push(row);
         }
+        let data: Vec<Vec<f64>> = data_flat.chunks_exact(d).map(|c| c.to_vec()).collect();
 
         if data.is_empty() {
             return PcaResult {
