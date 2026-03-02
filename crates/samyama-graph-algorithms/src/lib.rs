@@ -18,4 +18,4 @@ pub use mst::{prim_mst, MSTResult};
 pub use topology::count_triangles;
 pub use cdlp::{cdlp, CdlpResult, CdlpConfig};
 pub use lcc::{local_clustering_coefficient, local_clustering_coefficient_directed, LccResult};
-pub use pca::{pca, PcaConfig, PcaResult};
+pub use pca::{pca, PcaConfig, PcaResult, PcaSolver};
