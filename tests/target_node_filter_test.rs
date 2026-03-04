@@ -348,3 +348,65 @@ fn test_multi_path_no_shared_variable() {
     assert_eq!(country, "India");
     assert_eq!(disease, "Diabetes");
 }
+
+/// Test cross-path WHERE predicates (BI-2 pattern):
+/// MATCH (t:Trial)-[:CONDUCTED_IN]->(c1:Country), (t)-[:STUDIES]->(d:DiseaseCategory)
+/// WHERE c1.name = 'India' AND d.name <> 'Cancer'
+/// Predicate references variables from different comma-separated paths.
+#[test]
+fn test_cross_path_where_predicate() {
+    // Reuse the multi-path graph which has known working multi-path join
+    let store = setup_multi_path_graph();
+    let engine = QueryEngine::new();
+
+    // Verify baseline: multi-path without cross-path WHERE works
+    let r_all = engine.execute(
+        "MATCH (t:Trial)-[:CONDUCTED_IN]->(c:Country {name: 'India'}), (t)-[:STUDIES]->(d:DiseaseCategory) RETURN t.trial_id, d.name",
+        &store
+    ).unwrap();
+    assert_eq!(r_all.len(), 3, "Baseline: expected 3 India trials");
+
+    // Cross-path predicate: filter by a condition that spans both paths
+    // c.name and d.name come from different paths, and the WHERE condition references both
+    let query = "MATCH (t:Trial)-[:CONDUCTED_IN]->(c:Country), (t)-[:STUDIES]->(d:DiseaseCategory) WHERE c.name = 'India' AND d.name <> 'Cancer' RETURN t.trial_id, d.name ORDER BY t.trial_id";
+    let result = engine.execute(query, &store).unwrap();
+
+    // India trials: T001 (Diabetes), T002 (Cancer), T005 (Respiratory)
+    // Excluding Cancer: T001 (Diabetes), T005 (Respiratory) = 2 results
+    assert_eq!(result.len(), 2, "Expected 2 results (India, not Cancer), got {}", result.len());
+    let tid1 = result.records[0].get("t.trial_id").unwrap().as_property().unwrap().as_string().unwrap();
+    let tid2 = result.records[1].get("t.trial_id").unwrap().as_property().unwrap().as_string().unwrap();
+    assert_eq!(tid1, "T001");
+    assert_eq!(tid2, "T005");
+}
+
+/// Test cross-MATCH WHERE predicates (BI-9 pattern):
+/// MATCH (p1:Person) MATCH (p2:Person) WHERE p1.name <> p2.name
+/// Predicate references variables from different MATCH clauses.
+#[test]
+fn test_cross_match_where_predicate() {
+    let mut store = GraphStore::new();
+    let engine = QueryEngine::new();
+
+    engine.execute_mut(
+        "CREATE (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'})",
+        &mut store, "default"
+    ).unwrap();
+
+    // Cross-MATCH predicate: p1.name <> p2.name
+    let query = "MATCH (p1:Person) MATCH (p2:Person) WHERE p1.name <> p2.name RETURN p1.name, p2.name ORDER BY p1.name, p2.name";
+    let result = engine.execute(query, &store).unwrap();
+
+    // Alice-Bob and Bob-Alice = 2 pairs
+    assert_eq!(result.len(), 2, "Expected 2 cross pairs, got {}", result.len());
+    let pair1 = (
+        result.records[0].get("p1.name").unwrap().as_property().unwrap().as_string().unwrap().to_string(),
+        result.records[0].get("p2.name").unwrap().as_property().unwrap().as_string().unwrap().to_string(),
+    );
+    let pair2 = (
+        result.records[1].get("p1.name").unwrap().as_property().unwrap().as_string().unwrap().to_string(),
+        result.records[1].get("p2.name").unwrap().as_property().unwrap().as_string().unwrap().to_string(),
+    );
+    assert_eq!(pair1, ("Alice".to_string(), "Bob".to_string()));
+    assert_eq!(pair2, ("Bob".to_string(), "Alice".to_string()));
+}

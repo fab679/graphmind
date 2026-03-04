@@ -203,18 +203,56 @@ impl QueryPlanner {
         let pre_with_clauses = &query.match_clauses[..split];
         let post_with_clauses = &query.match_clauses[split..];
 
-        // 1a. Handle pre-WITH MATCH clauses
-        for match_clause in pre_with_clauses {
-            let match_op = self.plan_match(match_clause, query.where_clause.as_ref(), _store)?;
-
-            let mut clause_vars = HashSet::new();
-            for path in &match_clause.pattern.paths {
-                if let Some(v) = &path.start.variable { clause_vars.insert(v.clone()); }
+        // Pre-compute variable sets for each pre-WITH MATCH clause
+        let pre_match_var_sets: Vec<HashSet<String>> = pre_with_clauses.iter().map(|mc| {
+            let mut vars = HashSet::new();
+            for path in &mc.pattern.paths {
+                if let Some(v) = &path.start.variable { vars.insert(v.clone()); }
                 for seg in &path.segments {
-                    if let Some(v) = &seg.node.variable { clause_vars.insert(v.clone()); }
-                    if let Some(v) = &seg.edge.variable { clause_vars.insert(v.clone()); }
+                    if let Some(v) = &seg.node.variable { vars.insert(v.clone()); }
+                    if let Some(v) = &seg.edge.variable { vars.insert(v.clone()); }
                 }
             }
+            vars
+        }).collect();
+
+        // Decompose WHERE clause: assign predicates to MATCH clauses or cross-MATCH
+        let pre_where_preds = query.where_clause.as_ref()
+            .map(|wc| flatten_and_predicates(&wc.predicate))
+            .unwrap_or_default();
+        let mut per_match_where: Vec<Option<WhereClause>> = vec![None; pre_with_clauses.len()];
+        let mut cross_match_predicates: Vec<Expression> = Vec::new();
+
+        for pred in pre_where_preds {
+            let mut pred_vars = HashSet::new();
+            Self::collect_expression_variables(&pred, &mut pred_vars);
+
+            let target = pre_match_var_sets.iter().position(|match_vars| {
+                pred_vars.is_empty() || pred_vars.iter().all(|v| match_vars.contains(v))
+            });
+            if let Some(i) = target {
+                match &mut per_match_where[i] {
+                    Some(wc) => {
+                        wc.predicate = Expression::Binary {
+                            left: Box::new(wc.predicate.clone()),
+                            op: BinaryOp::And,
+                            right: Box::new(pred),
+                        };
+                    }
+                    None => {
+                        per_match_where[i] = Some(WhereClause { predicate: pred });
+                    }
+                }
+            } else {
+                cross_match_predicates.push(pred);
+            }
+        }
+
+        // 1a. Handle pre-WITH MATCH clauses
+        for (match_idx, match_clause) in pre_with_clauses.iter().enumerate() {
+            let match_op = self.plan_match(match_clause, per_match_where[match_idx].as_ref(), _store)?;
+
+            let clause_vars = pre_match_var_sets[match_idx].clone();
 
             operator = Some(match operator {
                 Some(existing) => {
@@ -233,6 +271,20 @@ impl QueryPlanner {
                 None => match_op,
             });
             known_vars.extend(clause_vars);
+        }
+
+        // Apply cross-MATCH predicates after all pre-WITH MATCH clauses are joined
+        if !cross_match_predicates.is_empty() {
+            if let Some(op) = operator {
+                let filter_expr = cross_match_predicates.into_iter().reduce(|acc, pred| {
+                    Expression::Binary {
+                        left: Box::new(acc),
+                        op: BinaryOp::And,
+                        right: Box::new(pred),
+                    }
+                }).unwrap();
+                operator = Some(Box::new(FilterOperator::new(op, filter_expr)));
+            }
         }
 
         // 1b. Insert WITH barrier if WITH clause is present and has post-WITH clauses
@@ -329,18 +381,55 @@ impl QueryPlanner {
         }
 
         // 1c. Handle post-WITH MATCH clauses (join on variables from WITH output)
-        for match_clause in post_with_clauses {
-            // Post-WITH clauses use the post-WITH WHERE clause (not the pre-WITH one)
-            let match_op = self.plan_match(match_clause, query.post_with_where_clause.as_ref(), _store)?;
-
-            let mut clause_vars = HashSet::new();
-            for path in &match_clause.pattern.paths {
-                if let Some(v) = &path.start.variable { clause_vars.insert(v.clone()); }
+        // Pre-compute variable sets for post-WITH MATCH clauses
+        let post_match_var_sets: Vec<HashSet<String>> = post_with_clauses.iter().map(|mc| {
+            let mut vars = HashSet::new();
+            for path in &mc.pattern.paths {
+                if let Some(v) = &path.start.variable { vars.insert(v.clone()); }
                 for seg in &path.segments {
-                    if let Some(v) = &seg.node.variable { clause_vars.insert(v.clone()); }
-                    if let Some(v) = &seg.edge.variable { clause_vars.insert(v.clone()); }
+                    if let Some(v) = &seg.node.variable { vars.insert(v.clone()); }
+                    if let Some(v) = &seg.edge.variable { vars.insert(v.clone()); }
                 }
             }
+            vars
+        }).collect();
+
+        // Decompose post-WITH WHERE clause: assign to MATCH clauses or cross-MATCH
+        let post_where_preds = query.post_with_where_clause.as_ref()
+            .map(|wc| flatten_and_predicates(&wc.predicate))
+            .unwrap_or_default();
+        let mut post_per_match_where: Vec<Option<WhereClause>> = vec![None; post_with_clauses.len()];
+        let mut post_cross_match_preds: Vec<Expression> = Vec::new();
+
+        for pred in post_where_preds {
+            let mut pred_vars = HashSet::new();
+            Self::collect_expression_variables(&pred, &mut pred_vars);
+
+            let target = post_match_var_sets.iter().position(|match_vars| {
+                pred_vars.is_empty() || pred_vars.iter().all(|v| match_vars.contains(v))
+            });
+            if let Some(i) = target {
+                match &mut post_per_match_where[i] {
+                    Some(wc) => {
+                        wc.predicate = Expression::Binary {
+                            left: Box::new(wc.predicate.clone()),
+                            op: BinaryOp::And,
+                            right: Box::new(pred),
+                        };
+                    }
+                    None => {
+                        post_per_match_where[i] = Some(WhereClause { predicate: pred });
+                    }
+                }
+            } else {
+                post_cross_match_preds.push(pred);
+            }
+        }
+
+        for (match_idx, match_clause) in post_with_clauses.iter().enumerate() {
+            let match_op = self.plan_match(match_clause, post_per_match_where[match_idx].as_ref(), _store)?;
+
+            let clause_vars = post_match_var_sets[match_idx].clone();
 
             operator = Some(match operator {
                 Some(existing) => {
@@ -359,6 +448,20 @@ impl QueryPlanner {
                 None => match_op,
             });
             known_vars.extend(clause_vars);
+        }
+
+        // Apply post-WITH cross-MATCH predicates after all post-WITH MATCH clauses are joined
+        if !post_cross_match_preds.is_empty() {
+            if let Some(op) = operator {
+                let filter_expr = post_cross_match_preds.into_iter().reduce(|acc, pred| {
+                    Expression::Binary {
+                        left: Box::new(acc),
+                        op: BinaryOp::And,
+                        right: Box::new(pred),
+                    }
+                }).unwrap();
+                operator = Some(Box::new(FilterOperator::new(op, filter_expr)));
+            }
         }
 
         // 2. Handle CALL if present
@@ -742,6 +845,39 @@ impl QueryPlanner {
         let mut operators: Vec<OperatorBox> = Vec::new();
         let mut path_vars: Vec<HashSet<String>> = Vec::new();
 
+        // Pre-compute variable sets for each path
+        let path_var_sets: Vec<HashSet<String>> = pattern.paths.iter().map(|path| {
+            let mut vars = HashSet::new();
+            if let Some(v) = &path.start.variable { vars.insert(v.clone()); }
+            for seg in &path.segments {
+                if let Some(v) = &seg.node.variable { vars.insert(v.clone()); }
+                if let Some(v) = &seg.edge.variable { vars.insert(v.clone()); }
+            }
+            vars
+        }).collect();
+
+        // Decompose WHERE clause: assign each predicate to the first path that contains
+        // all its referenced variables. Cross-path predicates are applied after path join.
+        let all_where_preds = where_clause
+            .map(|wc| flatten_and_predicates(&wc.predicate))
+            .unwrap_or_default();
+        let mut per_path_preds: Vec<Vec<Expression>> = vec![Vec::new(); pattern.paths.len()];
+        let mut cross_path_predicates: Vec<Expression> = Vec::new();
+
+        for pred in all_where_preds {
+            let mut pred_vars = HashSet::new();
+            Self::collect_expression_variables(&pred, &mut pred_vars);
+
+            let target_path = path_var_sets.iter().position(|pvars| {
+                pred_vars.is_empty() || pred_vars.iter().all(|v| pvars.contains(v))
+            });
+            if let Some(i) = target_path {
+                per_path_preds[i].push(pred);
+            } else {
+                cross_path_predicates.push(pred);
+            }
+        }
+
         for &(path_idx, _) in &paths_with_cost {
             let path = &pattern.paths[path_idx];
             // Start with node scan for this path
@@ -749,15 +885,14 @@ impl QueryPlanner {
                 .ok_or_else(|| ExecutionError::PlanningError("Start node must have a variable".to_string()))?
                 .clone();
 
-            // Optimization: Check for index usage (supports AND-chain predicates)
+            // Optimization: Check for index usage (using this path's assigned predicates)
             let mut index_op: Option<OperatorBox> = None;
             let mut remaining_predicates: Vec<Expression> = Vec::new();
-            if let Some(wc) = where_clause {
-                // Flatten AND-chain into individual predicates
-                let predicates = flatten_and_predicates(&wc.predicate);
+            {
+                let predicates = &per_path_preds[path_idx];
                 let mut used_index = false;
 
-                for pred in &predicates {
+                for pred in predicates {
                     if used_index {
                         // Already found an index — push remaining predicates to filter
                         remaining_predicates.push(pred.clone());
@@ -955,6 +1090,18 @@ impl QueryPlanner {
                 result = Box::new(CartesianProductOperator::new(result, op));
             }
             combined_vars.extend(vars);
+        }
+
+        // Apply cross-path predicates after all paths are joined
+        if !cross_path_predicates.is_empty() {
+            let filter_expr = cross_path_predicates.into_iter().reduce(|acc, pred| {
+                Expression::Binary {
+                    left: Box::new(acc),
+                    op: BinaryOp::And,
+                    right: Box::new(pred),
+                }
+            }).unwrap();
+            result = Box::new(FilterOperator::new(result, filter_expr));
         }
 
         Ok(result)
