@@ -330,8 +330,8 @@ impl QueryPlanner {
 
         // 1c. Handle post-WITH MATCH clauses (join on variables from WITH output)
         for match_clause in post_with_clauses {
-            // Post-WITH clauses do NOT use the original WHERE (it was applied before WITH)
-            let match_op = self.plan_match(match_clause, None, _store)?;
+            // Post-WITH clauses use the post-WITH WHERE clause (not the pre-WITH one)
+            let match_op = self.plan_match(match_clause, query.post_with_where_clause.as_ref(), _store)?;
 
             let mut clause_vars = HashSet::new();
             for path in &match_clause.pattern.paths {

@@ -369,7 +369,12 @@ fn parse_match_statement(pair: pest::iterators::Pair<Rule>, query: &mut Query) -
                 }
             }
             Rule::where_clause => {
-                query.where_clause = Some(parse_where_clause(inner)?);
+                if query.with_split_index.is_some() {
+                    // Second WHERE clause (after WITH ... MATCH ... WHERE ...)
+                    query.post_with_where_clause = Some(parse_where_clause(inner)?);
+                } else {
+                    query.where_clause = Some(parse_where_clause(inner)?);
+                }
             }
             Rule::with_clause => {
                 // Record where WITH splits pre-WITH from post-WITH match clauses
