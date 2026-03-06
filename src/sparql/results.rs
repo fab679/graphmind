@@ -106,4 +106,40 @@ mod tests {
             _ => panic!("Expected bindings"),
         }
     }
+
+    // ========== Batch 6: Additional SPARQL Results Tests ==========
+
+    #[test]
+    fn test_query_solution_bind_and_get() {
+        use crate::rdf::{NamedNode, Literal};
+
+        let mut sol = QuerySolution::new();
+        let term = RdfTerm::NamedNode(NamedNode::new("http://example.org/x").unwrap());
+        sol.bind("x".to_string(), term);
+
+        assert!(sol.get("x").is_some());
+        assert!(sol.get("y").is_none());
+    }
+
+    #[test]
+    fn test_query_solution_default() {
+        let sol = QuerySolution::default();
+        assert!(sol.bindings.is_empty());
+    }
+
+    #[test]
+    fn test_sparql_results_boolean() {
+        let result = SparqlResults::Boolean(true);
+        match result {
+            SparqlResults::Boolean(val) => assert!(val),
+            _ => panic!("Expected Boolean"),
+        }
+    }
+
+    #[test]
+    fn test_sparql_results_serialize() {
+        let result = SparqlResults::empty();
+        let output = result.serialize(ResultFormat::Json);
+        assert!(output.is_ok());
+    }
 }

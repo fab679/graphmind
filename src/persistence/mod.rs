@@ -302,7 +302,7 @@ pub type PersistenceResult<T> = Result<T, PersistenceError>;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::graph::{Label, NodeId, EdgeId, EdgeType};
+    use crate::graph::{Label, NodeId, EdgeId, EdgeType, PropertyValue, PropertyMap};
     use tempfile::TempDir;
 
     #[test]
@@ -403,5 +403,81 @@ mod tests {
         let node = Node::new(NodeId::new(4), Label::new("Test"));
         let result = manager.persist_create_node("limited", &node);
         assert!(result.is_err());
+    }
+
+    // ========== Batch 7: Additional Persistence Tests ==========
+
+    #[test]
+    fn test_persist_create_edge() {
+        let temp_dir = TempDir::new().unwrap();
+        let manager = PersistenceManager::new(temp_dir.path()).unwrap();
+
+        // Create two nodes first
+        let n1 = Node::new(NodeId::new(1), Label::new("Person"));
+        let n2 = Node::new(NodeId::new(2), Label::new("Person"));
+        manager.persist_create_node("default", &n1).unwrap();
+        manager.persist_create_node("default", &n2).unwrap();
+
+        // Create edge
+        let edge = Edge::new(EdgeId::new(1), NodeId::new(1), NodeId::new(2), EdgeType::new("KNOWS"));
+        let result = manager.persist_create_edge("default", &edge);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_persist_delete_node() {
+        let temp_dir = TempDir::new().unwrap();
+        let manager = PersistenceManager::new(temp_dir.path()).unwrap();
+
+        let node = Node::new(NodeId::new(1), Label::new("Person"));
+        manager.persist_create_node("default", &node).unwrap();
+
+        let result = manager.persist_delete_node("default", 1);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_persist_delete_edge() {
+        let temp_dir = TempDir::new().unwrap();
+        let manager = PersistenceManager::new(temp_dir.path()).unwrap();
+
+        let n1 = Node::new(NodeId::new(1), Label::new("A"));
+        let n2 = Node::new(NodeId::new(2), Label::new("B"));
+        manager.persist_create_node("default", &n1).unwrap();
+        manager.persist_create_node("default", &n2).unwrap();
+
+        let edge = Edge::new(EdgeId::new(1), NodeId::new(1), NodeId::new(2), EdgeType::new("E"));
+        manager.persist_create_edge("default", &edge).unwrap();
+
+        let result = manager.persist_delete_edge("default", 1);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_persist_update_node_properties() {
+        let temp_dir = TempDir::new().unwrap();
+        let manager = PersistenceManager::new(temp_dir.path()).unwrap();
+
+        let node = Node::new(NodeId::new(1), Label::new("Person"));
+        manager.persist_create_node("default", &node).unwrap();
+
+        let mut props = PropertyMap::new();
+        props.insert("name".to_string(), PropertyValue::String("Alice".to_string()));
+
+        let result = manager.persist_update_node_properties("default", 1, &props);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_list_persisted_tenants() {
+        let temp_dir = TempDir::new().unwrap();
+        let manager = PersistenceManager::new(temp_dir.path()).unwrap();
+
+        // Persist to default tenant
+        let node = Node::new(NodeId::new(1), Label::new("Test"));
+        manager.persist_create_node("default", &node).unwrap();
+
+        let tenants = manager.list_persisted_tenants();
+        assert!(tenants.is_ok());
     }
 }

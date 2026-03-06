@@ -55,3 +55,48 @@ impl SparqlExecutor {
         Ok(SparqlResults::empty())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rdf::RdfStore;
+
+    #[test]
+    fn test_executor_creation() {
+        let store = RdfStore::new();
+        let _exec = SparqlExecutor::new(store);
+    }
+
+    #[test]
+    fn test_execute_select() {
+        let store = RdfStore::new();
+        let exec = SparqlExecutor::new(store);
+        let result = exec.execute_select();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_execute_construct() {
+        let store = RdfStore::new();
+        let exec = SparqlExecutor::new(store);
+        let result = exec.execute_construct();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_execute_ask() {
+        let store = RdfStore::new();
+        let exec = SparqlExecutor::new(store);
+        let result = exec.execute_ask();
+        assert!(result.is_ok());
+        assert!(!result.unwrap()); // Default stub returns false
+    }
+
+    #[test]
+    fn test_execute_describe() {
+        let store = RdfStore::new();
+        let exec = SparqlExecutor::new(store);
+        let result = exec.execute_describe();
+        assert!(result.is_ok());
+    }
+}

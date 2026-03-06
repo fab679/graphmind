@@ -200,4 +200,254 @@ mod tests {
         assert_eq!(node_id.id, 1);
         assert_eq!(node_id.addr, "127.0.0.1:5000");
     }
+
+    // ========== Additional RaftNode Coverage Tests ==========
+
+    #[tokio::test]
+    async fn test_raft_node_initialize() {
+        let temp_dir = TempDir::new().unwrap();
+        let persistence = Arc::new(PersistenceManager::new(temp_dir.path()).unwrap());
+        let sm = GraphStateMachine::new(persistence);
+        let mut node = RaftNode::new(1, sm);
+
+        assert!(!node.is_leader().await);
+        assert_eq!(node.get_leader().await, None);
+
+        let peers = vec![
+            NodeId::new(2, "127.0.0.1:5001".to_string()),
+            NodeId::new(3, "127.0.0.1:5002".to_string()),
+        ];
+        node.initialize(peers).await.unwrap();
+
+        // After initialization, simplified impl makes self the leader
+        assert!(node.is_leader().await);
+        assert_eq!(node.get_leader().await, Some(1));
+    }
+
+    #[tokio::test]
+    async fn test_raft_node_write_before_init() {
+        let temp_dir = TempDir::new().unwrap();
+        let persistence = Arc::new(PersistenceManager::new(temp_dir.path()).unwrap());
+        let sm = GraphStateMachine::new(persistence);
+        let node = RaftNode::new(1, sm);
+
+        let request = Request::ExecuteQuery {
+            tenant: "default".to_string(),
+            query: "MATCH (n) RETURN n".to_string(),
+        };
+
+        let result = node.write(request).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_raft_node_write_after_init() {
+        let temp_dir = TempDir::new().unwrap();
+        let persistence = Arc::new(PersistenceManager::new(temp_dir.path()).unwrap());
+        let sm = GraphStateMachine::new(persistence);
+        let mut node = RaftNode::new(1, sm);
+
+        node.initialize(vec![]).await.unwrap();
+
+        let request = Request::ExecuteQuery {
+            tenant: "default".to_string(),
+            query: "MATCH (n) RETURN n".to_string(),
+        };
+
+        let result = node.write(request).await;
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        assert!(matches!(response, Response::QueryResult { .. }));
+    }
+
+    #[tokio::test]
+    async fn test_raft_node_read() {
+        let temp_dir = TempDir::new().unwrap();
+        let persistence = Arc::new(PersistenceManager::new(temp_dir.path()).unwrap());
+        let sm = GraphStateMachine::new(persistence);
+        let node = RaftNode::new(1, sm);
+
+        // Read does not require initialization
+        let request = Request::ExecuteQuery {
+            tenant: "default".to_string(),
+            query: "MATCH (n) RETURN n".to_string(),
+        };
+
+        let result = node.read(request).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_raft_node_metrics() {
+        let temp_dir = TempDir::new().unwrap();
+        let persistence = Arc::new(PersistenceManager::new(temp_dir.path()).unwrap());
+        let sm = GraphStateMachine::new(persistence);
+        let mut node = RaftNode::new(1, sm);
+
+        let metrics = node.metrics().await;
+        assert_eq!(metrics.current_term, 0);
+        assert_eq!(metrics.last_log_index, 0);
+        assert_eq!(metrics.last_applied, 0);
+        assert_eq!(metrics.current_leader, None);
+
+        node.initialize(vec![]).await.unwrap();
+
+        // Write a request to update metrics
+        let request = Request::ExecuteQuery {
+            tenant: "default".to_string(),
+            query: "MATCH (n) RETURN n".to_string(),
+        };
+        node.write(request).await.unwrap();
+
+        let metrics = node.metrics().await;
+        assert_eq!(metrics.last_log_index, 1);
+        assert_eq!(metrics.last_applied, 1);
+        assert_eq!(metrics.current_leader, Some(1));
+    }
+
+    #[tokio::test]
+    async fn test_raft_node_add_learner_before_init() {
+        let temp_dir = TempDir::new().unwrap();
+        let persistence = Arc::new(PersistenceManager::new(temp_dir.path()).unwrap());
+        let sm = GraphStateMachine::new(persistence);
+        let node = RaftNode::new(1, sm);
+
+        let new_node = NodeId::new(2, "127.0.0.1:5001".to_string());
+        let result = node.add_learner(2, new_node).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_raft_node_add_learner_after_init() {
+        let temp_dir = TempDir::new().unwrap();
+        let persistence = Arc::new(PersistenceManager::new(temp_dir.path()).unwrap());
+        let sm = GraphStateMachine::new(persistence);
+        let mut node = RaftNode::new(1, sm);
+
+        node.initialize(vec![]).await.unwrap();
+
+        let new_node = NodeId::new(2, "127.0.0.1:5001".to_string());
+        let result = node.add_learner(2, new_node).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_raft_node_change_membership_before_init() {
+        let temp_dir = TempDir::new().unwrap();
+        let persistence = Arc::new(PersistenceManager::new(temp_dir.path()).unwrap());
+        let sm = GraphStateMachine::new(persistence);
+        let node = RaftNode::new(1, sm);
+
+        let mut members = BTreeSet::new();
+        members.insert(1);
+        members.insert(2);
+        let result = node.change_membership(members).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_raft_node_change_membership_after_init() {
+        let temp_dir = TempDir::new().unwrap();
+        let persistence = Arc::new(PersistenceManager::new(temp_dir.path()).unwrap());
+        let sm = GraphStateMachine::new(persistence);
+        let mut node = RaftNode::new(1, sm);
+
+        node.initialize(vec![]).await.unwrap();
+
+        let mut members = BTreeSet::new();
+        members.insert(1);
+        members.insert(2);
+        let result = node.change_membership(members).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_raft_node_shutdown() {
+        let temp_dir = TempDir::new().unwrap();
+        let persistence = Arc::new(PersistenceManager::new(temp_dir.path()).unwrap());
+        let sm = GraphStateMachine::new(persistence);
+        let mut node = RaftNode::new(1, sm);
+
+        node.initialize(vec![]).await.unwrap();
+        assert!(node.is_leader().await);
+
+        node.shutdown().await.unwrap();
+
+        // After shutdown, writes should fail (not initialized)
+        let request = Request::ExecuteQuery {
+            tenant: "default".to_string(),
+            query: "MATCH (n) RETURN n".to_string(),
+        };
+        let result = node.write(request).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_raft_node_multiple_writes_increment_metrics() {
+        let temp_dir = TempDir::new().unwrap();
+        let persistence = Arc::new(PersistenceManager::new(temp_dir.path()).unwrap());
+        let sm = GraphStateMachine::new(persistence);
+        let mut node = RaftNode::new(1, sm);
+
+        node.initialize(vec![]).await.unwrap();
+
+        for _ in 0..5 {
+            let request = Request::ExecuteQuery {
+                tenant: "default".to_string(),
+                query: "MATCH (n) RETURN n".to_string(),
+            };
+            node.write(request).await.unwrap();
+        }
+
+        let metrics = node.metrics().await;
+        assert_eq!(metrics.last_log_index, 5);
+        assert_eq!(metrics.last_applied, 5);
+    }
+
+    #[test]
+    fn test_node_id_default() {
+        let node_id = NodeId::default();
+        assert_eq!(node_id.id, 0);
+        assert_eq!(node_id.addr, "");
+    }
+
+    #[test]
+    fn test_node_id_serialization() {
+        let node_id = NodeId::new(42, "10.0.0.1:8080".to_string());
+        let json = serde_json::to_string(&node_id).unwrap();
+        let deserialized: NodeId = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.id, 42);
+        assert_eq!(deserialized.addr, "10.0.0.1:8080");
+    }
+
+    #[test]
+    fn test_node_id_equality() {
+        let a = NodeId::new(1, "addr1".to_string());
+        let b = NodeId::new(1, "addr1".to_string());
+        let c = NodeId::new(2, "addr1".to_string());
+        assert_eq!(a, b);
+        assert_ne!(a, c);
+    }
+
+    #[test]
+    fn test_simple_raft_metrics_default() {
+        let metrics = SimpleRaftMetrics::default();
+        assert_eq!(metrics.current_term, 0);
+        assert_eq!(metrics.current_leader, None);
+        assert_eq!(metrics.last_log_index, 0);
+        assert_eq!(metrics.last_applied, 0);
+    }
+
+    #[test]
+    fn test_entry_serialization() {
+        let entry = typ::Entry {
+            request: Request::ExecuteQuery {
+                tenant: "default".to_string(),
+                query: "MATCH (n) RETURN n".to_string(),
+            },
+        };
+        let json = serde_json::to_string(&entry).unwrap();
+        let deserialized: typ::Entry = serde_json::from_str(&json).unwrap();
+        assert!(matches!(deserialized.request, Request::ExecuteQuery { .. }));
+    }
 }

@@ -385,4 +385,395 @@ mod tests {
         assert_eq!(batch.len(), 1);
         assert!(!batch.is_empty());
     }
+
+    // ========== Batch 5: Additional Record Tests ==========
+
+    #[test]
+    fn test_as_edge() {
+        let edge = crate::graph::Edge::new(
+            EdgeId::new(1),
+            NodeId::new(10),
+            NodeId::new(20),
+            crate::graph::EdgeType::new("KNOWS"),
+        );
+        let val = Value::Edge(EdgeId::new(1), edge);
+        let (eid, e) = val.as_edge().unwrap();
+        assert_eq!(eid, EdgeId::new(1));
+        assert_eq!(e.source, NodeId::new(10));
+        assert_eq!(e.target, NodeId::new(20));
+
+        // Non-edge variants return None
+        assert!(Value::Null.as_edge().is_none());
+        assert!(Value::NodeRef(NodeId::new(1)).as_edge().is_none());
+    }
+
+    #[test]
+    fn test_node_id() {
+        // From Node
+        let node = Node::new(NodeId::new(5), Label::new("Person"));
+        let val = Value::Node(NodeId::new(5), node);
+        assert_eq!(val.node_id(), Some(NodeId::new(5)));
+
+        // From NodeRef
+        let val = Value::NodeRef(NodeId::new(7));
+        assert_eq!(val.node_id(), Some(NodeId::new(7)));
+
+        // Non-node variants
+        assert!(Value::Null.node_id().is_none());
+        assert!(Value::Property(PropertyValue::Integer(42)).node_id().is_none());
+    }
+
+    #[test]
+    fn test_edge_id() {
+        // From Edge
+        let edge = crate::graph::Edge::new(
+            EdgeId::new(3),
+            NodeId::new(1),
+            NodeId::new(2),
+            crate::graph::EdgeType::new("E"),
+        );
+        let val = Value::Edge(EdgeId::new(3), edge);
+        assert_eq!(val.edge_id(), Some(EdgeId::new(3)));
+
+        // From EdgeRef
+        let val = Value::EdgeRef(
+            EdgeId::new(4),
+            NodeId::new(1),
+            NodeId::new(2),
+            crate::graph::EdgeType::new("E"),
+        );
+        assert_eq!(val.edge_id(), Some(EdgeId::new(4)));
+
+        // Non-edge
+        assert!(Value::Null.edge_id().is_none());
+    }
+
+    #[test]
+    fn test_edge_endpoints() {
+        // From Edge
+        let edge = crate::graph::Edge::new(
+            EdgeId::new(1),
+            NodeId::new(10),
+            NodeId::new(20),
+            crate::graph::EdgeType::new("E"),
+        );
+        let val = Value::Edge(EdgeId::new(1), edge);
+        assert_eq!(val.edge_endpoints(), Some((NodeId::new(10), NodeId::new(20))));
+
+        // From EdgeRef
+        let val = Value::EdgeRef(
+            EdgeId::new(1),
+            NodeId::new(30),
+            NodeId::new(40),
+            crate::graph::EdgeType::new("E"),
+        );
+        assert_eq!(val.edge_endpoints(), Some((NodeId::new(30), NodeId::new(40))));
+
+        // Non-edge
+        assert!(Value::Null.edge_endpoints().is_none());
+    }
+
+    #[test]
+    fn test_edge_type_accessor() {
+        let edge = crate::graph::Edge::new(
+            EdgeId::new(1),
+            NodeId::new(1),
+            NodeId::new(2),
+            crate::graph::EdgeType::new("KNOWS"),
+        );
+        let val = Value::Edge(EdgeId::new(1), edge);
+        assert_eq!(val.edge_type().unwrap().as_str(), "KNOWS");
+
+        let val = Value::EdgeRef(
+            EdgeId::new(1),
+            NodeId::new(1),
+            NodeId::new(2),
+            crate::graph::EdgeType::new("LIKES"),
+        );
+        assert_eq!(val.edge_type().unwrap().as_str(), "LIKES");
+
+        assert!(Value::Null.edge_type().is_none());
+    }
+
+    #[test]
+    fn test_is_node_is_edge() {
+        let node = Node::new(NodeId::new(1), Label::new("A"));
+        assert!(Value::Node(NodeId::new(1), node).is_node());
+        assert!(Value::NodeRef(NodeId::new(1)).is_node());
+        assert!(!Value::Null.is_node());
+        assert!(!Value::Property(PropertyValue::Integer(1)).is_node());
+
+        let edge = crate::graph::Edge::new(
+            EdgeId::new(1), NodeId::new(1), NodeId::new(2),
+            crate::graph::EdgeType::new("E"),
+        );
+        assert!(Value::Edge(EdgeId::new(1), edge).is_edge());
+        assert!(Value::EdgeRef(
+            EdgeId::new(1), NodeId::new(1), NodeId::new(2),
+            crate::graph::EdgeType::new("E"),
+        ).is_edge());
+        assert!(!Value::Null.is_edge());
+    }
+
+    #[test]
+    fn test_materialize_node() {
+        let mut store = GraphStore::new();
+        let id = store.create_node("Person");
+        store.get_node_mut(id).unwrap().set_property(
+            "name".to_string(),
+            PropertyValue::String("Alice".to_string()),
+        );
+
+        // NodeRef materializes to Node
+        let val = Value::NodeRef(id).materialize_node(&store);
+        match &val {
+            Value::Node(nid, node) => {
+                assert_eq!(*nid, id);
+                assert!(node.labels.contains(&Label::new("Person")));
+            }
+            _ => panic!("Expected Value::Node after materialization"),
+        }
+
+        // Already materialized stays the same
+        let node = store.get_node(id).unwrap().clone();
+        let val = Value::Node(id, node).materialize_node(&store);
+        assert!(matches!(val, Value::Node(..)));
+
+        // Non-existent NodeRef becomes Null
+        let val = Value::NodeRef(NodeId::new(9999)).materialize_node(&store);
+        assert!(val.is_null());
+
+        // Non-node value is returned unchanged
+        let val = Value::Property(PropertyValue::Integer(42)).materialize_node(&store);
+        assert!(matches!(val, Value::Property(..)));
+    }
+
+    #[test]
+    fn test_materialize_edge() {
+        let mut store = GraphStore::new();
+        let a = store.create_node("A");
+        let b = store.create_node("B");
+        let eid = store.create_edge(a, b, "KNOWS").unwrap();
+
+        // EdgeRef materializes to Edge
+        let val = Value::EdgeRef(
+            eid, a, b, crate::graph::EdgeType::new("KNOWS"),
+        ).materialize_edge(&store);
+        match &val {
+            Value::Edge(id, edge) => {
+                assert_eq!(*id, eid);
+                assert_eq!(edge.source, a);
+                assert_eq!(edge.target, b);
+            }
+            _ => panic!("Expected Value::Edge after materialization"),
+        }
+
+        // Non-existent EdgeRef becomes Null
+        let val = Value::EdgeRef(
+            EdgeId::new(9999), a, b, crate::graph::EdgeType::new("X"),
+        ).materialize_edge(&store);
+        assert!(val.is_null());
+
+        // Non-edge value is returned unchanged
+        let val = Value::Null.materialize_edge(&store);
+        assert!(val.is_null());
+    }
+
+    #[test]
+    fn test_resolve_property_node() {
+        let mut store = GraphStore::new();
+        let id = store.create_node("Person");
+        store.get_node_mut(id).unwrap().set_property(
+            "name".to_string(),
+            PropertyValue::String("Alice".to_string()),
+        );
+
+        // Resolve from Node (materialized)
+        let node = store.get_node(id).unwrap().clone();
+        let val = Value::Node(id, node);
+        let prop = val.resolve_property("name", &store);
+        assert_eq!(prop, PropertyValue::String("Alice".to_string()));
+
+        // Missing property returns Null
+        let prop = val.resolve_property("missing", &store);
+        assert_eq!(prop, PropertyValue::Null);
+    }
+
+    #[test]
+    fn test_resolve_property_noderef() {
+        let mut store = GraphStore::new();
+        let id = store.create_node("Person");
+        store.get_node_mut(id).unwrap().set_property(
+            "age".to_string(),
+            PropertyValue::Integer(30),
+        );
+
+        let val = Value::NodeRef(id);
+        let prop = val.resolve_property("age", &store);
+        assert_eq!(prop, PropertyValue::Integer(30));
+
+        // Non-existent NodeRef
+        let val = Value::NodeRef(NodeId::new(9999));
+        let prop = val.resolve_property("age", &store);
+        assert_eq!(prop, PropertyValue::Null);
+    }
+
+    #[test]
+    fn test_resolve_property_edge() {
+        let mut store = GraphStore::new();
+        let a = store.create_node("A");
+        let b = store.create_node("B");
+
+        let mut props = std::collections::HashMap::new();
+        props.insert("since".to_string(), PropertyValue::Integer(2020));
+        let eid = store.create_edge_with_properties(a, b, "KNOWS", props).unwrap();
+
+        // From Edge
+        let edge = store.get_edge(eid).unwrap().clone();
+        let val = Value::Edge(eid, edge);
+        let prop = val.resolve_property("since", &store);
+        assert_eq!(prop, PropertyValue::Integer(2020));
+    }
+
+    #[test]
+    fn test_resolve_property_edgeref() {
+        let mut store = GraphStore::new();
+        let a = store.create_node("A");
+        let b = store.create_node("B");
+
+        let mut props = std::collections::HashMap::new();
+        props.insert("weight".to_string(), PropertyValue::Float(0.5));
+        let eid = store.create_edge_with_properties(a, b, "KNOWS", props).unwrap();
+
+        let val = Value::EdgeRef(eid, a, b, crate::graph::EdgeType::new("KNOWS"));
+        let prop = val.resolve_property("weight", &store);
+        assert_eq!(prop, PropertyValue::Float(0.5));
+
+        // Non-existent EdgeRef
+        let val = Value::EdgeRef(
+            EdgeId::new(9999), a, b, crate::graph::EdgeType::new("X"),
+        );
+        let prop = val.resolve_property("weight", &store);
+        assert_eq!(prop, PropertyValue::Null);
+    }
+
+    #[test]
+    fn test_resolve_property_non_node_edge() {
+        let store = GraphStore::new();
+        let val = Value::Null;
+        assert_eq!(val.resolve_property("anything", &store), PropertyValue::Null);
+
+        let val = Value::Property(PropertyValue::Integer(42));
+        assert_eq!(val.resolve_property("x", &store), PropertyValue::Null);
+    }
+
+    #[test]
+    fn test_record_batch_get() {
+        let mut batch = RecordBatch::new(vec!["n".to_string()]);
+        let mut r1 = Record::new();
+        r1.bind("n".to_string(), Value::Property(PropertyValue::Integer(1)));
+        let mut r2 = Record::new();
+        r2.bind("n".to_string(), Value::Property(PropertyValue::Integer(2)));
+        batch.push(r1);
+        batch.push(r2);
+
+        assert!(batch.get(0).is_some());
+        assert!(batch.get(1).is_some());
+        assert!(batch.get(2).is_none()); // out of bounds
+
+        let r = batch.get(0).unwrap();
+        assert_eq!(
+            r.get("n").unwrap().as_property(),
+            Some(&PropertyValue::Integer(1))
+        );
+    }
+
+    #[test]
+    fn test_record_bindings() {
+        let mut r = Record::new();
+        r.bind("x".to_string(), Value::Property(PropertyValue::Integer(1)));
+        r.bind("y".to_string(), Value::Null);
+
+        let bindings = r.bindings();
+        assert_eq!(bindings.len(), 2);
+        assert!(bindings.contains_key("x"));
+        assert!(bindings.contains_key("y"));
+    }
+
+    #[test]
+    fn test_record_default() {
+        let r = Record::default();
+        assert_eq!(r.bindings().len(), 0);
+    }
+
+    #[test]
+    fn test_value_partial_eq_cross_variant() {
+        // Node == NodeRef with same ID
+        let node = Node::new(NodeId::new(5), Label::new("A"));
+        let v1 = Value::Node(NodeId::new(5), node.clone());
+        let v2 = Value::NodeRef(NodeId::new(5));
+        assert_eq!(v1, v2);
+        assert_eq!(v2, v1);
+
+        // Different IDs
+        let v3 = Value::NodeRef(NodeId::new(6));
+        assert_ne!(v1, v3);
+
+        // Edge == EdgeRef with same ID
+        let edge = crate::graph::Edge::new(
+            EdgeId::new(1), NodeId::new(1), NodeId::new(2),
+            crate::graph::EdgeType::new("E"),
+        );
+        let ev1 = Value::Edge(EdgeId::new(1), edge);
+        let ev2 = Value::EdgeRef(
+            EdgeId::new(1), NodeId::new(1), NodeId::new(2),
+            crate::graph::EdgeType::new("E"),
+        );
+        assert_eq!(ev1, ev2);
+        assert_eq!(ev2, ev1);
+
+        // Different types don't equal
+        assert_ne!(v1, ev1);
+        assert_ne!(Value::Null, v1);
+
+        // Path equality
+        let p1 = Value::Path { nodes: vec![NodeId::new(1)], edges: vec![EdgeId::new(1)] };
+        let p2 = Value::Path { nodes: vec![NodeId::new(1)], edges: vec![EdgeId::new(1)] };
+        let p3 = Value::Path { nodes: vec![NodeId::new(2)], edges: vec![EdgeId::new(1)] };
+        assert_eq!(p1, p2);
+        assert_ne!(p1, p3);
+    }
+
+    #[test]
+    fn test_value_hash_cross_variant() {
+        use std::collections::hash_map::DefaultHasher;
+
+        fn hash_value(v: &Value) -> u64 {
+            let mut hasher = DefaultHasher::new();
+            v.hash(&mut hasher);
+            hasher.finish()
+        }
+
+        // Node and NodeRef with same ID should hash the same
+        let node = Node::new(NodeId::new(5), Label::new("A"));
+        let v1 = Value::Node(NodeId::new(5), node);
+        let v2 = Value::NodeRef(NodeId::new(5));
+        assert_eq!(hash_value(&v1), hash_value(&v2));
+
+        // Edge and EdgeRef with same ID should hash the same
+        let edge = crate::graph::Edge::new(
+            EdgeId::new(3), NodeId::new(1), NodeId::new(2),
+            crate::graph::EdgeType::new("E"),
+        );
+        let ev1 = Value::Edge(EdgeId::new(3), edge);
+        let ev2 = Value::EdgeRef(
+            EdgeId::new(3), NodeId::new(1), NodeId::new(2),
+            crate::graph::EdgeType::new("E"),
+        );
+        assert_eq!(hash_value(&ev1), hash_value(&ev2));
+
+        // Different variant types should have different hashes
+        assert_ne!(hash_value(&v1), hash_value(&ev1));
+        assert_ne!(hash_value(&Value::Null), hash_value(&v1));
+    }
 }

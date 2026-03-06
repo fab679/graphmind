@@ -516,4 +516,392 @@ mod tests {
         let objects = store.objects();
         assert_eq!(objects.len(), 2);
     }
+
+    // ========== Additional RDF Store Coverage Tests ==========
+
+    #[test]
+    fn test_store_default() {
+        let store = RdfStore::default();
+        assert!(store.is_empty());
+        assert_eq!(store.len(), 0);
+    }
+
+    #[test]
+    fn test_remove_nonexistent_triple() {
+        let mut store = RdfStore::new();
+        let triple = create_test_triple();
+        let result = store.remove(&triple);
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), RdfStoreError::TripleNotFound));
+    }
+
+    #[test]
+    fn test_insert_quad_without_graph() {
+        let mut store = RdfStore::new();
+        let triple = create_test_triple();
+        let quad = super::super::types::Quad::from_triple(triple.clone());
+
+        store.insert_quad(quad).unwrap();
+
+        assert_eq!(store.len(), 1);
+        assert!(store.contains(&triple));
+        // No named graphs should be created
+        assert!(store.list_graphs().is_empty());
+    }
+
+    #[test]
+    fn test_insert_quad_with_graph() {
+        let mut store = RdfStore::new();
+        let triple = create_test_triple();
+        let graph = NamedNode::new("http://example.org/graph1").unwrap();
+
+        let quad = super::super::types::Quad::new(
+            triple.subject.clone(),
+            triple.predicate.clone(),
+            triple.object.clone(),
+            Some(graph.clone()),
+        );
+
+        store.insert_quad(quad).unwrap();
+
+        assert_eq!(store.len(), 1);
+        assert!(store.contains(&triple));
+
+        let graphs = store.list_graphs();
+        assert_eq!(graphs.len(), 1);
+        assert!(graphs.contains(&graph.as_str().to_string()));
+
+        let graph_triples = store.get_graph(graph.as_str()).unwrap();
+        assert_eq!(graph_triples.len(), 1);
+    }
+
+    #[test]
+    fn test_multiple_quads_same_graph() {
+        let mut store = RdfStore::new();
+        let graph = NamedNode::new("http://example.org/g1").unwrap();
+
+        let subjects = ["http://example.org/a", "http://example.org/b", "http://example.org/c"];
+        for s in &subjects {
+            let subj = NamedNode::new(s).unwrap();
+            let pred = RdfPredicate::new("http://example.org/p").unwrap();
+            let obj = Literal::new_simple_literal("val");
+            let quad = super::super::types::Quad::new(
+                subj.into(),
+                pred,
+                obj.into(),
+                Some(graph.clone()),
+            );
+            store.insert_quad(quad).unwrap();
+        }
+
+        let graph_triples = store.get_graph(graph.as_str()).unwrap();
+        assert_eq!(graph_triples.len(), 3);
+        assert_eq!(store.len(), 3);
+    }
+
+    #[test]
+    fn test_multiple_named_graphs() {
+        let mut store = RdfStore::new();
+
+        let graph1 = NamedNode::new("http://example.org/g1").unwrap();
+        let graph2 = NamedNode::new("http://example.org/g2").unwrap();
+
+        let subj1 = NamedNode::new("http://example.org/a").unwrap();
+        let pred = RdfPredicate::new("http://example.org/p").unwrap();
+        let obj = Literal::new_simple_literal("val1");
+        let quad1 = super::super::types::Quad::new(subj1.into(), pred.clone(), obj.into(), Some(graph1.clone()));
+        store.insert_quad(quad1).unwrap();
+
+        let subj2 = NamedNode::new("http://example.org/b").unwrap();
+        let obj2 = Literal::new_simple_literal("val2");
+        let quad2 = super::super::types::Quad::new(subj2.into(), pred, obj2.into(), Some(graph2.clone()));
+        store.insert_quad(quad2).unwrap();
+
+        let graphs = store.list_graphs();
+        assert_eq!(graphs.len(), 2);
+
+        assert_eq!(store.get_graph(graph1.as_str()).unwrap().len(), 1);
+        assert_eq!(store.get_graph(graph2.as_str()).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_get_graph_nonexistent() {
+        let store = RdfStore::new();
+        let result = store.get_graph("http://nonexistent.org/graph");
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), RdfStoreError::GraphNotFound(_)));
+    }
+
+    #[test]
+    fn test_remove_triple_from_named_graph() {
+        let mut store = RdfStore::new();
+        let graph = NamedNode::new("http://example.org/g1").unwrap();
+
+        let triple = create_test_triple();
+        let quad = super::super::types::Quad::new(
+            triple.subject.clone(),
+            triple.predicate.clone(),
+            triple.object.clone(),
+            Some(graph.clone()),
+        );
+        store.insert_quad(quad).unwrap();
+
+        assert_eq!(store.get_graph(graph.as_str()).unwrap().len(), 1);
+
+        // Remove the triple
+        store.remove(&triple).unwrap();
+
+        assert_eq!(store.len(), 0);
+        // Graph still exists but is empty
+        let graph_triples = store.get_graph(graph.as_str()).unwrap();
+        assert!(graph_triples.is_empty());
+    }
+
+    #[test]
+    fn test_query_with_predicate_pattern() {
+        let mut store = RdfStore::new();
+
+        let alice = NamedNode::new("http://example.org/alice").unwrap();
+        let name_pred = RdfPredicate::new("http://xmlns.com/foaf/0.1/name").unwrap();
+        let age_pred = RdfPredicate::new("http://xmlns.com/foaf/0.1/age").unwrap();
+
+        let t1 = Triple::new(alice.clone().into(), name_pred.clone(), Literal::new_simple_literal("Alice").into());
+        let t2 = Triple::new(alice.clone().into(), age_pred.clone(), Literal::new_simple_literal("30").into());
+
+        store.insert(t1).unwrap();
+        store.insert(t2).unwrap();
+
+        // Query by predicate
+        let pattern = TriplePattern::new(None, Some(name_pred.clone()), None);
+        let results = store.query(&pattern);
+        assert_eq!(results.len(), 1);
+
+        let pattern2 = TriplePattern::new(None, Some(age_pred), None);
+        let results2 = store.query(&pattern2);
+        assert_eq!(results2.len(), 1);
+    }
+
+    #[test]
+    fn test_query_with_object_pattern() {
+        let mut store = RdfStore::new();
+
+        let alice = NamedNode::new("http://example.org/alice").unwrap();
+        let bob = NamedNode::new("http://example.org/bob").unwrap();
+        let name_pred = RdfPredicate::new("http://xmlns.com/foaf/0.1/name").unwrap();
+        let obj = Literal::new_simple_literal("Alice");
+
+        let t1 = Triple::new(alice.into(), name_pred.clone(), obj.clone().into());
+        let t2 = Triple::new(bob.into(), name_pred, Literal::new_simple_literal("Bob").into());
+
+        store.insert(t1).unwrap();
+        store.insert(t2).unwrap();
+
+        let pattern = TriplePattern::new(None, None, Some(RdfObject::Literal(obj)));
+        let results = store.query(&pattern);
+        assert_eq!(results.len(), 1);
+    }
+
+    #[test]
+    fn test_query_with_full_pattern() {
+        let mut store = RdfStore::new();
+        let triple = create_test_triple();
+        store.insert(triple.clone()).unwrap();
+
+        // Exact match
+        let pattern = TriplePattern::new(
+            Some(triple.subject.clone()),
+            Some(triple.predicate.clone()),
+            Some(triple.object.clone()),
+        );
+        let results = store.query(&pattern);
+        assert_eq!(results.len(), 1);
+    }
+
+    #[test]
+    fn test_get_triples_with_predicate() {
+        let mut store = RdfStore::new();
+
+        let pred = RdfPredicate::new("http://example.org/knows").unwrap();
+        let other_pred = RdfPredicate::new("http://example.org/likes").unwrap();
+
+        let t1 = Triple::new(
+            NamedNode::new("http://example.org/a").unwrap().into(),
+            pred.clone(),
+            NamedNode::new("http://example.org/b").unwrap().into(),
+        );
+        let t2 = Triple::new(
+            NamedNode::new("http://example.org/c").unwrap().into(),
+            pred.clone(),
+            NamedNode::new("http://example.org/d").unwrap().into(),
+        );
+        let t3 = Triple::new(
+            NamedNode::new("http://example.org/e").unwrap().into(),
+            other_pred,
+            NamedNode::new("http://example.org/f").unwrap().into(),
+        );
+
+        store.insert(t1).unwrap();
+        store.insert(t2).unwrap();
+        store.insert(t3).unwrap();
+
+        let results = store.get_triples_with_predicate(&pred);
+        assert_eq!(results.len(), 2);
+    }
+
+    #[test]
+    fn test_get_triples_with_object() {
+        let mut store = RdfStore::new();
+
+        let target = RdfObject::NamedNode(NamedNode::new("http://example.org/target").unwrap());
+
+        let t1 = Triple::new(
+            NamedNode::new("http://example.org/a").unwrap().into(),
+            RdfPredicate::new("http://example.org/p1").unwrap(),
+            target.clone(),
+        );
+        let t2 = Triple::new(
+            NamedNode::new("http://example.org/b").unwrap().into(),
+            RdfPredicate::new("http://example.org/p2").unwrap(),
+            target.clone(),
+        );
+        let t3 = Triple::new(
+            NamedNode::new("http://example.org/c").unwrap().into(),
+            RdfPredicate::new("http://example.org/p3").unwrap(),
+            Literal::new_simple_literal("other").into(),
+        );
+
+        store.insert(t1).unwrap();
+        store.insert(t2).unwrap();
+        store.insert(t3).unwrap();
+
+        let results = store.get_triples_with_object(&target);
+        assert_eq!(results.len(), 2);
+    }
+
+    #[test]
+    fn test_iter() {
+        let mut store = RdfStore::new();
+
+        for i in 0..5 {
+            let subj = NamedNode::new(&format!("http://example.org/s{}", i)).unwrap();
+            let pred = RdfPredicate::new("http://example.org/p").unwrap();
+            let obj = Literal::new_simple_literal(format!("val{}", i));
+            store.insert(Triple::new(subj.into(), pred, obj.into())).unwrap();
+        }
+
+        let count = store.iter().count();
+        assert_eq!(count, 5);
+    }
+
+    #[test]
+    fn test_clear_clears_graphs() {
+        let mut store = RdfStore::new();
+        let graph = NamedNode::new("http://example.org/g").unwrap();
+
+        let triple = create_test_triple();
+        let quad = super::super::types::Quad::new(
+            triple.subject.clone(),
+            triple.predicate.clone(),
+            triple.object.clone(),
+            Some(graph.clone()),
+        );
+        store.insert_quad(quad).unwrap();
+
+        assert!(!store.list_graphs().is_empty());
+
+        store.clear();
+        assert!(store.is_empty());
+        assert!(store.list_graphs().is_empty());
+    }
+
+    #[test]
+    fn test_insert_and_remove_updates_indices() {
+        let mut store = RdfStore::new();
+        let triple = create_test_triple();
+
+        store.insert(triple.clone()).unwrap();
+        assert_eq!(store.len(), 1);
+
+        // Query by subject should find it
+        let results = store.get_triples_with_subject(&triple.subject);
+        assert_eq!(results.len(), 1);
+
+        store.remove(&triple).unwrap();
+        assert_eq!(store.len(), 0);
+
+        // Query by subject should not find it
+        let results = store.get_triples_with_subject(&triple.subject);
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_clone_store() {
+        let mut store = RdfStore::new();
+        let triple = create_test_triple();
+        store.insert(triple.clone()).unwrap();
+
+        let cloned = store.clone();
+        assert_eq!(cloned.len(), 1);
+        assert!(cloned.contains(&triple));
+    }
+
+    #[test]
+    fn test_rdf_store_error_display() {
+        let e1 = RdfStoreError::TripleNotFound;
+        assert!(format!("{}", e1).contains("Triple not found"));
+
+        let e2 = RdfStoreError::QuadNotFound;
+        assert!(format!("{}", e2).contains("Quad not found"));
+
+        let e3 = RdfStoreError::GraphNotFound("http://example.org/g".to_string());
+        assert!(format!("{}", e3).contains("Graph not found"));
+
+        let e4 = RdfStoreError::DuplicateTriple;
+        assert!(format!("{}", e4).contains("Duplicate triple"));
+    }
+
+    #[test]
+    fn test_triple_iterator() {
+        let mut store = RdfStore::new();
+
+        let t1 = create_test_triple();
+
+        let t2 = Triple::new(
+            NamedNode::new("http://example.org/bob").unwrap().into(),
+            RdfPredicate::new("http://xmlns.com/foaf/0.1/name").unwrap(),
+            Literal::new_simple_literal("Bob").into(),
+        );
+
+        store.insert(t1).unwrap();
+        store.insert(t2).unwrap();
+
+        let all_triples: Vec<&Triple> = store.triples.iter().collect();
+        let mut iter = TripleIterator::new(all_triples);
+
+        let first = iter.next();
+        assert!(first.is_some());
+
+        let second = iter.next();
+        assert!(second.is_some());
+
+        let third = iter.next();
+        assert!(third.is_none());
+    }
+
+    #[test]
+    fn test_insert_quad_duplicate_in_main_store() {
+        let mut store = RdfStore::new();
+        let triple = create_test_triple();
+
+        // Insert as triple first
+        store.insert(triple.clone()).unwrap();
+
+        // Insert same triple as quad (should not error since insert_quad doesn't check duplicates)
+        let quad = super::super::types::Quad::from_triple(triple.clone());
+        // insert_quad currently does not check for duplicates in main store
+        let _ = store.insert_quad(quad);
+
+        // The triple should exist
+        assert!(store.contains(&triple));
+    }
 }

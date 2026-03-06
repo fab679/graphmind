@@ -1499,15 +1499,995 @@ mod tests {
     fn test_id_reuse() {
         let mut store = GraphStore::new();
         let n1 = store.create_node("A");
-        let n2 = store.create_node("B");
-        
+        let _n2 = store.create_node("B");
+
         store.delete_node("default", n1).unwrap();
-        
+
         // Next creation should reuse n1's ID (which is 1)
         // n2 is 2.
         let n3 = store.create_node("C");
-        
+
         assert_eq!(n3, n1); // ID reuse
         assert_eq!(store.node_count(), 2); // B and C
+    }
+
+    // ========== Batch 5: Additional Store Tests ==========
+
+    #[test]
+    fn test_get_node() {
+        let mut store = GraphStore::new();
+        let id = store.create_node("Person");
+        let node = store.get_node(id);
+        assert!(node.is_some());
+        assert!(node.unwrap().labels.contains(&Label::new("Person")));
+
+        // Non-existent node
+        assert!(store.get_node(NodeId::new(9999)).is_none());
+    }
+
+    #[test]
+    fn test_get_node_mut() {
+        let mut store = GraphStore::new();
+        let id = store.create_node("Person");
+        {
+            let node = store.get_node_mut(id).unwrap();
+            node.set_property("name".to_string(), PropertyValue::String("Alice".to_string()));
+        }
+        let node = store.get_node(id).unwrap();
+        assert_eq!(
+            node.get_property("name"),
+            Some(&PropertyValue::String("Alice".to_string()))
+        );
+
+        // Non-existent node
+        assert!(store.get_node_mut(NodeId::new(9999)).is_none());
+    }
+
+    #[test]
+    fn test_has_node() {
+        let mut store = GraphStore::new();
+        let id = store.create_node("A");
+        assert!(store.has_node(id));
+        store.delete_node("default", id).unwrap();
+        assert!(!store.has_node(id));
+    }
+
+    #[test]
+    fn test_set_node_property() {
+        let mut store = GraphStore::new();
+        let id = store.create_node("Person");
+        store.set_node_property("default", id, "age", PropertyValue::Integer(30)).unwrap();
+        let node = store.get_node(id).unwrap();
+        assert_eq!(
+            node.get_property("age"),
+            Some(&PropertyValue::Integer(30))
+        );
+
+        // Update existing property
+        store.set_node_property("default", id, "age", PropertyValue::Integer(31)).unwrap();
+        let node = store.get_node(id).unwrap();
+        assert_eq!(
+            node.get_property("age"),
+            Some(&PropertyValue::Integer(31))
+        );
+
+        // Non-existent node
+        let result = store.set_node_property("default", NodeId::new(9999), "x", PropertyValue::Null);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_create_edge_with_properties() {
+        let mut store = GraphStore::new();
+        let a = store.create_node("Person");
+        let b = store.create_node("Person");
+
+        let mut props = std::collections::HashMap::new();
+        props.insert("since".to_string(), PropertyValue::Integer(2020));
+        props.insert("weight".to_string(), PropertyValue::Float(0.8));
+
+        let eid = store.create_edge_with_properties(a, b, "KNOWS", props).unwrap();
+        let edge = store.get_edge(eid).unwrap();
+        assert_eq!(edge.source, a);
+        assert_eq!(edge.target, b);
+        assert_eq!(edge.get_property("since"), Some(&PropertyValue::Integer(2020)));
+        assert_eq!(edge.get_property("weight"), Some(&PropertyValue::Float(0.8)));
+    }
+
+    #[test]
+    fn test_create_edge_with_properties_invalid_nodes() {
+        let mut store = GraphStore::new();
+        let a = store.create_node("A");
+        let props = std::collections::HashMap::new();
+
+        // Invalid target
+        let result = store.create_edge_with_properties(a, NodeId::new(9999), "E", props.clone());
+        assert!(result.is_err());
+
+        // Invalid source
+        let result = store.create_edge_with_properties(NodeId::new(9999), a, "E", props);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_get_edge_and_has_edge() {
+        let mut store = GraphStore::new();
+        let a = store.create_node("A");
+        let b = store.create_node("B");
+        let eid = store.create_edge(a, b, "LINKS").unwrap();
+
+        assert!(store.has_edge(eid));
+        let edge = store.get_edge(eid).unwrap();
+        assert_eq!(edge.source, a);
+        assert_eq!(edge.target, b);
+
+        // Non-existent
+        assert!(!store.has_edge(EdgeId::new(9999)));
+        assert!(store.get_edge(EdgeId::new(9999)).is_none());
+    }
+
+    #[test]
+    fn test_get_edge_mut() {
+        let mut store = GraphStore::new();
+        let a = store.create_node("A");
+        let b = store.create_node("B");
+        let eid = store.create_edge(a, b, "LINKS").unwrap();
+
+        {
+            let edge = store.get_edge_mut(eid).unwrap();
+            edge.set_property("weight".to_string(), PropertyValue::Float(1.5));
+        }
+        let edge = store.get_edge(eid).unwrap();
+        assert_eq!(edge.get_property("weight"), Some(&PropertyValue::Float(1.5)));
+
+        assert!(store.get_edge_mut(EdgeId::new(9999)).is_none());
+    }
+
+    #[test]
+    fn test_get_outgoing_edge_targets() {
+        let mut store = GraphStore::new();
+        let a = store.create_node("A");
+        let b = store.create_node("B");
+        let c = store.create_node("C");
+        let e1 = store.create_edge(a, b, "KNOWS").unwrap();
+        let e2 = store.create_edge(a, c, "LIKES").unwrap();
+
+        let targets = store.get_outgoing_edge_targets(a);
+        assert_eq!(targets.len(), 2);
+        // Each tuple is (EdgeId, source, target, &EdgeType)
+        let edge_ids: Vec<EdgeId> = targets.iter().map(|t| t.0).collect();
+        assert!(edge_ids.contains(&e1));
+        assert!(edge_ids.contains(&e2));
+
+        // Node with no outgoing edges
+        let targets = store.get_outgoing_edge_targets(b);
+        assert!(targets.is_empty());
+    }
+
+    #[test]
+    fn test_get_incoming_edge_sources() {
+        let mut store = GraphStore::new();
+        let a = store.create_node("A");
+        let b = store.create_node("B");
+        let c = store.create_node("C");
+        store.create_edge(a, c, "KNOWS").unwrap();
+        store.create_edge(b, c, "LIKES").unwrap();
+
+        let sources = store.get_incoming_edge_sources(c);
+        assert_eq!(sources.len(), 2);
+        let src_nodes: Vec<NodeId> = sources.iter().map(|t| t.1).collect();
+        assert!(src_nodes.contains(&a));
+        assert!(src_nodes.contains(&b));
+
+        // Node with no incoming edges
+        let sources = store.get_incoming_edge_sources(a);
+        assert!(sources.is_empty());
+    }
+
+    #[test]
+    fn test_all_nodes() {
+        let mut store = GraphStore::new();
+        assert!(store.all_nodes().is_empty());
+
+        store.create_node("A");
+        store.create_node("B");
+        store.create_node("C");
+        assert_eq!(store.all_nodes().len(), 3);
+    }
+
+    #[test]
+    fn test_compute_statistics() {
+        let mut store = GraphStore::new();
+        let a = store.create_node("Person");
+        let b = store.create_node("Person");
+        let c = store.create_node("Company");
+        store.get_node_mut(a).unwrap().set_property("name".to_string(), PropertyValue::String("Alice".to_string()));
+        store.get_node_mut(b).unwrap().set_property("name".to_string(), PropertyValue::String("Bob".to_string()));
+        store.get_node_mut(c).unwrap().set_property("name".to_string(), PropertyValue::String("Acme".to_string()));
+        store.create_edge(a, b, "KNOWS").unwrap();
+        store.create_edge(a, c, "WORKS_AT").unwrap();
+
+        let stats = store.compute_statistics();
+        assert_eq!(stats.total_nodes, 3);
+        assert_eq!(stats.total_edges, 2);
+        assert_eq!(*stats.label_counts.get(&Label::new("Person")).unwrap(), 2);
+        assert_eq!(*stats.label_counts.get(&Label::new("Company")).unwrap(), 1);
+        assert_eq!(*stats.edge_type_counts.get(&EdgeType::new("KNOWS")).unwrap(), 1);
+        assert_eq!(*stats.edge_type_counts.get(&EdgeType::new("WORKS_AT")).unwrap(), 1);
+        assert!(stats.avg_out_degree > 0.0);
+        // Property stats should exist for Person.name
+        let person_name_stats = stats.property_stats.get(&(Label::new("Person"), "name".to_string()));
+        assert!(person_name_stats.is_some());
+        let ps = person_name_stats.unwrap();
+        assert_eq!(ps.null_fraction, 0.0); // All Person nodes have "name"
+        assert_eq!(ps.distinct_count, 2); // Alice, Bob
+    }
+
+    #[test]
+    fn test_compute_statistics_empty_graph() {
+        let store = GraphStore::new();
+        let stats = store.compute_statistics();
+        assert_eq!(stats.total_nodes, 0);
+        assert_eq!(stats.total_edges, 0);
+        assert_eq!(stats.avg_out_degree, 0.0);
+        assert!(stats.label_counts.is_empty());
+        assert!(stats.edge_type_counts.is_empty());
+    }
+
+    #[test]
+    fn test_label_node_count() {
+        let mut store = GraphStore::new();
+        store.create_node("Person");
+        store.create_node("Person");
+        store.create_node("Company");
+
+        assert_eq!(store.label_node_count(&Label::new("Person")), 2);
+        assert_eq!(store.label_node_count(&Label::new("Company")), 1);
+        assert_eq!(store.label_node_count(&Label::new("NotExist")), 0);
+    }
+
+    #[test]
+    fn test_edge_type_count() {
+        let mut store = GraphStore::new();
+        let a = store.create_node("A");
+        let b = store.create_node("B");
+        let c = store.create_node("C");
+        store.create_edge(a, b, "KNOWS").unwrap();
+        store.create_edge(a, c, "KNOWS").unwrap();
+        store.create_edge(b, c, "LIKES").unwrap();
+
+        assert_eq!(store.edge_type_count(&EdgeType::new("KNOWS")), 2);
+        assert_eq!(store.edge_type_count(&EdgeType::new("LIKES")), 1);
+        assert_eq!(store.edge_type_count(&EdgeType::new("NOPE")), 0);
+    }
+
+    #[test]
+    fn test_all_labels() {
+        let mut store = GraphStore::new();
+        store.create_node("Person");
+        store.create_node("Company");
+        store.create_node("Person"); // duplicate label
+
+        let labels = store.all_labels();
+        assert_eq!(labels.len(), 2);
+        let label_strs: Vec<&str> = labels.iter().map(|l| l.as_str()).collect();
+        assert!(label_strs.contains(&"Person"));
+        assert!(label_strs.contains(&"Company"));
+    }
+
+    #[test]
+    fn test_all_edge_types() {
+        let mut store = GraphStore::new();
+        let a = store.create_node("A");
+        let b = store.create_node("B");
+        let c = store.create_node("C");
+        store.create_edge(a, b, "KNOWS").unwrap();
+        store.create_edge(b, c, "LIKES").unwrap();
+
+        let types = store.all_edge_types();
+        assert_eq!(types.len(), 2);
+        let type_strs: Vec<&str> = types.iter().map(|t| t.as_str()).collect();
+        assert!(type_strs.contains(&"KNOWS"));
+        assert!(type_strs.contains(&"LIKES"));
+    }
+
+    #[test]
+    fn test_get_node_at_version() {
+        let mut store = GraphStore::new();
+        let id = store.create_node("Person");
+        let v0 = store.get_node(id).unwrap().version;
+
+        // Node at its creation version should exist
+        let node = store.get_node_at_version(id, v0);
+        assert!(node.is_some());
+        assert!(node.unwrap().labels.contains(&Label::new("Person")));
+
+        // Node at a version before creation should not exist
+        // (only if v0 > 0, otherwise any version >= 0 finds it)
+        if v0 > 0 {
+            assert!(store.get_node_at_version(id, v0 - 1).is_none());
+        }
+
+        // Non-existent node
+        assert!(store.get_node_at_version(NodeId::new(9999), 0).is_none());
+    }
+
+    #[test]
+    fn test_get_edge_at_version() {
+        let mut store = GraphStore::new();
+        let a = store.create_node("A");
+        let b = store.create_node("B");
+        let eid = store.create_edge(a, b, "KNOWS").unwrap();
+        let v0 = store.get_edge(eid).unwrap().version;
+
+        // Edge at version 0 should exist
+        assert!(store.get_edge_at_version(eid, v0).is_some());
+
+        // Non-existent edge
+        assert!(store.get_edge_at_version(EdgeId::new(9999), 0).is_none());
+    }
+
+    #[test]
+    fn test_create_vector_index() {
+        let store = GraphStore::new();
+        let result = store.create_vector_index("Person", "embedding", 128, crate::vector::DistanceMetric::Cosine);
+        assert!(result.is_ok());
+
+        // Creating a second index with different label should also succeed
+        let result2 = store.create_vector_index("Document", "vec", 256, crate::vector::DistanceMetric::L2);
+        assert!(result2.is_ok());
+    }
+
+    #[test]
+    fn test_set_node_property_updates_in_place() {
+        let mut store = GraphStore::new();
+        let id = store.create_node("Person");
+        store.set_node_property("default", id, "name", PropertyValue::String("Alice".to_string())).unwrap();
+
+        // Same version update — in-place
+        store.set_node_property("default", id, "name", PropertyValue::String("Bob".to_string())).unwrap();
+        let node = store.get_node(id).unwrap();
+        assert_eq!(node.get_property("name"), Some(&PropertyValue::String("Bob".to_string())));
+
+        // Add another property
+        store.set_node_property("default", id, "age", PropertyValue::Integer(30)).unwrap();
+        let node = store.get_node(id).unwrap();
+        assert_eq!(node.get_property("age"), Some(&PropertyValue::Integer(30)));
+        assert_eq!(node.get_property("name"), Some(&PropertyValue::String("Bob".to_string())));
+    }
+
+    // ========== Coverage Enhancement Tests ==========
+
+    #[test]
+    fn test_graph_error_display_node_not_found() {
+        let err = GraphError::NodeNotFound(NodeId::new(42));
+        assert_eq!(format!("{}", err), "Node NodeId(42) not found");
+    }
+
+    #[test]
+    fn test_graph_error_display_edge_not_found() {
+        let err = GraphError::EdgeNotFound(EdgeId::new(7));
+        assert_eq!(format!("{}", err), "Edge EdgeId(7) not found");
+    }
+
+    #[test]
+    fn test_graph_error_display_node_already_exists() {
+        let err = GraphError::NodeAlreadyExists(NodeId::new(1));
+        assert_eq!(format!("{}", err), "Node NodeId(1) already exists");
+    }
+
+    #[test]
+    fn test_graph_error_display_edge_already_exists() {
+        let err = GraphError::EdgeAlreadyExists(EdgeId::new(3));
+        assert_eq!(format!("{}", err), "Edge EdgeId(3) already exists");
+    }
+
+    #[test]
+    fn test_graph_error_display_invalid_edge_source() {
+        let err = GraphError::InvalidEdgeSource(NodeId::new(99));
+        assert_eq!(format!("{}", err), "Invalid edge: source node NodeId(99) does not exist");
+    }
+
+    #[test]
+    fn test_graph_error_display_invalid_edge_target() {
+        let err = GraphError::InvalidEdgeTarget(NodeId::new(88));
+        assert_eq!(format!("{}", err), "Invalid edge: target node NodeId(88) does not exist");
+    }
+
+    #[test]
+    fn test_graph_error_equality() {
+        assert_eq!(GraphError::NodeNotFound(NodeId::new(1)), GraphError::NodeNotFound(NodeId::new(1)));
+        assert_ne!(GraphError::NodeNotFound(NodeId::new(1)), GraphError::NodeNotFound(NodeId::new(2)));
+        assert_ne!(GraphError::NodeNotFound(NodeId::new(1)), GraphError::EdgeNotFound(EdgeId::new(1)));
+    }
+
+    #[test]
+    fn test_graph_statistics_estimate_label_scan() {
+        let mut store = GraphStore::new();
+        for _ in 0..50 {
+            store.create_node("Person");
+        }
+        for _ in 0..20 {
+            store.create_node("Company");
+        }
+        let stats = store.compute_statistics();
+        assert_eq!(stats.estimate_label_scan(&Label::new("Person")), 50);
+        assert_eq!(stats.estimate_label_scan(&Label::new("Company")), 20);
+        // Unknown label falls back to total_nodes (all-node scan estimate)
+        assert_eq!(stats.estimate_label_scan(&Label::new("Unknown")), 70);
+    }
+
+    #[test]
+    fn test_graph_statistics_estimate_expand() {
+        let mut store = GraphStore::new();
+        let a = store.create_node("A");
+        let b = store.create_node("B");
+        let c = store.create_node("C");
+        store.create_edge(a, b, "KNOWS").unwrap();
+        store.create_edge(a, c, "KNOWS").unwrap();
+        store.create_edge(b, c, "LIKES").unwrap();
+
+        let stats = store.compute_statistics();
+        assert_eq!(stats.estimate_expand(Some(&EdgeType::new("KNOWS"))) as usize, 2);
+        assert_eq!(stats.estimate_expand(Some(&EdgeType::new("LIKES"))) as usize, 1);
+        assert_eq!(stats.estimate_expand(Some(&EdgeType::new("NOPE"))) as usize, 0);
+        // None means all edges
+        assert_eq!(stats.estimate_expand(None) as usize, 3);
+    }
+
+    #[test]
+    fn test_graph_statistics_estimate_equality_selectivity() {
+        let mut store = GraphStore::new();
+        for i in 0..10 {
+            let id = store.create_node("Person");
+            store.get_node_mut(id).unwrap().set_property(
+                "city".to_string(),
+                PropertyValue::String(format!("City{}", i % 5)),
+            );
+        }
+        let stats = store.compute_statistics();
+        // 5 distinct cities among 10 Person nodes => selectivity = 1/5 = 0.2
+        let sel = stats.estimate_equality_selectivity(&Label::new("Person"), "city");
+        assert!((sel - 0.2).abs() < 0.01);
+        // Unknown property should return default 0.1
+        let default_sel = stats.estimate_equality_selectivity(&Label::new("Person"), "unknown_prop");
+        assert!((default_sel - 0.1).abs() < 0.01);
+        // Unknown label should return default 0.1
+        let default_sel2 = stats.estimate_equality_selectivity(&Label::new("NotExist"), "city");
+        assert!((default_sel2 - 0.1).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_graph_statistics_format() {
+        let mut store = GraphStore::new();
+        let a = store.create_node("Person");
+        let b = store.create_node("Company");
+        store.create_edge(a, b, "WORKS_AT").unwrap();
+
+        let stats = store.compute_statistics();
+        let formatted = stats.format();
+        assert!(formatted.contains("Graph Statistics:"));
+        assert!(formatted.contains("Total nodes: 2"));
+        assert!(formatted.contains("Total edges: 1"));
+        assert!(formatted.contains("Avg out-degree:"));
+        assert!(formatted.contains(":Person"));
+        assert!(formatted.contains(":Company"));
+        assert!(formatted.contains(":WORKS_AT"));
+    }
+
+    #[test]
+    fn test_graph_statistics_property_null_fraction() {
+        let mut store = GraphStore::new();
+        // Create 4 Person nodes, only 2 have the "email" property
+        for i in 0..4 {
+            let id = store.create_node("Person");
+            store.get_node_mut(id).unwrap().set_property(
+                "name".to_string(),
+                PropertyValue::String(format!("Person{}", i)),
+            );
+            if i < 2 {
+                store.get_node_mut(id).unwrap().set_property(
+                    "email".to_string(),
+                    PropertyValue::String(format!("person{}@example.com", i)),
+                );
+            }
+        }
+        let stats = store.compute_statistics();
+        // name should have null_fraction = 0.0 (all 4 have it)
+        let name_stats = stats.property_stats.get(&(Label::new("Person"), "name".to_string())).unwrap();
+        assert_eq!(name_stats.null_fraction, 0.0);
+        // email should have null_fraction = 0.5 (2 out of 4 have it)
+        let email_stats = stats.property_stats.get(&(Label::new("Person"), "email".to_string())).unwrap();
+        assert!((email_stats.null_fraction - 0.5).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_vector_search_with_data() {
+        let store = GraphStore::new();
+        // Create a 4-dimensional index
+        store.create_vector_index("Document", "embedding", 4, crate::vector::DistanceMetric::Cosine).unwrap();
+
+        // Add some vectors
+        let n1 = NodeId::new(1);
+        let n2 = NodeId::new(2);
+        let n3 = NodeId::new(3);
+        let v1 = vec![1.0, 0.0, 0.0, 0.0];
+        let v2 = vec![0.0, 1.0, 0.0, 0.0];
+        let v3 = vec![0.9, 0.1, 0.0, 0.0]; // close to v1
+
+        store.vector_index.add_vector("Document", "embedding", n1, &v1).unwrap();
+        store.vector_index.add_vector("Document", "embedding", n2, &v2).unwrap();
+        store.vector_index.add_vector("Document", "embedding", n3, &v3).unwrap();
+
+        // Search for vectors similar to v1
+        let results = store.vector_search("Document", "embedding", &[1.0, 0.0, 0.0, 0.0], 2).unwrap();
+        assert_eq!(results.len(), 2);
+        // n1 should be the closest (exact match)
+        assert_eq!(results[0].0, n1);
+    }
+
+    #[test]
+    fn test_vector_search_nonexistent_index() {
+        let store = GraphStore::new();
+        // Search on a non-existent index should return empty results
+        let results = store.vector_search("NoLabel", "noprop", &[1.0, 2.0], 5).unwrap();
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_clear_thorough() {
+        let mut store = GraphStore::new();
+        let a = store.create_node("Person");
+        let b = store.create_node("Company");
+        store.set_node_property("default", a, "name", PropertyValue::String("Alice".to_string())).unwrap();
+        let eid = store.create_edge(a, b, "WORKS_AT").unwrap();
+
+        // Verify state before clear
+        assert_eq!(store.node_count(), 2);
+        assert_eq!(store.edge_count(), 1);
+        assert_eq!(store.all_labels().len(), 2);
+        assert_eq!(store.all_edge_types().len(), 1);
+        assert!(store.has_node(a));
+        assert!(store.has_edge(eid));
+
+        store.clear();
+
+        // Verify everything is cleaned up
+        assert_eq!(store.node_count(), 0);
+        assert_eq!(store.edge_count(), 0);
+        assert!(store.all_labels().is_empty());
+        assert!(store.all_edge_types().is_empty());
+        assert!(!store.has_node(a));
+        assert!(!store.has_edge(eid));
+        assert!(store.get_nodes_by_label(&Label::new("Person")).is_empty());
+        assert!(store.get_edges_by_type(&EdgeType::new("WORKS_AT")).is_empty());
+
+        // After clear, creating new nodes should start from ID 1 again
+        let new_node = store.create_node("NewLabel");
+        assert_eq!(new_node, NodeId::new(1));
+    }
+
+    #[test]
+    fn test_delete_edge_verifies_edge_type_index_cleanup() {
+        let mut store = GraphStore::new();
+        let a = store.create_node("A");
+        let b = store.create_node("B");
+        let c = store.create_node("C");
+
+        let e1 = store.create_edge(a, b, "KNOWS").unwrap();
+        let e2 = store.create_edge(a, c, "KNOWS").unwrap();
+        assert_eq!(store.get_edges_by_type(&EdgeType::new("KNOWS")).len(), 2);
+
+        // Delete one edge
+        store.delete_edge(e1).unwrap();
+        assert_eq!(store.get_edges_by_type(&EdgeType::new("KNOWS")).len(), 1);
+
+        // Delete the other
+        store.delete_edge(e2).unwrap();
+        assert_eq!(store.get_edges_by_type(&EdgeType::new("KNOWS")).len(), 0);
+    }
+
+    #[test]
+    fn test_delete_edge_nonexistent() {
+        let mut store = GraphStore::new();
+        let result = store.delete_edge(EdgeId::new(999));
+        assert_eq!(result, Err(GraphError::EdgeNotFound(EdgeId::new(999))));
+    }
+
+    #[test]
+    fn test_delete_node_nonexistent() {
+        let mut store = GraphStore::new();
+        let result = store.delete_node("default", NodeId::new(999));
+        assert_eq!(result, Err(GraphError::NodeNotFound(NodeId::new(999))));
+    }
+
+    #[test]
+    fn test_delete_node_removes_from_label_index() {
+        let mut store = GraphStore::new();
+        let a = store.create_node("Person");
+        let _b = store.create_node("Person");
+        assert_eq!(store.get_nodes_by_label(&Label::new("Person")).len(), 2);
+
+        store.delete_node("default", a).unwrap();
+        assert_eq!(store.get_nodes_by_label(&Label::new("Person")).len(), 1);
+    }
+
+    #[test]
+    fn test_delete_node_cascades_edges() {
+        let mut store = GraphStore::new();
+        let a = store.create_node("A");
+        let b = store.create_node("B");
+        let c = store.create_node("C");
+        store.create_edge(a, b, "E1").unwrap();
+        store.create_edge(c, a, "E2").unwrap();
+
+        assert_eq!(store.edge_count(), 2);
+        store.delete_node("default", a).unwrap();
+        assert_eq!(store.edge_count(), 0);
+        // b and c should still exist
+        assert!(store.has_node(b));
+        assert!(store.has_node(c));
+    }
+
+    #[test]
+    fn test_edge_id_reuse() {
+        let mut store = GraphStore::new();
+        let a = store.create_node("A");
+        let b = store.create_node("B");
+        let c = store.create_node("C");
+
+        let e1 = store.create_edge(a, b, "X").unwrap();
+        store.delete_edge(e1).unwrap();
+
+        // Next edge should reuse e1's ID
+        let e2 = store.create_edge(a, c, "Y").unwrap();
+        assert_eq!(e2, e1);
+    }
+
+    #[test]
+    fn test_insert_recovered_node() {
+        let mut store = GraphStore::new();
+        let node = Node::new(NodeId::new(10), Label::new("Recovered"));
+
+        store.insert_recovered_node(node);
+        assert!(store.has_node(NodeId::new(10)));
+        assert_eq!(store.get_nodes_by_label(&Label::new("Recovered")).len(), 1);
+
+        // Next node created should have ID > 10
+        let new_id = store.create_node("New");
+        assert!(new_id.as_u64() > 10);
+    }
+
+    #[test]
+    fn test_insert_recovered_edge() {
+        let mut store = GraphStore::new();
+        let a = store.create_node("A");
+        let b = store.create_node("B");
+
+        let edge = Edge::new(EdgeId::new(50), a, b, EdgeType::new("RECOVERED"));
+        store.insert_recovered_edge(edge).unwrap();
+
+        assert!(store.has_edge(EdgeId::new(50)));
+        assert_eq!(store.get_outgoing_edges(a).len(), 1);
+        assert_eq!(store.get_incoming_edges(b).len(), 1);
+        assert_eq!(store.get_edges_by_type(&EdgeType::new("RECOVERED")).len(), 1);
+
+        // Next edge should have ID > 50
+        let new_eid = store.create_edge(a, b, "NEW").unwrap();
+        assert!(new_eid.as_u64() > 50);
+    }
+
+    #[test]
+    fn test_insert_recovered_edge_invalid_source() {
+        let mut store = GraphStore::new();
+        let b = store.create_node("B");
+        let edge = Edge::new(EdgeId::new(1), NodeId::new(999), b, EdgeType::new("E"));
+        let result = store.insert_recovered_edge(edge);
+        assert_eq!(result, Err(GraphError::InvalidEdgeSource(NodeId::new(999))));
+    }
+
+    #[test]
+    fn test_insert_recovered_edge_invalid_target() {
+        let mut store = GraphStore::new();
+        let a = store.create_node("A");
+        let edge = Edge::new(EdgeId::new(1), a, NodeId::new(999), EdgeType::new("E"));
+        let result = store.insert_recovered_edge(edge);
+        assert_eq!(result, Err(GraphError::InvalidEdgeTarget(NodeId::new(999))));
+    }
+
+    #[test]
+    fn test_default_impl() {
+        let store = GraphStore::default();
+        assert_eq!(store.node_count(), 0);
+        assert_eq!(store.edge_count(), 0);
+    }
+
+    #[test]
+    fn test_mvcc_cow_versioning() {
+        let mut store = GraphStore::new();
+        let id = store.create_node("Person");
+        store.set_node_property("default", id, "name", PropertyValue::String("Alice".to_string())).unwrap();
+
+        // Bump version to trigger COW
+        store.current_version = 2;
+        store.set_node_property("default", id, "name", PropertyValue::String("Bob".to_string())).unwrap();
+
+        // Latest version should be Bob
+        let latest = store.get_node(id).unwrap();
+        assert_eq!(latest.get_property("name"), Some(&PropertyValue::String("Bob".to_string())));
+        assert_eq!(latest.version, 2);
+
+        // Version 1 should still be Alice
+        let v1 = store.get_node_at_version(id, 1).unwrap();
+        assert_eq!(v1.get_property("name"), Some(&PropertyValue::String("Alice".to_string())));
+        assert_eq!(v1.version, 1);
+    }
+
+    #[test]
+    fn test_get_outgoing_edge_targets_detail() {
+        let mut store = GraphStore::new();
+        let a = store.create_node("A");
+        let b = store.create_node("B");
+        let c = store.create_node("C");
+        let e1 = store.create_edge(a, b, "KNOWS").unwrap();
+        let e2 = store.create_edge(a, c, "LIKES").unwrap();
+
+        let targets = store.get_outgoing_edge_targets(a);
+        assert_eq!(targets.len(), 2);
+
+        // Check that tuples contain correct (edge_id, source, target, edge_type)
+        for (eid, src, tgt, etype) in &targets {
+            assert_eq!(*src, a);
+            if *eid == e1 {
+                assert_eq!(*tgt, b);
+                assert_eq!(etype.as_str(), "KNOWS");
+            } else if *eid == e2 {
+                assert_eq!(*tgt, c);
+                assert_eq!(etype.as_str(), "LIKES");
+            } else {
+                panic!("Unexpected edge ID");
+            }
+        }
+
+        // Non-existent node returns empty
+        let empty = store.get_outgoing_edge_targets(NodeId::new(9999));
+        assert!(empty.is_empty());
+    }
+
+    #[test]
+    fn test_get_incoming_edge_sources_detail() {
+        let mut store = GraphStore::new();
+        let a = store.create_node("A");
+        let b = store.create_node("B");
+        let c = store.create_node("C");
+        let e1 = store.create_edge(a, c, "KNOWS").unwrap();
+        let e2 = store.create_edge(b, c, "LIKES").unwrap();
+
+        let sources = store.get_incoming_edge_sources(c);
+        assert_eq!(sources.len(), 2);
+
+        for (eid, src, tgt, etype) in &sources {
+            assert_eq!(*tgt, c);
+            if *eid == e1 {
+                assert_eq!(*src, a);
+                assert_eq!(etype.as_str(), "KNOWS");
+            } else if *eid == e2 {
+                assert_eq!(*src, b);
+                assert_eq!(etype.as_str(), "LIKES");
+            } else {
+                panic!("Unexpected edge ID");
+            }
+        }
+
+        // Non-existent node returns empty
+        let empty = store.get_incoming_edge_sources(NodeId::new(9999));
+        assert!(empty.is_empty());
+    }
+
+    #[test]
+    fn test_all_labels_empty() {
+        let store = GraphStore::new();
+        assert!(store.all_labels().is_empty());
+    }
+
+    #[test]
+    fn test_all_edge_types_empty() {
+        let store = GraphStore::new();
+        assert!(store.all_edge_types().is_empty());
+    }
+
+    #[test]
+    fn test_columnar_storage_integration() {
+        let mut store = GraphStore::new();
+        let id = store.create_node_with_properties(
+            "default",
+            vec![Label::new("Person")],
+            {
+                let mut props = PropertyMap::new();
+                props.insert("name".to_string(), PropertyValue::String("Alice".to_string()));
+                props.insert("age".to_string(), PropertyValue::Integer(30));
+                props
+            },
+        );
+
+        // Verify columnar storage has the values
+        let idx = id.as_u64() as usize;
+        let name_col = store.node_columns.get_property(idx, "name");
+        assert_eq!(name_col, PropertyValue::String("Alice".to_string()));
+        let age_col = store.node_columns.get_property(idx, "age");
+        assert_eq!(age_col, PropertyValue::Integer(30));
+    }
+
+    #[test]
+    fn test_edge_columnar_storage_integration() {
+        let mut store = GraphStore::new();
+        let a = store.create_node("A");
+        let b = store.create_node("B");
+        let mut props = std::collections::HashMap::new();
+        props.insert("weight".to_string(), PropertyValue::Float(0.75));
+        let eid = store.create_edge_with_properties(a, b, "WEIGHTED", props).unwrap();
+
+        let idx = eid.as_u64() as usize;
+        let weight_col = store.edge_columns.get_property(idx, "weight");
+        assert_eq!(weight_col, PropertyValue::Float(0.75));
+    }
+
+    #[test]
+    fn test_set_node_property_updates_columnar_storage() {
+        let mut store = GraphStore::new();
+        let id = store.create_node("Person");
+        store.set_node_property("default", id, "score", PropertyValue::Float(1.0)).unwrap();
+
+        let idx = id.as_u64() as usize;
+        assert_eq!(store.node_columns.get_property(idx, "score"), PropertyValue::Float(1.0));
+
+        // Update
+        store.set_node_property("default", id, "score", PropertyValue::Float(2.5)).unwrap();
+        assert_eq!(store.node_columns.get_property(idx, "score"), PropertyValue::Float(2.5));
+    }
+
+    #[test]
+    fn test_get_nodes_by_label_after_deletions() {
+        let mut store = GraphStore::new();
+        let a = store.create_node("Person");
+        let b_id = store.create_node("Person");
+        let c = store.create_node("Person");
+
+        store.delete_node("default", b_id).unwrap();
+        let persons = store.get_nodes_by_label(&Label::new("Person"));
+        assert_eq!(persons.len(), 2);
+        let ids: Vec<NodeId> = persons.iter().map(|n| n.id).collect();
+        assert!(ids.contains(&a));
+        assert!(ids.contains(&c));
+        assert!(!ids.contains(&b_id));
+    }
+
+    #[test]
+    fn test_get_edges_by_type_after_deletion() {
+        let mut store = GraphStore::new();
+        let a = store.create_node("A");
+        let b = store.create_node("B");
+        let c = store.create_node("C");
+        let e1 = store.create_edge(a, b, "KNOWS").unwrap();
+        let e2 = store.create_edge(b, c, "KNOWS").unwrap();
+
+        store.delete_edge(e1).unwrap();
+        let knows_edges = store.get_edges_by_type(&EdgeType::new("KNOWS"));
+        assert_eq!(knows_edges.len(), 1);
+        assert_eq!(knows_edges[0].id, e2);
+    }
+
+    #[test]
+    fn test_all_nodes_after_operations() {
+        let mut store = GraphStore::new();
+        let a = store.create_node("A");
+        store.create_node("B");
+        store.create_node("C");
+        store.delete_node("default", a).unwrap();
+
+        let all = store.all_nodes();
+        assert_eq!(all.len(), 2);
+    }
+
+    #[test]
+    fn test_compute_statistics_with_large_sample() {
+        let mut store = GraphStore::new();
+        // Create more than 1000 nodes to test sample limiting
+        for i in 0..1100 {
+            let id = store.create_node("BigLabel");
+            store.get_node_mut(id).unwrap().set_property(
+                "idx".to_string(),
+                PropertyValue::Integer(i),
+            );
+        }
+        let stats = store.compute_statistics();
+        assert_eq!(stats.total_nodes, 1100);
+        // Property stats should exist (sampled from first 1000)
+        let idx_stats = stats.property_stats.get(&(Label::new("BigLabel"), "idx".to_string()));
+        assert!(idx_stats.is_some());
+        let ps = idx_stats.unwrap();
+        // All sampled nodes have the property => null_fraction = 0
+        assert_eq!(ps.null_fraction, 0.0);
+        // distinct_count is from the sample (first 1000 nodes), each has unique value
+        assert_eq!(ps.distinct_count, 1000);
+    }
+
+    #[test]
+    fn test_add_label_then_label_count() {
+        let mut store = GraphStore::new();
+        let id = store.create_node("Person");
+        store.add_label_to_node("default", id, "Employee").unwrap();
+
+        assert_eq!(store.label_node_count(&Label::new("Person")), 1);
+        assert_eq!(store.label_node_count(&Label::new("Employee")), 1);
+    }
+
+    #[test]
+    fn test_insert_recovered_node_with_multiple_labels() {
+        let mut store = GraphStore::new();
+        let mut node = Node::new(NodeId::new(5), Label::new("Person"));
+        node.add_label(Label::new("Employee"));
+
+        store.insert_recovered_node(node);
+        assert_eq!(store.get_nodes_by_label(&Label::new("Person")).len(), 1);
+        assert_eq!(store.get_nodes_by_label(&Label::new("Employee")).len(), 1);
+    }
+
+    #[test]
+    fn test_graph_statistics_avg_out_degree() {
+        let mut store = GraphStore::new();
+        let a = store.create_node("A");
+        let b = store.create_node("B");
+        let c = store.create_node("C");
+        let d = store.create_node("D");
+        // a -> b, a -> c, a -> d (3 edges, 4 nodes)
+        store.create_edge(a, b, "E").unwrap();
+        store.create_edge(a, c, "E").unwrap();
+        store.create_edge(a, d, "E").unwrap();
+
+        let stats = store.compute_statistics();
+        assert!((stats.avg_out_degree - 0.75).abs() < 0.01); // 3/4 = 0.75
+    }
+
+    #[test]
+    fn test_self_loop_edge() {
+        let mut store = GraphStore::new();
+        let a = store.create_node("A");
+        let eid = store.create_edge(a, a, "SELF").unwrap();
+
+        assert_eq!(store.get_outgoing_edges(a).len(), 1);
+        assert_eq!(store.get_incoming_edges(a).len(), 1);
+
+        store.delete_edge(eid).unwrap();
+        assert_eq!(store.get_outgoing_edges(a).len(), 0);
+        assert_eq!(store.get_incoming_edges(a).len(), 0);
+    }
+
+    #[test]
+    fn test_get_outgoing_edges_nonexistent_node() {
+        let store = GraphStore::new();
+        let edges = store.get_outgoing_edges(NodeId::new(999));
+        assert!(edges.is_empty());
+    }
+
+    #[test]
+    fn test_get_incoming_edges_nonexistent_node() {
+        let store = GraphStore::new();
+        let edges = store.get_incoming_edges(NodeId::new(999));
+        assert!(edges.is_empty());
+    }
+
+    #[test]
+    fn test_get_nodes_by_label_nonexistent() {
+        let store = GraphStore::new();
+        let nodes = store.get_nodes_by_label(&Label::new("NoSuch"));
+        assert!(nodes.is_empty());
+    }
+
+    #[test]
+    fn test_get_edges_by_type_nonexistent() {
+        let store = GraphStore::new();
+        let edges = store.get_edges_by_type(&EdgeType::new("NoSuch"));
+        assert!(edges.is_empty());
     }
 }

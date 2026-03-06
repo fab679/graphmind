@@ -235,3 +235,313 @@ impl NLQClient {
         Ok(String::new())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn mock_config() -> NLQConfig {
+        NLQConfig {
+            enabled: true,
+            provider: LLMProvider::Mock,
+            model: "mock-model".to_string(),
+            api_key: None,
+            api_base_url: None,
+            system_prompt: None,
+        }
+    }
+
+    #[test]
+    fn test_nlq_client_new_mock() {
+        let config = mock_config();
+        let client = NLQClient::new(&config);
+        assert!(client.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_nlq_client_generate_cypher_mock() {
+        let config = mock_config();
+        let client = NLQClient::new(&config).unwrap();
+        let result = client.generate_cypher("Who knows Alice?").await;
+        assert!(result.is_ok());
+        let cypher = result.unwrap();
+        assert!(cypher.contains("MATCH")); // Mock returns "MATCH (n) RETURN n LIMIT 10"
+    }
+
+    #[test]
+    fn test_nlq_client_new_openai() {
+        let config = NLQConfig {
+            enabled: true,
+            provider: LLMProvider::OpenAI,
+            model: "gpt-4o".to_string(),
+            api_key: Some("sk-test".to_string()),
+            api_base_url: None,
+            system_prompt: Some("You are a Cypher expert.".to_string()),
+        };
+        let client = NLQClient::new(&config);
+        assert!(client.is_ok());
+    }
+
+    #[test]
+    fn test_nlq_client_new_ollama() {
+        let config = NLQConfig {
+            enabled: true,
+            provider: LLMProvider::Ollama,
+            model: "llama3".to_string(),
+            api_key: None,
+            api_base_url: Some("http://localhost:11434".to_string()),
+            system_prompt: None,
+        };
+        let client = NLQClient::new(&config);
+        assert!(client.is_ok());
+    }
+
+    #[test]
+    fn test_nlq_client_new_gemini() {
+        let config = NLQConfig {
+            enabled: true,
+            provider: LLMProvider::Gemini,
+            model: "gemini-pro".to_string(),
+            api_key: Some("test-key".to_string()),
+            api_base_url: None,
+            system_prompt: None,
+        };
+        let client = NLQClient::new(&config);
+        assert!(client.is_ok());
+    }
+
+    #[test]
+    fn test_nlq_client_new_anthropic() {
+        let config = NLQConfig {
+            enabled: true,
+            provider: LLMProvider::Anthropic,
+            model: "claude-3".to_string(),
+            api_key: Some("test-key".to_string()),
+            api_base_url: None,
+            system_prompt: None,
+        };
+        let client = NLQClient::new(&config);
+        assert!(client.is_ok());
+    }
+
+    #[test]
+    fn test_nlq_client_new_azure() {
+        let config = NLQConfig {
+            enabled: true,
+            provider: LLMProvider::AzureOpenAI,
+            model: "gpt-4".to_string(),
+            api_key: Some("test-key".to_string()),
+            api_base_url: Some("https://myendpoint.openai.azure.com".to_string()),
+            system_prompt: None,
+        };
+        let client = NLQClient::new(&config);
+        assert!(client.is_ok());
+    }
+
+    #[test]
+    fn test_nlq_client_new_claude_code() {
+        let config = NLQConfig {
+            enabled: true,
+            provider: LLMProvider::ClaudeCode,
+            model: "claude".to_string(),
+            api_key: None,
+            api_base_url: None,
+            system_prompt: None,
+        };
+        let client = NLQClient::new(&config);
+        assert!(client.is_ok());
+    }
+
+    #[test]
+    fn test_nlq_client_custom_base_url() {
+        let config = NLQConfig {
+            enabled: true,
+            provider: LLMProvider::OpenAI,
+            model: "gpt-4".to_string(),
+            api_key: Some("sk-test".to_string()),
+            api_base_url: Some("https://custom.api.example.com/v1".to_string()),
+            system_prompt: Some("Custom system prompt".to_string()),
+        };
+        let client = NLQClient::new(&config);
+        assert!(client.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_generate_cypher_unsupported_provider() {
+        let config = NLQConfig {
+            enabled: true,
+            provider: LLMProvider::AzureOpenAI,
+            model: "gpt-4".to_string(),
+            api_key: Some("test-key".to_string()),
+            api_base_url: Some("https://test.openai.azure.com".to_string()),
+            system_prompt: None,
+        };
+        let client = NLQClient::new(&config).unwrap();
+        let result = client.generate_cypher("test").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_generate_cypher_mock_returns_valid_cypher() {
+        let config = mock_config();
+        let client = NLQClient::new(&config).unwrap();
+        let result = client.generate_cypher("Find all people").await.unwrap();
+        assert_eq!(result, "MATCH (n) RETURN n LIMIT 10");
+    }
+
+    // ========== Coverage batch: additional NLQ client tests ==========
+
+    #[test]
+    fn test_nlq_client_default_base_urls() {
+        // OpenAI default base URL
+        let config = NLQConfig {
+            enabled: true,
+            provider: LLMProvider::OpenAI,
+            model: "gpt-4".to_string(),
+            api_key: Some("sk-test".to_string()),
+            api_base_url: None,
+            system_prompt: None,
+        };
+        let client = NLQClient::new(&config).unwrap();
+        assert_eq!(client.api_base_url, "https://api.openai.com/v1");
+
+        // Ollama default base URL
+        let config_ollama = NLQConfig {
+            enabled: true,
+            provider: LLMProvider::Ollama,
+            model: "llama3".to_string(),
+            api_key: None,
+            api_base_url: None,
+            system_prompt: None,
+        };
+        let client_ollama = NLQClient::new(&config_ollama).unwrap();
+        assert_eq!(client_ollama.api_base_url, "http://localhost:11434");
+
+        // Gemini default base URL
+        let config_gemini = NLQConfig {
+            enabled: true,
+            provider: LLMProvider::Gemini,
+            model: "gemini-pro".to_string(),
+            api_key: Some("key".to_string()),
+            api_base_url: None,
+            system_prompt: None,
+        };
+        let client_gemini = NLQClient::new(&config_gemini).unwrap();
+        assert_eq!(client_gemini.api_base_url, "https://generativelanguage.googleapis.com/v1beta");
+
+        // Anthropic default base URL
+        let config_anthropic = NLQConfig {
+            enabled: true,
+            provider: LLMProvider::Anthropic,
+            model: "claude-3".to_string(),
+            api_key: Some("key".to_string()),
+            api_base_url: None,
+            system_prompt: None,
+        };
+        let client_anthropic = NLQClient::new(&config_anthropic).unwrap();
+        assert_eq!(client_anthropic.api_base_url, "https://api.anthropic.com/v1");
+
+        // AzureOpenAI default (empty)
+        let config_azure = NLQConfig {
+            enabled: true,
+            provider: LLMProvider::AzureOpenAI,
+            model: "gpt-4".to_string(),
+            api_key: Some("key".to_string()),
+            api_base_url: None,
+            system_prompt: None,
+        };
+        let client_azure = NLQClient::new(&config_azure).unwrap();
+        assert_eq!(client_azure.api_base_url, "");
+
+        // ClaudeCode default (empty)
+        let config_cc = NLQConfig {
+            enabled: true,
+            provider: LLMProvider::ClaudeCode,
+            model: "claude".to_string(),
+            api_key: None,
+            api_base_url: None,
+            system_prompt: None,
+        };
+        let client_cc = NLQClient::new(&config_cc).unwrap();
+        assert_eq!(client_cc.api_base_url, "");
+
+        // Mock default (empty)
+        let client_mock = NLQClient::new(&mock_config()).unwrap();
+        assert_eq!(client_mock.api_base_url, "");
+    }
+
+    #[test]
+    fn test_nlq_client_custom_base_url_overrides_default() {
+        let config = NLQConfig {
+            enabled: true,
+            provider: LLMProvider::OpenAI,
+            model: "gpt-4".to_string(),
+            api_key: Some("sk-test".to_string()),
+            api_base_url: Some("https://custom.openai.proxy.com/v1".to_string()),
+            system_prompt: None,
+        };
+        let client = NLQClient::new(&config).unwrap();
+        assert_eq!(client.api_base_url, "https://custom.openai.proxy.com/v1");
+    }
+
+    #[tokio::test]
+    async fn test_generate_cypher_mock_with_various_prompts() {
+        let config = mock_config();
+        let client = NLQClient::new(&config).unwrap();
+
+        // Mock always returns the same regardless of prompt
+        let r1 = client.generate_cypher("Find Alice").await.unwrap();
+        let r2 = client.generate_cypher("Count all nodes").await.unwrap();
+        assert_eq!(r1, r2);
+        assert_eq!(r1, "MATCH (n) RETURN n LIMIT 10");
+    }
+
+    #[tokio::test]
+    async fn test_generate_cypher_anthropic_not_implemented() {
+        let config = NLQConfig {
+            enabled: true,
+            provider: LLMProvider::Anthropic,
+            model: "claude-3".to_string(),
+            api_key: Some("key".to_string()),
+            api_base_url: None,
+            system_prompt: None,
+        };
+        let client = NLQClient::new(&config).unwrap();
+        let result = client.generate_cypher("test").await;
+        assert!(result.is_err());
+        let err_msg = format!("{}", result.err().unwrap());
+        assert!(err_msg.contains("not yet implemented"));
+    }
+
+    #[test]
+    fn test_nlq_client_with_system_prompt() {
+        let config = NLQConfig {
+            enabled: true,
+            provider: LLMProvider::Mock,
+            model: "mock".to_string(),
+            api_key: None,
+            api_base_url: None,
+            system_prompt: Some("You are a graph database expert specialized in medical data.".to_string()),
+        };
+        let client = NLQClient::new(&config);
+        assert!(client.is_ok());
+    }
+
+    #[test]
+    fn test_nlq_error_display() {
+        let e1 = NLQError::ApiError("test api error".to_string());
+        assert!(format!("{}", e1).contains("LLM API error"));
+
+        let e2 = NLQError::ConfigError("test config error".to_string());
+        assert!(format!("{}", e2).contains("Configuration error"));
+
+        let e3 = NLQError::NetworkError("test network error".to_string());
+        assert!(format!("{}", e3).contains("Network error"));
+
+        let e4 = NLQError::SerializationError("test serialization error".to_string());
+        assert!(format!("{}", e4).contains("Serialization error"));
+
+        let e5 = NLQError::ValidationError("test validation error".to_string());
+        assert!(format!("{}", e5).contains("Validation error"));
+    }
+}

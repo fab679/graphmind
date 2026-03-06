@@ -47,3 +47,22 @@ impl Proxy {
         Ok(buf[..n].to_vec())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_proxy_new() {
+        let _proxy = Proxy::new();
+    }
+
+    #[tokio::test]
+    async fn test_proxy_forward_connection_refused() {
+        let proxy = Proxy::new();
+        // Connecting to an invalid address should fail
+        let result = proxy.forward("127.0.0.1:19999", b"PING\r\n").await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Failed to connect"));
+    }
+}

@@ -102,3 +102,78 @@ impl EmbedPipeline {
         chunks
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    fn mock_config() -> AutoEmbedConfig {
+        AutoEmbedConfig {
+            provider: crate::persistence::tenant::LLMProvider::Mock,
+            embedding_model: "mock".to_string(),
+            api_key: None,
+            api_base_url: None,
+            chunk_size: 100,
+            chunk_overlap: 20,
+            vector_dimension: 64,
+            embedding_policies: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn test_embed_pipeline_new() {
+        let config = mock_config();
+        let pipeline = EmbedPipeline::new(config);
+        assert!(pipeline.is_ok());
+    }
+
+    #[test]
+    fn test_split_text_short() {
+        let config = mock_config();
+        let pipeline = EmbedPipeline::new(config).unwrap();
+        let chunks = pipeline.split_text("short text");
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0], "short text");
+    }
+
+    #[test]
+    fn test_split_text_long() {
+        let mut config = mock_config();
+        config.chunk_size = 20;
+        config.chunk_overlap = 5;
+        let pipeline = EmbedPipeline::new(config).unwrap();
+        let text = "This is a long text that should be split into multiple chunks for processing";
+        let chunks = pipeline.split_text(text);
+        assert!(chunks.len() > 1);
+        // Each chunk should be <= chunk_size
+        for chunk in &chunks {
+            assert!(chunk.len() <= 20);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_process_text_mock() {
+        let config = mock_config();
+        let pipeline = EmbedPipeline::new(config).unwrap();
+        let result = pipeline.process_text("hello world").await;
+        assert!(result.is_ok());
+        let chunks = result.unwrap();
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0].text, "hello world");
+        assert_eq!(chunks[0].embedding.len(), 64);
+        assert_eq!(chunks[0].metadata.get("chunk_index").unwrap(), "0");
+    }
+
+    #[test]
+    fn test_text_chunk_struct() {
+        let chunk = TextChunk {
+            text: "hello".to_string(),
+            embedding: vec![0.1, 0.2, 0.3],
+            metadata: HashMap::from([("key".to_string(), "value".to_string())]),
+        };
+        assert_eq!(chunk.text, "hello");
+        assert_eq!(chunk.embedding.len(), 3);
+        assert_eq!(chunk.metadata.get("key").unwrap(), "value");
+    }
+}

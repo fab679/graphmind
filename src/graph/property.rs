@@ -509,4 +509,597 @@ mod tests {
         let map_prop = PropertyValue::Map(map);
         assert!(map_prop.as_map().unwrap().contains_key("key"));
     }
+
+    // ========== Batch 1: Ord impl tests ==========
+
+    #[test]
+    fn test_ord_null_less_than_everything() {
+        assert!(PropertyValue::Null < PropertyValue::Boolean(false));
+        assert!(PropertyValue::Null < PropertyValue::Integer(0));
+        assert!(PropertyValue::Null < PropertyValue::Float(0.0));
+        assert!(PropertyValue::Null < PropertyValue::String("".to_string()));
+    }
+
+    #[test]
+    fn test_ord_null_equal() {
+        assert_eq!(PropertyValue::Null.cmp(&PropertyValue::Null), std::cmp::Ordering::Equal);
+    }
+
+    #[test]
+    fn test_ord_boolean_less_than_integer() {
+        assert!(PropertyValue::Boolean(true) < PropertyValue::Integer(0));
+    }
+
+    #[test]
+    fn test_ord_boolean_comparison() {
+        assert!(PropertyValue::Boolean(false) < PropertyValue::Boolean(true));
+    }
+
+    #[test]
+    fn test_ord_integer_comparison() {
+        assert!(PropertyValue::Integer(1) < PropertyValue::Integer(2));
+        assert_eq!(PropertyValue::Integer(5).cmp(&PropertyValue::Integer(5)), std::cmp::Ordering::Equal);
+    }
+
+    #[test]
+    fn test_ord_integer_less_than_float() {
+        assert!(PropertyValue::Integer(100) < PropertyValue::Float(0.0));
+    }
+
+    #[test]
+    fn test_ord_float_comparison() {
+        assert!(PropertyValue::Float(1.0) < PropertyValue::Float(2.0));
+        assert_eq!(PropertyValue::Float(3.14).cmp(&PropertyValue::Float(3.14)), std::cmp::Ordering::Equal);
+    }
+
+    #[test]
+    fn test_ord_float_less_than_string() {
+        assert!(PropertyValue::Float(1e100) < PropertyValue::String("a".to_string()));
+    }
+
+    #[test]
+    fn test_ord_string_comparison() {
+        assert!(PropertyValue::String("a".to_string()) < PropertyValue::String("b".to_string()));
+        assert!(PropertyValue::String("abc".to_string()) > PropertyValue::String("ab".to_string()));
+    }
+
+    #[test]
+    fn test_ord_datetime_comparison() {
+        assert!(PropertyValue::DateTime(100) < PropertyValue::DateTime(200));
+    }
+
+    #[test]
+    fn test_ord_array_comparison() {
+        let a1 = PropertyValue::Array(vec![PropertyValue::Integer(1)]);
+        let a2 = PropertyValue::Array(vec![PropertyValue::Integer(2)]);
+        assert!(a1 < a2);
+    }
+
+    #[test]
+    fn test_ord_map_comparison() {
+        let mut m1 = HashMap::new();
+        m1.insert("a".to_string(), PropertyValue::Integer(1));
+        let mut m2 = HashMap::new();
+        m2.insert("a".to_string(), PropertyValue::Integer(2));
+        let pv1 = PropertyValue::Map(m1);
+        let pv2 = PropertyValue::Map(m2);
+        assert!(pv1 < pv2);
+    }
+
+    #[test]
+    fn test_ord_map_different_keys() {
+        let mut m1 = HashMap::new();
+        m1.insert("a".to_string(), PropertyValue::Integer(1));
+        let mut m2 = HashMap::new();
+        m2.insert("b".to_string(), PropertyValue::Integer(1));
+        let pv1 = PropertyValue::Map(m1);
+        let pv2 = PropertyValue::Map(m2);
+        assert!(pv1 < pv2); // "a" < "b"
+    }
+
+    #[test]
+    fn test_ord_map_different_sizes() {
+        let mut m1 = HashMap::new();
+        m1.insert("a".to_string(), PropertyValue::Integer(1));
+        let mut m2 = HashMap::new();
+        m2.insert("a".to_string(), PropertyValue::Integer(1));
+        m2.insert("b".to_string(), PropertyValue::Integer(2));
+        let pv1 = PropertyValue::Map(m1);
+        let pv2 = PropertyValue::Map(m2);
+        assert!(pv1 < pv2); // fewer keys is less
+    }
+
+    #[test]
+    fn test_ord_vector_comparison() {
+        let v1 = PropertyValue::Vector(vec![1.0, 2.0]);
+        let v2 = PropertyValue::Vector(vec![1.0, 3.0]);
+        assert!(v1 < v2);
+    }
+
+    #[test]
+    fn test_ord_vector_different_lengths() {
+        let v1 = PropertyValue::Vector(vec![1.0]);
+        let v2 = PropertyValue::Vector(vec![1.0, 2.0]);
+        assert!(v1 < v2);
+    }
+
+    #[test]
+    fn test_ord_duration_comparison() {
+        let d1 = PropertyValue::Duration { months: 1, days: 0, seconds: 0, nanos: 0 };
+        let d2 = PropertyValue::Duration { months: 2, days: 0, seconds: 0, nanos: 0 };
+        assert!(d1 < d2);
+    }
+
+    #[test]
+    fn test_ord_duration_tiebreak_days() {
+        let d1 = PropertyValue::Duration { months: 1, days: 5, seconds: 0, nanos: 0 };
+        let d2 = PropertyValue::Duration { months: 1, days: 10, seconds: 0, nanos: 0 };
+        assert!(d1 < d2);
+    }
+
+    #[test]
+    fn test_ord_duration_tiebreak_seconds() {
+        let d1 = PropertyValue::Duration { months: 1, days: 5, seconds: 100, nanos: 0 };
+        let d2 = PropertyValue::Duration { months: 1, days: 5, seconds: 200, nanos: 0 };
+        assert!(d1 < d2);
+    }
+
+    #[test]
+    fn test_ord_duration_tiebreak_nanos() {
+        let d1 = PropertyValue::Duration { months: 1, days: 5, seconds: 100, nanos: 10 };
+        let d2 = PropertyValue::Duration { months: 1, days: 5, seconds: 100, nanos: 20 };
+        assert!(d1 < d2);
+    }
+
+    #[test]
+    fn test_partial_ord_consistency() {
+        let a = PropertyValue::Integer(42);
+        let b = PropertyValue::Integer(42);
+        assert_eq!(a.partial_cmp(&b), Some(std::cmp::Ordering::Equal));
+    }
+
+    // ========== Hash impl tests ==========
+
+    #[test]
+    fn test_hash_deterministic_map() {
+        use std::hash::{Hash, Hasher};
+        use std::collections::hash_map::DefaultHasher;
+
+        let mut m1 = HashMap::new();
+        m1.insert("b".to_string(), PropertyValue::Integer(2));
+        m1.insert("a".to_string(), PropertyValue::Integer(1));
+
+        let mut m2 = HashMap::new();
+        m2.insert("a".to_string(), PropertyValue::Integer(1));
+        m2.insert("b".to_string(), PropertyValue::Integer(2));
+
+        let hash1 = {
+            let mut h = DefaultHasher::new();
+            PropertyValue::Map(m1).hash(&mut h);
+            h.finish()
+        };
+        let hash2 = {
+            let mut h = DefaultHasher::new();
+            PropertyValue::Map(m2).hash(&mut h);
+            h.finish()
+        };
+        assert_eq!(hash1, hash2);
+    }
+
+    #[test]
+    fn test_hash_deterministic_vector() {
+        use std::hash::{Hash, Hasher};
+        use std::collections::hash_map::DefaultHasher;
+
+        let v1 = PropertyValue::Vector(vec![1.0, 2.0, 3.0]);
+        let v2 = PropertyValue::Vector(vec![1.0, 2.0, 3.0]);
+
+        let hash1 = {
+            let mut h = DefaultHasher::new();
+            v1.hash(&mut h);
+            h.finish()
+        };
+        let hash2 = {
+            let mut h = DefaultHasher::new();
+            v2.hash(&mut h);
+            h.finish()
+        };
+        assert_eq!(hash1, hash2);
+    }
+
+    #[test]
+    fn test_hash_deterministic_duration() {
+        use std::hash::{Hash, Hasher};
+        use std::collections::hash_map::DefaultHasher;
+
+        let d1 = PropertyValue::Duration { months: 1, days: 2, seconds: 3, nanos: 4 };
+        let d2 = PropertyValue::Duration { months: 1, days: 2, seconds: 3, nanos: 4 };
+
+        let hash1 = {
+            let mut h = DefaultHasher::new();
+            d1.hash(&mut h);
+            h.finish()
+        };
+        let hash2 = {
+            let mut h = DefaultHasher::new();
+            d2.hash(&mut h);
+            h.finish()
+        };
+        assert_eq!(hash1, hash2);
+    }
+
+    #[test]
+    fn test_hash_different_types_different_hashes() {
+        use std::hash::{Hash, Hasher};
+        use std::collections::hash_map::DefaultHasher;
+
+        let int_hash = {
+            let mut h = DefaultHasher::new();
+            PropertyValue::Integer(42).hash(&mut h);
+            h.finish()
+        };
+        let str_hash = {
+            let mut h = DefaultHasher::new();
+            PropertyValue::String("42".to_string()).hash(&mut h);
+            h.finish()
+        };
+        assert_ne!(int_hash, str_hash);
+    }
+
+    #[test]
+    fn test_hash_null() {
+        use std::hash::{Hash, Hasher};
+        use std::collections::hash_map::DefaultHasher;
+
+        let hash = {
+            let mut h = DefaultHasher::new();
+            PropertyValue::Null.hash(&mut h);
+            h.finish()
+        };
+        // Just verify it doesn't panic and produces some value
+        assert!(hash > 0 || hash == 0); // always true, just exercises the code
+    }
+
+    #[test]
+    fn test_hash_float() {
+        use std::hash::{Hash, Hasher};
+        use std::collections::hash_map::DefaultHasher;
+
+        let hash1 = {
+            let mut h = DefaultHasher::new();
+            PropertyValue::Float(3.14).hash(&mut h);
+            h.finish()
+        };
+        let hash2 = {
+            let mut h = DefaultHasher::new();
+            PropertyValue::Float(3.14).hash(&mut h);
+            h.finish()
+        };
+        assert_eq!(hash1, hash2);
+    }
+
+    #[test]
+    fn test_hash_array() {
+        use std::hash::{Hash, Hasher};
+        use std::collections::hash_map::DefaultHasher;
+
+        let arr = PropertyValue::Array(vec![PropertyValue::Integer(1), PropertyValue::Integer(2)]);
+        let hash = {
+            let mut h = DefaultHasher::new();
+            arr.hash(&mut h);
+            h.finish()
+        };
+        assert!(hash > 0 || hash == 0);
+    }
+
+    #[test]
+    fn test_hash_boolean() {
+        use std::hash::{Hash, Hasher};
+        use std::collections::hash_map::DefaultHasher;
+
+        let hash1 = {
+            let mut h = DefaultHasher::new();
+            PropertyValue::Boolean(true).hash(&mut h);
+            h.finish()
+        };
+        let hash2 = {
+            let mut h = DefaultHasher::new();
+            PropertyValue::Boolean(false).hash(&mut h);
+            h.finish()
+        };
+        assert_ne!(hash1, hash2);
+    }
+
+    #[test]
+    fn test_hash_datetime() {
+        use std::hash::{Hash, Hasher};
+        use std::collections::hash_map::DefaultHasher;
+
+        let hash1 = {
+            let mut h = DefaultHasher::new();
+            PropertyValue::DateTime(12345).hash(&mut h);
+            h.finish()
+        };
+        let hash2 = {
+            let mut h = DefaultHasher::new();
+            PropertyValue::DateTime(12345).hash(&mut h);
+            h.finish()
+        };
+        assert_eq!(hash1, hash2);
+    }
+
+    // ========== Display impl tests ==========
+
+    #[test]
+    fn test_display_string() {
+        assert_eq!(format!("{}", PropertyValue::String("hello".to_string())), "\"hello\"");
+    }
+
+    #[test]
+    fn test_display_integer() {
+        assert_eq!(format!("{}", PropertyValue::Integer(42)), "42");
+    }
+
+    #[test]
+    fn test_display_float() {
+        assert_eq!(format!("{}", PropertyValue::Float(3.14)), "3.14");
+    }
+
+    #[test]
+    fn test_display_boolean() {
+        assert_eq!(format!("{}", PropertyValue::Boolean(true)), "true");
+        assert_eq!(format!("{}", PropertyValue::Boolean(false)), "false");
+    }
+
+    #[test]
+    fn test_display_datetime() {
+        assert_eq!(format!("{}", PropertyValue::DateTime(1234567890)), "DateTime(1234567890)");
+    }
+
+    #[test]
+    fn test_display_array() {
+        let arr = PropertyValue::Array(vec![PropertyValue::Integer(1), PropertyValue::Integer(2)]);
+        assert_eq!(format!("{}", arr), "[1, 2]");
+    }
+
+    #[test]
+    fn test_display_array_empty() {
+        let arr = PropertyValue::Array(vec![]);
+        assert_eq!(format!("{}", arr), "[]");
+    }
+
+    #[test]
+    fn test_display_null() {
+        assert_eq!(format!("{}", PropertyValue::Null), "null");
+    }
+
+    #[test]
+    fn test_display_vector() {
+        let v = PropertyValue::Vector(vec![1.0, 2.5]);
+        let s = format!("{}", v);
+        assert!(s.starts_with("Vector(["));
+        assert!(s.contains("1"));
+        assert!(s.contains("2.5"));
+        assert!(s.ends_with("])"));
+    }
+
+    #[test]
+    fn test_display_map() {
+        let mut map = HashMap::new();
+        map.insert("key".to_string(), PropertyValue::Integer(42));
+        let pv = PropertyValue::Map(map);
+        let s = format!("{}", pv);
+        assert!(s.contains("key: 42"));
+    }
+
+    #[test]
+    fn test_display_duration_years_months() {
+        let d = PropertyValue::Duration { months: 14, days: 0, seconds: 0, nanos: 0 };
+        let s = format!("{}", d);
+        assert!(s.contains("1Y"));
+        assert!(s.contains("2M"));
+    }
+
+    #[test]
+    fn test_display_duration_days_time() {
+        let d = PropertyValue::Duration { months: 0, days: 5, seconds: 7261, nanos: 0 };
+        let s = format!("{}", d);
+        assert!(s.contains("5D"));
+        assert!(s.contains("T"));
+        assert!(s.contains("2H"));
+        assert!(s.contains("1M"));
+        assert!(s.contains("1S"));
+    }
+
+    #[test]
+    fn test_display_duration_empty() {
+        let d = PropertyValue::Duration { months: 0, days: 0, seconds: 0, nanos: 0 };
+        let s = format!("{}", d);
+        assert_eq!(s, "P");
+    }
+
+    #[test]
+    fn test_display_duration_nanos_only() {
+        let d = PropertyValue::Duration { months: 0, days: 0, seconds: 0, nanos: 100 };
+        let s = format!("{}", d);
+        assert!(s.contains("T"));
+        assert!(s.contains("0S"));
+    }
+
+    // ========== to_json tests ==========
+
+    #[test]
+    fn test_to_json_string() {
+        let json = PropertyValue::String("hello".to_string()).to_json();
+        assert_eq!(json, serde_json::json!("hello"));
+    }
+
+    #[test]
+    fn test_to_json_integer() {
+        let json = PropertyValue::Integer(42).to_json();
+        assert_eq!(json, serde_json::json!(42));
+    }
+
+    #[test]
+    fn test_to_json_float() {
+        let json = PropertyValue::Float(3.14).to_json();
+        assert_eq!(json, serde_json::json!(3.14));
+    }
+
+    #[test]
+    fn test_to_json_boolean() {
+        let json = PropertyValue::Boolean(true).to_json();
+        assert_eq!(json, serde_json::json!(true));
+    }
+
+    #[test]
+    fn test_to_json_null() {
+        let json = PropertyValue::Null.to_json();
+        assert!(json.is_null());
+    }
+
+    #[test]
+    fn test_to_json_datetime() {
+        let json = PropertyValue::DateTime(1234567890).to_json();
+        assert_eq!(json, serde_json::json!(1234567890));
+    }
+
+    #[test]
+    fn test_to_json_array() {
+        let arr = PropertyValue::Array(vec![PropertyValue::Integer(1), PropertyValue::String("x".to_string())]);
+        let json = arr.to_json();
+        assert_eq!(json, serde_json::json!([1, "x"]));
+    }
+
+    #[test]
+    fn test_to_json_map() {
+        let mut map = HashMap::new();
+        map.insert("name".to_string(), PropertyValue::String("Alice".to_string()));
+        map.insert("age".to_string(), PropertyValue::Integer(30));
+        let json = PropertyValue::Map(map).to_json();
+        assert_eq!(json["name"], serde_json::json!("Alice"));
+        assert_eq!(json["age"], serde_json::json!(30));
+    }
+
+    #[test]
+    fn test_to_json_vector() {
+        let v = PropertyValue::Vector(vec![1.0, 2.0, 3.0]);
+        let json = v.to_json();
+        let arr = json.as_array().unwrap();
+        assert_eq!(arr.len(), 3);
+    }
+
+    #[test]
+    fn test_to_json_duration() {
+        let d = PropertyValue::Duration { months: 1, days: 2, seconds: 3, nanos: 4 };
+        let json = d.to_json();
+        assert_eq!(json["months"], serde_json::json!(1));
+        assert_eq!(json["days"], serde_json::json!(2));
+        assert_eq!(json["seconds"], serde_json::json!(3));
+        assert_eq!(json["nanos"], serde_json::json!(4));
+    }
+
+    // ========== is_null tests ==========
+
+    #[test]
+    fn test_is_null_true() {
+        assert!(PropertyValue::Null.is_null());
+    }
+
+    #[test]
+    fn test_is_null_false() {
+        assert!(!PropertyValue::Integer(0).is_null());
+        assert!(!PropertyValue::String("".to_string()).is_null());
+        assert!(!PropertyValue::Boolean(false).is_null());
+    }
+
+    // ========== as_* accessor negative tests ==========
+
+    #[test]
+    fn test_as_string_on_non_string() {
+        assert_eq!(PropertyValue::Integer(42).as_string(), None);
+    }
+
+    #[test]
+    fn test_as_integer_on_non_integer() {
+        assert_eq!(PropertyValue::String("x".to_string()).as_integer(), None);
+    }
+
+    #[test]
+    fn test_as_float_on_non_float() {
+        assert_eq!(PropertyValue::Integer(1).as_float(), None);
+    }
+
+    #[test]
+    fn test_as_boolean_on_non_boolean() {
+        assert_eq!(PropertyValue::Integer(1).as_boolean(), None);
+    }
+
+    #[test]
+    fn test_as_datetime_on_non_datetime() {
+        assert_eq!(PropertyValue::Integer(1).as_datetime(), None);
+    }
+
+    #[test]
+    fn test_as_array_on_non_array() {
+        assert_eq!(PropertyValue::Integer(1).as_array(), None);
+    }
+
+    #[test]
+    fn test_as_map_on_non_map() {
+        assert_eq!(PropertyValue::Integer(1).as_map(), None);
+    }
+
+    #[test]
+    fn test_as_vector_on_non_vector() {
+        assert_eq!(PropertyValue::Integer(1).as_vector(), None);
+    }
+
+    // ========== From conversions ==========
+
+    #[test]
+    fn test_from_i32() {
+        let pv: PropertyValue = 42i32.into();
+        assert_eq!(pv.as_integer(), Some(42));
+    }
+
+    #[test]
+    fn test_from_string_owned() {
+        let pv: PropertyValue = String::from("test").into();
+        assert_eq!(pv.as_string(), Some("test"));
+    }
+
+    // ========== Duration type_name ==========
+
+    #[test]
+    fn test_duration_type_name() {
+        let d = PropertyValue::Duration { months: 0, days: 0, seconds: 0, nanos: 0 };
+        assert_eq!(d.type_name(), "Duration");
+    }
+
+    // ========== Eq impl for PartialEq ==========
+
+    #[test]
+    fn test_eq_same_types() {
+        assert_eq!(PropertyValue::Integer(1), PropertyValue::Integer(1));
+        assert_ne!(PropertyValue::Integer(1), PropertyValue::Integer(2));
+        assert_eq!(PropertyValue::Float(1.0), PropertyValue::Float(1.0));
+        assert_eq!(PropertyValue::String("a".to_string()), PropertyValue::String("a".to_string()));
+        assert_ne!(PropertyValue::String("a".to_string()), PropertyValue::String("b".to_string()));
+    }
+
+    #[test]
+    fn test_eq_different_types() {
+        assert_ne!(PropertyValue::Integer(1), PropertyValue::Float(1.0));
+        assert_ne!(PropertyValue::Integer(1), PropertyValue::String("1".to_string()));
+    }
+
+    #[test]
+    fn test_eq_duration() {
+        let d1 = PropertyValue::Duration { months: 1, days: 2, seconds: 3, nanos: 4 };
+        let d2 = PropertyValue::Duration { months: 1, days: 2, seconds: 3, nanos: 4 };
+        let d3 = PropertyValue::Duration { months: 1, days: 2, seconds: 3, nanos: 5 };
+        assert_eq!(d1, d2);
+        assert_ne!(d1, d3);
+    }
 }

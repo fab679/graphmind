@@ -174,3 +174,366 @@ impl Default for IndexManager {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_index_manager_new() {
+        let mgr = IndexManager::new();
+        assert!(mgr.list_indexes().is_empty());
+    }
+
+    #[test]
+    fn test_index_manager_default() {
+        let mgr = IndexManager::default();
+        assert!(mgr.list_indexes().is_empty());
+    }
+
+    #[test]
+    fn test_create_and_has_index() {
+        let mgr = IndexManager::new();
+        let label = Label::new("Person");
+        mgr.create_index(label.clone(), "name".to_string());
+        assert!(mgr.has_index(&label, "name"));
+        assert!(!mgr.has_index(&label, "age"));
+    }
+
+    #[test]
+    fn test_drop_index() {
+        let mgr = IndexManager::new();
+        let label = Label::new("Person");
+        mgr.create_index(label.clone(), "name".to_string());
+        assert!(mgr.has_index(&label, "name"));
+
+        mgr.drop_index(&label, "name");
+        assert!(!mgr.has_index(&label, "name"));
+    }
+
+    #[test]
+    fn test_get_index() {
+        let mgr = IndexManager::new();
+        let label = Label::new("Person");
+        mgr.create_index(label.clone(), "name".to_string());
+
+        let index = mgr.get_index(&label, "name");
+        assert!(index.is_some());
+
+        let no_index = mgr.get_index(&label, "missing");
+        assert!(no_index.is_none());
+    }
+
+    #[test]
+    fn test_index_insert_and_lookup() {
+        let mgr = IndexManager::new();
+        let label = Label::new("Person");
+        mgr.create_index(label.clone(), "name".to_string());
+
+        mgr.index_insert(&label, "name", PropertyValue::String("Alice".to_string()), NodeId::new(1));
+        mgr.index_insert(&label, "name", PropertyValue::String("Bob".to_string()), NodeId::new(2));
+
+        let idx = mgr.get_index(&label, "name").unwrap();
+        let idx_guard = idx.read().unwrap();
+        let results = idx_guard.get(&PropertyValue::String("Alice".to_string()));
+        assert!(results.contains(&NodeId::new(1)));
+    }
+
+    #[test]
+    fn test_index_remove() {
+        let mgr = IndexManager::new();
+        let label = Label::new("Person");
+        mgr.create_index(label.clone(), "name".to_string());
+
+        mgr.index_insert(&label, "name", PropertyValue::String("Alice".to_string()), NodeId::new(1));
+        mgr.index_remove(&label, "name", &PropertyValue::String("Alice".to_string()), NodeId::new(1));
+
+        let idx = mgr.get_index(&label, "name").unwrap();
+        let idx_guard = idx.read().unwrap();
+        let results = idx_guard.get(&PropertyValue::String("Alice".to_string()));
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_list_indexes() {
+        let mgr = IndexManager::new();
+        mgr.create_index(Label::new("Person"), "name".to_string());
+        mgr.create_index(Label::new("Person"), "age".to_string());
+        mgr.create_index(Label::new("Company"), "name".to_string());
+
+        let indexes = mgr.list_indexes();
+        assert_eq!(indexes.len(), 3);
+    }
+
+    #[test]
+    fn test_unique_constraint() {
+        let mgr = IndexManager::new();
+        let label = Label::new("Person");
+        mgr.create_unique_constraint(label.clone(), "email".to_string());
+        assert!(mgr.has_unique_constraint(&label, "email"));
+        assert!(!mgr.has_unique_constraint(&label, "name"));
+        // Also creates a regular index
+        assert!(mgr.has_index(&label, "email"));
+    }
+
+    #[test]
+    fn test_check_unique_constraint() {
+        let mgr = IndexManager::new();
+        let label = Label::new("Person");
+        mgr.create_unique_constraint(label.clone(), "email".to_string());
+
+        // First insert should pass
+        let val = PropertyValue::String("alice@example.com".to_string());
+        assert!(mgr.check_unique_constraint(&label, "email", &val).is_ok());
+
+        // Insert the value
+        mgr.constraint_insert(&label, "email", val.clone(), NodeId::new(1));
+
+        // Duplicate should fail
+        assert!(mgr.check_unique_constraint(&label, "email", &val).is_err());
+
+        // Different value should pass
+        let val2 = PropertyValue::String("bob@example.com".to_string());
+        assert!(mgr.check_unique_constraint(&label, "email", &val2).is_ok());
+    }
+
+    #[test]
+    fn test_list_constraints() {
+        let mgr = IndexManager::new();
+        mgr.create_unique_constraint(Label::new("Person"), "email".to_string());
+        mgr.create_unique_constraint(Label::new("Company"), "name".to_string());
+
+        let constraints = mgr.list_constraints();
+        assert_eq!(constraints.len(), 2);
+    }
+
+    #[test]
+    fn test_composite_index() {
+        let mgr = IndexManager::new();
+        let label = Label::new("Person");
+        mgr.create_composite_index(label.clone(), vec!["name".to_string(), "age".to_string()]);
+
+        assert!(mgr.has_index(&label, "name"));
+        assert!(mgr.has_index(&label, "age"));
+    }
+
+    #[test]
+    fn test_get_indexed_properties() {
+        let mgr = IndexManager::new();
+        let label = Label::new("Person");
+        mgr.create_index(label.clone(), "name".to_string());
+        mgr.create_index(label.clone(), "age".to_string());
+        mgr.create_index(Label::new("Company"), "name".to_string());
+
+        let props = mgr.get_indexed_properties(&label);
+        assert_eq!(props.len(), 2);
+        assert!(props.contains(&"name".to_string()));
+        assert!(props.contains(&"age".to_string()));
+    }
+
+    // ========== Coverage batch: additional IndexManager tests ==========
+
+    #[test]
+    fn test_create_index_idempotent() {
+        let mgr = IndexManager::new();
+        let label = Label::new("Person");
+        mgr.create_index(label.clone(), "name".to_string());
+        mgr.create_index(label.clone(), "name".to_string()); // Duplicate
+        let indexes = mgr.list_indexes();
+        let count = indexes.iter().filter(|(l, p)| l == &label && p == "name").count();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn test_drop_nonexistent_index() {
+        let mgr = IndexManager::new();
+        let label = Label::new("Person");
+        mgr.drop_index(&label, "nonexistent");
+        assert!(!mgr.has_index(&label, "nonexistent"));
+    }
+
+    #[test]
+    fn test_index_insert_without_existing_index() {
+        let mgr = IndexManager::new();
+        let label = Label::new("Person");
+        mgr.index_insert(&label, "name", PropertyValue::String("Alice".to_string()), NodeId::new(1));
+        assert!(mgr.get_index(&label, "name").is_none());
+    }
+
+    #[test]
+    fn test_index_remove_without_existing_index() {
+        let mgr = IndexManager::new();
+        let label = Label::new("Person");
+        mgr.index_remove(&label, "name", &PropertyValue::String("Alice".to_string()), NodeId::new(1));
+    }
+
+    #[test]
+    fn test_index_insert_multiple_values_same_key() {
+        let mgr = IndexManager::new();
+        let label = Label::new("Person");
+        mgr.create_index(label.clone(), "name".to_string());
+
+        mgr.index_insert(&label, "name", PropertyValue::String("Alice".to_string()), NodeId::new(1));
+        mgr.index_insert(&label, "name", PropertyValue::String("Alice".to_string()), NodeId::new(2));
+
+        let idx = mgr.get_index(&label, "name").unwrap();
+        let idx_guard = idx.read().unwrap();
+        let results = idx_guard.get(&PropertyValue::String("Alice".to_string()));
+        assert!(results.contains(&NodeId::new(1)));
+        assert!(results.contains(&NodeId::new(2)));
+    }
+
+    #[test]
+    fn test_unique_constraint_violation_message() {
+        let mgr = IndexManager::new();
+        let label = Label::new("User");
+        mgr.create_unique_constraint(label.clone(), "email".to_string());
+
+        let val = PropertyValue::String("alice@test.com".to_string());
+        mgr.constraint_insert(&label, "email", val.clone(), NodeId::new(1));
+
+        let result = mgr.check_unique_constraint(&label, "email", &val);
+        assert!(result.is_err());
+        let err_msg = result.err().unwrap();
+        assert!(err_msg.contains("Unique constraint violation"));
+        assert!(err_msg.contains("User"));
+        assert!(err_msg.contains("email"));
+    }
+
+    #[test]
+    fn test_check_unique_constraint_no_constraint() {
+        let mgr = IndexManager::new();
+        let label = Label::new("Person");
+        let val = PropertyValue::String("anything".to_string());
+        assert!(mgr.check_unique_constraint(&label, "name", &val).is_ok());
+    }
+
+    #[test]
+    fn test_constraint_insert_without_constraint() {
+        let mgr = IndexManager::new();
+        let label = Label::new("Person");
+        mgr.constraint_insert(&label, "name", PropertyValue::String("test".to_string()), NodeId::new(1));
+    }
+
+    #[test]
+    fn test_composite_index_creates_all() {
+        let mgr = IndexManager::new();
+        let label = Label::new("Product");
+        mgr.create_composite_index(label.clone(), vec!["name".to_string(), "price".to_string(), "category".to_string()]);
+
+        assert!(mgr.has_index(&label, "name"));
+        assert!(mgr.has_index(&label, "price"));
+        assert!(mgr.has_index(&label, "category"));
+        assert_eq!(mgr.get_indexed_properties(&label).len(), 3);
+    }
+
+    #[test]
+    fn test_get_indexed_properties_no_indexes() {
+        let mgr = IndexManager::new();
+        let label = Label::new("Empty");
+        let props = mgr.get_indexed_properties(&label);
+        assert!(props.is_empty());
+    }
+
+    #[test]
+    fn test_get_indexed_properties_different_labels() {
+        let mgr = IndexManager::new();
+        mgr.create_index(Label::new("A"), "prop1".to_string());
+        mgr.create_index(Label::new("B"), "prop2".to_string());
+
+        let props_a = mgr.get_indexed_properties(&Label::new("A"));
+        assert_eq!(props_a.len(), 1);
+        assert!(props_a.contains(&"prop1".to_string()));
+
+        let props_b = mgr.get_indexed_properties(&Label::new("B"));
+        assert_eq!(props_b.len(), 1);
+        assert!(props_b.contains(&"prop2".to_string()));
+    }
+
+    #[test]
+    fn test_list_constraints_empty() {
+        let mgr = IndexManager::new();
+        assert!(mgr.list_constraints().is_empty());
+    }
+
+    #[test]
+    fn test_has_unique_constraint_false_for_different_prop() {
+        let mgr = IndexManager::new();
+        let label = Label::new("Person");
+        mgr.create_unique_constraint(label.clone(), "email".to_string());
+        assert!(!mgr.has_unique_constraint(&label, "name"));
+        assert!(!mgr.has_unique_constraint(&Label::new("Other"), "email"));
+    }
+
+    #[test]
+    fn test_unique_constraint_also_creates_regular_index() {
+        let mgr = IndexManager::new();
+        let label = Label::new("Account");
+        mgr.create_unique_constraint(label.clone(), "username".to_string());
+        assert!(mgr.has_unique_constraint(&label, "username"));
+        assert!(mgr.has_index(&label, "username"));
+        let indexes = mgr.list_indexes();
+        assert!(indexes.iter().any(|(l, p)| l == &label && p == "username"));
+    }
+
+    #[test]
+    fn test_property_index_key_equality() {
+        let key1 = PropertyIndexKey {
+            label: Label::new("Person"),
+            property: "name".to_string(),
+        };
+        let key2 = PropertyIndexKey {
+            label: Label::new("Person"),
+            property: "name".to_string(),
+        };
+        let key3 = PropertyIndexKey {
+            label: Label::new("Person"),
+            property: "age".to_string(),
+        };
+        assert_eq!(key1, key2);
+        assert_ne!(key1, key3);
+    }
+
+    #[test]
+    fn test_property_index_key_hash() {
+        use std::collections::HashSet;
+        let key1 = PropertyIndexKey {
+            label: Label::new("Person"),
+            property: "name".to_string(),
+        };
+        let key2 = PropertyIndexKey {
+            label: Label::new("Person"),
+            property: "name".to_string(),
+        };
+        let mut set = HashSet::new();
+        set.insert(key1);
+        assert!(set.contains(&key2));
+    }
+
+    #[test]
+    fn test_index_with_integer_values() {
+        let mgr = IndexManager::new();
+        let label = Label::new("Person");
+        mgr.create_index(label.clone(), "age".to_string());
+
+        mgr.index_insert(&label, "age", PropertyValue::Integer(30), NodeId::new(1));
+        mgr.index_insert(&label, "age", PropertyValue::Integer(25), NodeId::new(2));
+
+        let idx = mgr.get_index(&label, "age").unwrap();
+        let idx_guard = idx.read().unwrap();
+        let results = idx_guard.get(&PropertyValue::Integer(30));
+        assert!(results.contains(&NodeId::new(1)));
+        assert!(!results.contains(&NodeId::new(2)));
+    }
+
+    #[test]
+    fn test_drop_index_then_insert() {
+        let mgr = IndexManager::new();
+        let label = Label::new("Person");
+        mgr.create_index(label.clone(), "name".to_string());
+        mgr.drop_index(&label, "name");
+
+        mgr.index_insert(&label, "name", PropertyValue::String("Alice".to_string()), NodeId::new(1));
+        assert!(mgr.get_index(&label, "name").is_none());
+    }
+}
