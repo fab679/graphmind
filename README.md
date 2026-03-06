@@ -1,5 +1,7 @@
 # Samyama Graph Database
 
+> **v0.6.0** | 53K LOC | 333 tests passing | 71.5% coverage | 0 clippy warnings
+
 **Samyama** is a high-performance, distributed, AI-native graph database written in **Rust**. It combines a **property graph engine**, **vector search**, **graph analytics**, and **natural language querying** in a single binary.
 
 ### LDBC Benchmark Results (v0.5.8, Mac Mini M2 Pro)
