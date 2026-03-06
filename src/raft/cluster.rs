@@ -339,4 +339,380 @@ mod tests {
         assert_eq!(health.active_voters, 2);
         assert!(health.has_leader);
     }
+
+    // ========== Additional Cluster Coverage Tests ==========
+
+    #[test]
+    fn test_cluster_config_new_defaults() {
+        let config = ClusterConfig::new("my-cluster".to_string(), 5);
+        assert_eq!(config.name, "my-cluster");
+        assert_eq!(config.replication_factor, 5);
+        assert!(config.nodes.is_empty());
+        assert_eq!(config.voters().len(), 0);
+        assert_eq!(config.learners().len(), 0);
+    }
+
+    #[test]
+    fn test_cluster_config_with_learners() {
+        let mut config = ClusterConfig::new("test".to_string(), 2);
+        config.add_node(1, "127.0.0.1:5000".to_string(), true);
+        config.add_node(2, "127.0.0.1:5001".to_string(), true);
+        config.add_node(3, "127.0.0.1:5002".to_string(), false); // learner
+        config.add_node(4, "127.0.0.1:5003".to_string(), false); // learner
+
+        assert_eq!(config.voters().len(), 2);
+        assert_eq!(config.learners().len(), 2);
+        assert_eq!(config.nodes.len(), 4);
+    }
+
+    #[test]
+    fn test_cluster_config_validate_empty_nodes() {
+        let config = ClusterConfig::new("test".to_string(), 1);
+        let result = config.validate();
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, RaftError::Cluster(_)));
+        let msg = format!("{}", err);
+        assert!(msg.contains("No nodes"));
+    }
+
+    #[test]
+    fn test_cluster_config_validate_no_voters() {
+        let mut config = ClusterConfig::new("test".to_string(), 1);
+        config.add_node(1, "127.0.0.1:5000".to_string(), false); // learner only
+        config.add_node(2, "127.0.0.1:5001".to_string(), false);
+
+        let result = config.validate();
+        assert!(result.is_err());
+        let msg = format!("{}", result.unwrap_err());
+        assert!(msg.contains("No voters"));
+    }
+
+    #[test]
+    fn test_cluster_config_validate_insufficient_voters() {
+        let mut config = ClusterConfig::new("test".to_string(), 5);
+        config.add_node(1, "127.0.0.1:5000".to_string(), true);
+        config.add_node(2, "127.0.0.1:5001".to_string(), true);
+        // Only 2 voters but replication_factor is 5
+
+        let result = config.validate();
+        assert!(result.is_err());
+        let msg = format!("{}", result.unwrap_err());
+        assert!(msg.contains("Not enough voters"));
+    }
+
+    #[test]
+    fn test_cluster_config_serialization() {
+        let mut config = ClusterConfig::new("test-cluster".to_string(), 3);
+        config.add_node(1, "127.0.0.1:5000".to_string(), true);
+        config.add_node(2, "127.0.0.1:5001".to_string(), false);
+
+        let json = serde_json::to_string(&config).unwrap();
+        let deserialized: ClusterConfig = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(deserialized.name, "test-cluster");
+        assert_eq!(deserialized.replication_factor, 3);
+        assert_eq!(deserialized.nodes.len(), 2);
+        assert_eq!(deserialized.nodes[0].id, 1);
+        assert!(deserialized.nodes[0].voter);
+        assert_eq!(deserialized.nodes[1].id, 2);
+        assert!(!deserialized.nodes[1].voter);
+    }
+
+    #[test]
+    fn test_node_config_serialization() {
+        let node_config = NodeConfig {
+            id: 42,
+            address: "10.0.0.1:6379".to_string(),
+            voter: true,
+        };
+        let json = serde_json::to_string(&node_config).unwrap();
+        let deserialized: NodeConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.id, 42);
+        assert_eq!(deserialized.address, "10.0.0.1:6379");
+        assert!(deserialized.voter);
+    }
+
+    #[test]
+    fn test_cluster_manager_new_fails_without_valid_config() {
+        let config = ClusterConfig::new("empty".to_string(), 1);
+        let result = ClusterManager::new(config);
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_cluster_manager_get_config() {
+        let mut config = ClusterConfig::new("test".to_string(), 1);
+        config.add_node(1, "127.0.0.1:5000".to_string(), true);
+        let manager = ClusterManager::new(config).unwrap();
+
+        let cfg = manager.get_config().await;
+        assert_eq!(cfg.name, "test");
+        assert_eq!(cfg.nodes.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_cluster_manager_update_config() {
+        let mut config = ClusterConfig::new("test".to_string(), 1);
+        config.add_node(1, "127.0.0.1:5000".to_string(), true);
+        let manager = ClusterManager::new(config).unwrap();
+
+        let mut new_config = ClusterConfig::new("updated".to_string(), 2);
+        new_config.add_node(1, "127.0.0.1:5000".to_string(), true);
+        new_config.add_node(2, "127.0.0.1:5001".to_string(), true);
+
+        manager.update_config(new_config).await.unwrap();
+
+        let cfg = manager.get_config().await;
+        assert_eq!(cfg.name, "updated");
+        assert_eq!(cfg.nodes.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_cluster_manager_update_config_invalid() {
+        let mut config = ClusterConfig::new("test".to_string(), 1);
+        config.add_node(1, "127.0.0.1:5000".to_string(), true);
+        let manager = ClusterManager::new(config).unwrap();
+
+        // Empty config should fail validation
+        let empty_config = ClusterConfig::new("empty".to_string(), 1);
+        let result = manager.update_config(empty_config).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_cluster_manager_add_node() {
+        let mut config = ClusterConfig::new("test".to_string(), 1);
+        config.add_node(1, "127.0.0.1:5000".to_string(), true);
+        let manager = ClusterManager::new(config).unwrap();
+
+        manager.add_node(2, "127.0.0.1:5001".to_string(), true).await.unwrap();
+
+        let cfg = manager.get_config().await;
+        assert_eq!(cfg.nodes.len(), 2);
+
+        // Check metadata was created for the new node
+        let meta = manager.get_node_metadata(2).await;
+        assert!(meta.is_some());
+        let meta = meta.unwrap();
+        assert_eq!(meta.role, NodeRole::Follower);
+        assert!(!meta.reachable);
+    }
+
+    #[tokio::test]
+    async fn test_cluster_manager_add_learner_node() {
+        let mut config = ClusterConfig::new("test".to_string(), 1);
+        config.add_node(1, "127.0.0.1:5000".to_string(), true);
+        let manager = ClusterManager::new(config).unwrap();
+
+        manager.add_node(2, "127.0.0.1:5001".to_string(), false).await.unwrap();
+
+        let meta = manager.get_node_metadata(2).await.unwrap();
+        assert_eq!(meta.role, NodeRole::Learner);
+    }
+
+    #[tokio::test]
+    async fn test_cluster_manager_remove_node() {
+        let mut config = ClusterConfig::new("test".to_string(), 1);
+        config.add_node(1, "127.0.0.1:5000".to_string(), true);
+        config.add_node(2, "127.0.0.1:5001".to_string(), true);
+        let manager = ClusterManager::new(config).unwrap();
+
+        manager.mark_active(2).await;
+
+        manager.remove_node(2).await.unwrap();
+
+        let cfg = manager.get_config().await;
+        assert_eq!(cfg.nodes.len(), 1);
+        assert_eq!(cfg.nodes[0].id, 1);
+
+        // Metadata should also be removed
+        let meta = manager.get_node_metadata(2).await;
+        assert!(meta.is_none());
+
+        // Active set should also be cleaned
+        let active = manager.get_active_nodes().await;
+        assert!(!active.contains(&2));
+    }
+
+    #[tokio::test]
+    async fn test_cluster_manager_mark_active_inactive() {
+        let mut config = ClusterConfig::new("test".to_string(), 1);
+        config.add_node(1, "127.0.0.1:5000".to_string(), true);
+        let manager = ClusterManager::new(config).unwrap();
+
+        // Initially not active
+        let active = manager.get_active_nodes().await;
+        assert!(active.is_empty());
+
+        // Mark active
+        manager.mark_active(1).await;
+        let active = manager.get_active_nodes().await;
+        assert_eq!(active.len(), 1);
+        assert!(active.contains(&1));
+
+        // Check metadata updated
+        let meta = manager.get_node_metadata(1).await.unwrap();
+        assert!(meta.reachable);
+        assert!(meta.last_heartbeat > 0);
+
+        // Mark inactive
+        manager.mark_inactive(1).await;
+        let active = manager.get_active_nodes().await;
+        assert!(active.is_empty());
+
+        let meta = manager.get_node_metadata(1).await.unwrap();
+        assert!(!meta.reachable);
+    }
+
+    #[tokio::test]
+    async fn test_cluster_manager_update_node_role() {
+        let mut config = ClusterConfig::new("test".to_string(), 1);
+        config.add_node(1, "127.0.0.1:5000".to_string(), true);
+        let manager = ClusterManager::new(config).unwrap();
+
+        // Initially follower
+        let meta = manager.get_node_metadata(1).await.unwrap();
+        assert_eq!(meta.role, NodeRole::Follower);
+
+        // Promote to leader
+        manager.update_node_role(1, NodeRole::Leader).await;
+        let meta = manager.get_node_metadata(1).await.unwrap();
+        assert_eq!(meta.role, NodeRole::Leader);
+
+        // Change to candidate
+        manager.update_node_role(1, NodeRole::Candidate).await;
+        let meta = manager.get_node_metadata(1).await.unwrap();
+        assert_eq!(meta.role, NodeRole::Candidate);
+    }
+
+    #[tokio::test]
+    async fn test_cluster_manager_get_node_metadata_nonexistent() {
+        let mut config = ClusterConfig::new("test".to_string(), 1);
+        config.add_node(1, "127.0.0.1:5000".to_string(), true);
+        let manager = ClusterManager::new(config).unwrap();
+
+        let meta = manager.get_node_metadata(999).await;
+        assert!(meta.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_cluster_health_unhealthy_no_leader() {
+        let mut config = ClusterConfig::new("test".to_string(), 1);
+        config.add_node(1, "127.0.0.1:5000".to_string(), true);
+        config.add_node(2, "127.0.0.1:5001".to_string(), true);
+        config.add_node(3, "127.0.0.1:5002".to_string(), true);
+        let manager = ClusterManager::new(config).unwrap();
+
+        // Mark majority active but no leader
+        manager.mark_active(1).await;
+        manager.mark_active(2).await;
+
+        let health = manager.health_status().await;
+        assert!(!health.healthy); // no leader
+        assert_eq!(health.active_voters, 2);
+        assert!(!health.has_leader);
+        assert_eq!(health.total_nodes, 3);
+        assert_eq!(health.total_voters, 3);
+    }
+
+    #[tokio::test]
+    async fn test_cluster_health_unhealthy_no_quorum() {
+        let mut config = ClusterConfig::new("test".to_string(), 1);
+        config.add_node(1, "127.0.0.1:5000".to_string(), true);
+        config.add_node(2, "127.0.0.1:5001".to_string(), true);
+        config.add_node(3, "127.0.0.1:5002".to_string(), true);
+        let manager = ClusterManager::new(config).unwrap();
+
+        // Only 1 active voter with leader (not quorum of 3)
+        manager.mark_active(1).await;
+        manager.update_node_role(1, NodeRole::Leader).await;
+
+        let health = manager.health_status().await;
+        assert!(!health.healthy); // no quorum (1 < 3/2+1=2)
+        assert_eq!(health.active_voters, 1);
+    }
+
+    #[tokio::test]
+    async fn test_cluster_health_serialization() {
+        let health = ClusterHealth {
+            healthy: true,
+            total_nodes: 5,
+            active_nodes: 3,
+            total_voters: 3,
+            active_voters: 2,
+            has_leader: true,
+        };
+        let json = serde_json::to_string(&health).unwrap();
+        let deserialized: ClusterHealth = serde_json::from_str(&json).unwrap();
+        assert!(deserialized.healthy);
+        assert_eq!(deserialized.total_nodes, 5);
+        assert_eq!(deserialized.active_nodes, 3);
+        assert!(deserialized.has_leader);
+    }
+
+    #[test]
+    fn test_node_role_serialization() {
+        let roles = vec![
+            NodeRole::Leader,
+            NodeRole::Follower,
+            NodeRole::Candidate,
+            NodeRole::Learner,
+        ];
+        for role in roles {
+            let json = serde_json::to_string(&role).unwrap();
+            let deserialized: NodeRole = serde_json::from_str(&json).unwrap();
+            assert_eq!(role, deserialized);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_mark_active_nonexistent_node() {
+        let mut config = ClusterConfig::new("test".to_string(), 1);
+        config.add_node(1, "127.0.0.1:5000".to_string(), true);
+        let manager = ClusterManager::new(config).unwrap();
+
+        // Mark a node active that doesn't exist in metadata -- should not panic
+        manager.mark_active(999).await;
+        let active = manager.get_active_nodes().await;
+        assert!(active.contains(&999));
+    }
+
+    #[tokio::test]
+    async fn test_mark_inactive_nonexistent_node() {
+        let mut config = ClusterConfig::new("test".to_string(), 1);
+        config.add_node(1, "127.0.0.1:5000".to_string(), true);
+        let manager = ClusterManager::new(config).unwrap();
+
+        // Should not panic
+        manager.mark_inactive(999).await;
+    }
+
+    #[tokio::test]
+    async fn test_update_role_nonexistent_node() {
+        let mut config = ClusterConfig::new("test".to_string(), 1);
+        config.add_node(1, "127.0.0.1:5000".to_string(), true);
+        let manager = ClusterManager::new(config).unwrap();
+
+        // Should not panic
+        manager.update_node_role(999, NodeRole::Leader).await;
+    }
+
+    #[tokio::test]
+    async fn test_cluster_manager_node_metadata_initialization() {
+        let mut config = ClusterConfig::new("test".to_string(), 1);
+        config.add_node(1, "127.0.0.1:5000".to_string(), true);
+        config.add_node(2, "127.0.0.1:5001".to_string(), false);
+        let manager = ClusterManager::new(config).unwrap();
+
+        // Voter should be Follower
+        let meta1 = manager.get_node_metadata(1).await.unwrap();
+        assert_eq!(meta1.role, NodeRole::Follower);
+        assert!(!meta1.reachable);
+
+        // Learner should be Learner
+        let meta2 = manager.get_node_metadata(2).await.unwrap();
+        assert_eq!(meta2.role, NodeRole::Learner);
+        assert!(!meta2.reachable);
+    }
 }

@@ -184,4 +184,211 @@ mod tests {
         let output = RdfXmlSerializerWrapper::serialize(&triples).unwrap();
         assert!(output.contains("rdf:RDF"));
     }
+
+    #[test]
+    fn test_rdfxml_serialize_empty() {
+        let output = RdfXmlSerializerWrapper::serialize(&[]).unwrap();
+        assert!(output.contains("rdf:RDF") || output.is_empty());
+    }
+
+    #[test]
+    fn test_rdfxml_roundtrip_multiple() {
+        let input = r#"<?xml version="1.0"?>
+        <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+                 xmlns:ex="http://example.org/">
+            <rdf:Description rdf:about="http://example.org/a">
+                <ex:p1>v1</ex:p1>
+                <ex:p2>v2</ex:p2>
+            </rdf:Description>
+        </rdf:RDF>"#;
+        let triples = RdfXmlParserWrapper::parse(input).unwrap();
+        assert_eq!(triples.len(), 2);
+    }
+
+    // ========== Additional RDF/XML Coverage Tests ==========
+
+    #[test]
+    fn test_rdfxml_parse_invalid_xml() {
+        let input = r#"<not valid rdf at all"#;
+        let result = RdfXmlParserWrapper::parse(input);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_rdfxml_parse_empty_rdf() {
+        let input = r#"<?xml version="1.0"?>
+        <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+        </rdf:RDF>"#;
+        let triples = RdfXmlParserWrapper::parse(input).unwrap();
+        assert!(triples.is_empty());
+    }
+
+    #[test]
+    fn test_rdfxml_with_named_node_object() {
+        let input = r#"<?xml version="1.0"?>
+        <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+                 xmlns:ex="http://example.org/">
+            <rdf:Description rdf:about="http://example.org/alice">
+                <ex:knows rdf:resource="http://example.org/bob"/>
+            </rdf:Description>
+        </rdf:RDF>"#;
+        let triples = RdfXmlParserWrapper::parse(input).unwrap();
+        assert_eq!(triples.len(), 1);
+
+        match &triples[0].object {
+            RdfObject::NamedNode(n) => assert_eq!(n.as_str(), "http://example.org/bob"),
+            _ => panic!("Expected NamedNode object"),
+        }
+    }
+
+    #[test]
+    fn test_rdfxml_with_typed_literal() {
+        let input = r#"<?xml version="1.0"?>
+        <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+                 xmlns:ex="http://example.org/"
+                 xmlns:xsd="http://www.w3.org/2001/XMLSchema#">
+            <rdf:Description rdf:about="http://example.org/alice">
+                <ex:age rdf:datatype="http://www.w3.org/2001/XMLSchema#integer">30</ex:age>
+            </rdf:Description>
+        </rdf:RDF>"#;
+        let triples = RdfXmlParserWrapper::parse(input).unwrap();
+        assert_eq!(triples.len(), 1);
+
+        match &triples[0].object {
+            RdfObject::Literal(l) => {
+                assert_eq!(l.value(), "30");
+                assert_eq!(l.datatype().as_str(), "http://www.w3.org/2001/XMLSchema#integer");
+            }
+            _ => panic!("Expected Literal object"),
+        }
+    }
+
+    #[test]
+    fn test_rdfxml_with_language_tagged_literal() {
+        let input = r#"<?xml version="1.0"?>
+        <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+                 xmlns:ex="http://example.org/">
+            <rdf:Description rdf:about="http://example.org/alice">
+                <ex:name xml:lang="en">Alice</ex:name>
+            </rdf:Description>
+        </rdf:RDF>"#;
+        let triples = RdfXmlParserWrapper::parse(input).unwrap();
+        assert_eq!(triples.len(), 1);
+
+        match &triples[0].object {
+            RdfObject::Literal(l) => {
+                assert_eq!(l.value(), "Alice");
+                assert_eq!(l.language(), Some("en"));
+            }
+            _ => panic!("Expected Literal object"),
+        }
+    }
+
+    #[test]
+    fn test_rdfxml_serialize_named_node_object() {
+        let subject = RdfSubject::NamedNode(NamedNode::new("http://example.org/alice").unwrap());
+        let predicate = RdfPredicate::new("http://example.org/knows").unwrap();
+        let object = RdfObject::NamedNode(NamedNode::new("http://example.org/bob").unwrap());
+
+        let triples = vec![Triple::new(subject, predicate, object)];
+        let output = RdfXmlSerializerWrapper::serialize(&triples).unwrap();
+        assert!(output.contains("http://example.org/alice"));
+        assert!(output.contains("http://example.org/bob"));
+    }
+
+    #[test]
+    fn test_rdfxml_serialize_typed_literal() {
+        let subject = RdfSubject::NamedNode(NamedNode::new("http://example.org/alice").unwrap());
+        let predicate = RdfPredicate::new("http://example.org/age").unwrap();
+        let dt = NamedNode::new("http://www.w3.org/2001/XMLSchema#integer").unwrap();
+        let object = RdfObject::Literal(Literal::new_typed_literal("30", dt));
+
+        let triples = vec![Triple::new(subject, predicate, object)];
+        let output = RdfXmlSerializerWrapper::serialize(&triples).unwrap();
+        assert!(output.contains("30"));
+    }
+
+    #[test]
+    fn test_rdfxml_serialize_language_tagged_literal() {
+        let subject = RdfSubject::NamedNode(NamedNode::new("http://example.org/alice").unwrap());
+        let predicate = RdfPredicate::new("http://example.org/name").unwrap();
+        let object = RdfObject::Literal(
+            Literal::new_language_tagged_literal("Alice", "en").unwrap()
+        );
+
+        let triples = vec![Triple::new(subject, predicate, object)];
+        let output = RdfXmlSerializerWrapper::serialize(&triples).unwrap();
+        assert!(output.contains("Alice"));
+    }
+
+    #[test]
+    fn test_rdfxml_serialize_blank_node_subject() {
+        let subject = RdfSubject::BlankNode(BlankNode::from_str("b0").unwrap());
+        let predicate = RdfPredicate::new("http://example.org/name").unwrap();
+        let object = RdfObject::Literal(Literal::new_simple_literal("Test"));
+
+        let triples = vec![Triple::new(subject, predicate, object)];
+        let output = RdfXmlSerializerWrapper::serialize(&triples).unwrap();
+        assert!(output.contains("rdf:RDF") || !output.is_empty());
+    }
+
+    #[test]
+    fn test_rdfxml_serialize_blank_node_object() {
+        let subject = RdfSubject::NamedNode(NamedNode::new("http://example.org/a").unwrap());
+        let predicate = RdfPredicate::new("http://example.org/ref").unwrap();
+        let object = RdfObject::BlankNode(BlankNode::from_str("b1").unwrap());
+
+        let triples = vec![Triple::new(subject, predicate, object)];
+        let output = RdfXmlSerializerWrapper::serialize(&triples).unwrap();
+        assert!(!output.is_empty());
+    }
+
+    #[test]
+    fn test_rdfxml_roundtrip_multiple_subjects() {
+        let input = r#"<?xml version="1.0"?>
+        <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+                 xmlns:ex="http://example.org/">
+            <rdf:Description rdf:about="http://example.org/alice">
+                <ex:name>Alice</ex:name>
+            </rdf:Description>
+            <rdf:Description rdf:about="http://example.org/bob">
+                <ex:name>Bob</ex:name>
+            </rdf:Description>
+        </rdf:RDF>"#;
+        let triples = RdfXmlParserWrapper::parse(input).unwrap();
+        assert_eq!(triples.len(), 2);
+
+        let output = RdfXmlSerializerWrapper::serialize(&triples).unwrap();
+        let reparsed = RdfXmlParserWrapper::parse(&output).unwrap();
+        assert_eq!(reparsed.len(), 2);
+    }
+
+    #[test]
+    fn test_rdfxml_serialize_simple_literal() {
+        let subject = RdfSubject::NamedNode(NamedNode::new("http://example.org/a").unwrap());
+        let predicate = RdfPredicate::new("http://example.org/val").unwrap();
+        let object = RdfObject::Literal(Literal::new_simple_literal("hello world"));
+
+        let triples = vec![Triple::new(subject, predicate, object)];
+        let output = RdfXmlSerializerWrapper::serialize(&triples).unwrap();
+        assert!(output.contains("hello world"));
+
+        // Roundtrip
+        let reparsed = RdfXmlParserWrapper::parse(&output).unwrap();
+        assert_eq!(reparsed.len(), 1);
+    }
+
+    #[test]
+    fn test_rdfxml_with_rdf_type() {
+        let input = r#"<?xml version="1.0"?>
+        <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+                 xmlns:ex="http://example.org/">
+            <rdf:Description rdf:about="http://example.org/alice">
+                <rdf:type rdf:resource="http://example.org/Person"/>
+            </rdf:Description>
+        </rdf:RDF>"#;
+        let triples = RdfXmlParserWrapper::parse(input).unwrap();
+        assert_eq!(triples.len(), 1);
+        assert!(matches!(&triples[0].object, RdfObject::NamedNode(_)));
+    }
 }

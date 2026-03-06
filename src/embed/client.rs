@@ -206,3 +206,440 @@ impl EmbeddingClient {
         Ok(result.embeddings.into_iter().map(|e| e.values).collect())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    fn mock_config() -> AutoEmbedConfig {
+        AutoEmbedConfig {
+            provider: LLMProvider::Mock,
+            embedding_model: "mock-model".to_string(),
+            api_key: None,
+            api_base_url: None,
+            chunk_size: 512,
+            chunk_overlap: 64,
+            vector_dimension: 64,
+            embedding_policies: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn test_embedding_client_new_mock() {
+        let config = mock_config();
+        let client = EmbeddingClient::new(&config);
+        assert!(client.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_mock_embeddings() {
+        let config = mock_config();
+        let client = EmbeddingClient::new(&config).unwrap();
+        let texts = vec!["hello world".to_string(), "test text".to_string()];
+        let result = client.generate_embeddings(&texts).await;
+        assert!(result.is_ok());
+        let embeddings = result.unwrap();
+        assert_eq!(embeddings.len(), 2);
+        assert_eq!(embeddings[0].len(), 64); // Mock returns 64-dim vectors
+        // Verify deterministic: different texts produce different first elements
+        assert_ne!(embeddings[0][0], embeddings[1][0]);
+    }
+
+    #[test]
+    fn test_embedding_client_new_openai() {
+        let config = AutoEmbedConfig {
+            provider: LLMProvider::OpenAI,
+            embedding_model: "text-embedding-3-small".to_string(),
+            api_key: Some("sk-test".to_string()),
+            api_base_url: None,
+            chunk_size: 512,
+            chunk_overlap: 64,
+            vector_dimension: 1536,
+            embedding_policies: HashMap::new(),
+        };
+        let client = EmbeddingClient::new(&config);
+        assert!(client.is_ok());
+    }
+
+    #[test]
+    fn test_embedding_client_new_ollama() {
+        let config = AutoEmbedConfig {
+            provider: LLMProvider::Ollama,
+            embedding_model: "llama3".to_string(),
+            api_key: None,
+            api_base_url: Some("http://localhost:11434".to_string()),
+            chunk_size: 512,
+            chunk_overlap: 64,
+            vector_dimension: 768,
+            embedding_policies: HashMap::new(),
+        };
+        let client = EmbeddingClient::new(&config);
+        assert!(client.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_mock_embeddings_empty_text() {
+        let config = mock_config();
+        let client = EmbeddingClient::new(&config).unwrap();
+        let texts = vec!["".to_string()];
+        let result = client.generate_embeddings(&texts).await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_embedding_client_new_gemini() {
+        let config = AutoEmbedConfig {
+            provider: LLMProvider::Gemini,
+            embedding_model: "text-embedding-004".to_string(),
+            api_key: Some("test-key".to_string()),
+            api_base_url: None,
+            chunk_size: 512,
+            chunk_overlap: 64,
+            vector_dimension: 768,
+            embedding_policies: HashMap::new(),
+        };
+        let client = EmbeddingClient::new(&config);
+        assert!(client.is_ok());
+    }
+
+    #[test]
+    fn test_embedding_client_new_anthropic() {
+        let config = AutoEmbedConfig {
+            provider: LLMProvider::Anthropic,
+            embedding_model: "claude-embedding".to_string(),
+            api_key: Some("test-key".to_string()),
+            api_base_url: None,
+            chunk_size: 512,
+            chunk_overlap: 64,
+            vector_dimension: 768,
+            embedding_policies: HashMap::new(),
+        };
+        let client = EmbeddingClient::new(&config);
+        assert!(client.is_ok());
+    }
+
+    #[test]
+    fn test_embedding_client_new_azure_without_base_url() {
+        let config = AutoEmbedConfig {
+            provider: LLMProvider::AzureOpenAI,
+            embedding_model: "text-embedding-ada-002".to_string(),
+            api_key: Some("test-key".to_string()),
+            api_base_url: None,
+            chunk_size: 512,
+            chunk_overlap: 64,
+            vector_dimension: 1536,
+            embedding_policies: HashMap::new(),
+        };
+        let client = EmbeddingClient::new(&config);
+        // AzureOpenAI without api_base_url should fail
+        assert!(client.is_err());
+    }
+
+    #[test]
+    fn test_embedding_client_new_azure_with_base_url() {
+        let config = AutoEmbedConfig {
+            provider: LLMProvider::AzureOpenAI,
+            embedding_model: "text-embedding-ada-002".to_string(),
+            api_key: Some("test-key".to_string()),
+            api_base_url: Some("https://myendpoint.openai.azure.com".to_string()),
+            chunk_size: 512,
+            chunk_overlap: 64,
+            vector_dimension: 1536,
+            embedding_policies: HashMap::new(),
+        };
+        let client = EmbeddingClient::new(&config);
+        assert!(client.is_ok());
+    }
+
+    #[test]
+    fn test_embedding_client_new_claude_code() {
+        let config = AutoEmbedConfig {
+            provider: LLMProvider::ClaudeCode,
+            embedding_model: "claude".to_string(),
+            api_key: None,
+            api_base_url: None,
+            chunk_size: 512,
+            chunk_overlap: 64,
+            vector_dimension: 768,
+            embedding_policies: HashMap::new(),
+        };
+        let client = EmbeddingClient::new(&config);
+        assert!(client.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_mock_embeddings_multiple_texts() {
+        let config = mock_config();
+        let client = EmbeddingClient::new(&config).unwrap();
+        let texts = vec![
+            "hello".to_string(),
+            "world".to_string(),
+            "test".to_string(),
+            "embedding".to_string(),
+        ];
+        let result = client.generate_embeddings(&texts).await;
+        assert!(result.is_ok());
+        let embeddings = result.unwrap();
+        assert_eq!(embeddings.len(), 4);
+        for emb in &embeddings {
+            assert_eq!(emb.len(), 64);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_mock_embeddings_single_char() {
+        let config = mock_config();
+        let client = EmbeddingClient::new(&config).unwrap();
+        let texts = vec!["a".to_string()];
+        let result = client.generate_embeddings(&texts).await;
+        assert!(result.is_ok());
+        let embeddings = result.unwrap();
+        assert_eq!(embeddings.len(), 1);
+        // Single char: vec[2] should still be 0.1 (no second byte)
+        assert_eq!(embeddings[0][2], 0.1);
+    }
+
+    #[tokio::test]
+    async fn test_generate_embeddings_unsupported_provider() {
+        let config = AutoEmbedConfig {
+            provider: LLMProvider::Anthropic,
+            embedding_model: "claude".to_string(),
+            api_key: Some("test-key".to_string()),
+            api_base_url: None,
+            chunk_size: 512,
+            chunk_overlap: 64,
+            vector_dimension: 768,
+            embedding_policies: HashMap::new(),
+        };
+        let client = EmbeddingClient::new(&config).unwrap();
+        let result = client.generate_embeddings(&["test".to_string()]).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_mock_embeddings_empty_batch() {
+        let config = mock_config();
+        let client = EmbeddingClient::new(&config).unwrap();
+        let texts: Vec<String> = vec![];
+        let result = client.generate_embeddings(&texts).await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().len(), 0);
+    }
+
+    #[test]
+    fn test_embedding_client_custom_base_url() {
+        let config = AutoEmbedConfig {
+            provider: LLMProvider::OpenAI,
+            embedding_model: "text-embedding-3-small".to_string(),
+            api_key: Some("sk-test".to_string()),
+            api_base_url: Some("https://custom.api.example.com/v1".to_string()),
+            chunk_size: 512,
+            chunk_overlap: 64,
+            vector_dimension: 1536,
+            embedding_policies: HashMap::new(),
+        };
+        let client = EmbeddingClient::new(&config);
+        assert!(client.is_ok());
+    }
+
+    // ========== Coverage batch: additional embed client tests ==========
+
+    #[tokio::test]
+    async fn test_mock_embeddings_large_batch() {
+        let config = mock_config();
+        let client = EmbeddingClient::new(&config).unwrap();
+        // Generate a large batch of texts
+        let texts: Vec<String> = (0..100).map(|i| format!("text number {}", i)).collect();
+        let result = client.generate_embeddings(&texts).await;
+        assert!(result.is_ok());
+        let embeddings = result.unwrap();
+        assert_eq!(embeddings.len(), 100);
+        for emb in &embeddings {
+            assert_eq!(emb.len(), 64);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_mock_embeddings_deterministic() {
+        let config = mock_config();
+        let client = EmbeddingClient::new(&config).unwrap();
+        let texts = vec!["hello world".to_string()];
+        let r1 = client.generate_embeddings(&texts).await.unwrap();
+        let r2 = client.generate_embeddings(&texts).await.unwrap();
+        // Mock embeddings are deterministic: same text => same embedding
+        assert_eq!(r1[0], r2[0]);
+    }
+
+    #[tokio::test]
+    async fn test_mock_embeddings_different_texts_different_vectors() {
+        let config = mock_config();
+        let client = EmbeddingClient::new(&config).unwrap();
+        let texts = vec!["alpha".to_string(), "beta".to_string(), "gamma".to_string()];
+        let result = client.generate_embeddings(&texts).await.unwrap();
+        // Different texts produce different first elements
+        assert_ne!(result[0][0], result[1][0]);
+        assert_ne!(result[1][0], result[2][0]);
+    }
+
+    #[tokio::test]
+    async fn test_mock_embeddings_long_text() {
+        let config = mock_config();
+        let client = EmbeddingClient::new(&config).unwrap();
+        let long_text = "a".repeat(10000);
+        let texts = vec![long_text];
+        let result = client.generate_embeddings(&texts).await;
+        assert!(result.is_ok());
+        let embeddings = result.unwrap();
+        assert_eq!(embeddings.len(), 1);
+        assert_eq!(embeddings[0].len(), 64);
+    }
+
+    #[tokio::test]
+    async fn test_mock_embeddings_unicode_text() {
+        let config = mock_config();
+        let client = EmbeddingClient::new(&config).unwrap();
+        let texts = vec!["unicode text".to_string()];
+        let result = client.generate_embeddings(&texts).await;
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_embedding_client_default_base_urls() {
+        // OpenAI
+        let config = AutoEmbedConfig {
+            provider: LLMProvider::OpenAI,
+            embedding_model: "model".to_string(),
+            api_key: Some("key".to_string()),
+            api_base_url: None,
+            chunk_size: 512,
+            chunk_overlap: 64,
+            vector_dimension: 768,
+            embedding_policies: HashMap::new(),
+        };
+        let client = EmbeddingClient::new(&config).unwrap();
+        assert_eq!(client.api_base_url, "https://api.openai.com/v1");
+
+        // Ollama
+        let config_ollama = AutoEmbedConfig {
+            provider: LLMProvider::Ollama,
+            embedding_model: "model".to_string(),
+            api_key: None,
+            api_base_url: None,
+            chunk_size: 512,
+            chunk_overlap: 64,
+            vector_dimension: 768,
+            embedding_policies: HashMap::new(),
+        };
+        let client_ollama = EmbeddingClient::new(&config_ollama).unwrap();
+        assert_eq!(client_ollama.api_base_url, "http://localhost:11434");
+
+        // Gemini
+        let config_gemini = AutoEmbedConfig {
+            provider: LLMProvider::Gemini,
+            embedding_model: "model".to_string(),
+            api_key: Some("key".to_string()),
+            api_base_url: None,
+            chunk_size: 512,
+            chunk_overlap: 64,
+            vector_dimension: 768,
+            embedding_policies: HashMap::new(),
+        };
+        let client_gemini = EmbeddingClient::new(&config_gemini).unwrap();
+        assert_eq!(client_gemini.api_base_url, "https://generativelanguage.googleapis.com/v1beta");
+
+        // Anthropic
+        let config_anthropic = AutoEmbedConfig {
+            provider: LLMProvider::Anthropic,
+            embedding_model: "model".to_string(),
+            api_key: Some("key".to_string()),
+            api_base_url: None,
+            chunk_size: 512,
+            chunk_overlap: 64,
+            vector_dimension: 768,
+            embedding_policies: HashMap::new(),
+        };
+        let client_anthropic = EmbeddingClient::new(&config_anthropic).unwrap();
+        assert_eq!(client_anthropic.api_base_url, "https://api.anthropic.com/v1");
+
+        // ClaudeCode
+        let config_cc = AutoEmbedConfig {
+            provider: LLMProvider::ClaudeCode,
+            embedding_model: "model".to_string(),
+            api_key: None,
+            api_base_url: None,
+            chunk_size: 512,
+            chunk_overlap: 64,
+            vector_dimension: 768,
+            embedding_policies: HashMap::new(),
+        };
+        let client_cc = EmbeddingClient::new(&config_cc).unwrap();
+        assert_eq!(client_cc.api_base_url, "");
+
+        // Mock
+        let client_mock = EmbeddingClient::new(&mock_config()).unwrap();
+        assert_eq!(client_mock.api_base_url, "");
+    }
+
+    #[test]
+    fn test_embedding_client_custom_url_overrides_default() {
+        let config = AutoEmbedConfig {
+            provider: LLMProvider::OpenAI,
+            embedding_model: "model".to_string(),
+            api_key: Some("key".to_string()),
+            api_base_url: Some("https://proxy.example.com/v1".to_string()),
+            chunk_size: 512,
+            chunk_overlap: 64,
+            vector_dimension: 768,
+            embedding_policies: HashMap::new(),
+        };
+        let client = EmbeddingClient::new(&config).unwrap();
+        assert_eq!(client.api_base_url, "https://proxy.example.com/v1");
+    }
+
+    #[tokio::test]
+    async fn test_generate_embeddings_claude_code_not_implemented() {
+        let config = AutoEmbedConfig {
+            provider: LLMProvider::ClaudeCode,
+            embedding_model: "claude".to_string(),
+            api_key: None,
+            api_base_url: None,
+            chunk_size: 512,
+            chunk_overlap: 64,
+            vector_dimension: 768,
+            embedding_policies: HashMap::new(),
+        };
+        let client = EmbeddingClient::new(&config).unwrap();
+        let result = client.generate_embeddings(&["test".to_string()]).await;
+        assert!(result.is_err());
+        let err_msg = format!("{}", result.err().unwrap());
+        assert!(err_msg.contains("not yet implemented"));
+    }
+
+    #[test]
+    fn test_embed_error_display() {
+        let e1 = EmbedError::ApiError("api err".to_string());
+        assert!(format!("{}", e1).contains("LLM API error"));
+
+        let e2 = EmbedError::ConfigError("config err".to_string());
+        assert!(format!("{}", e2).contains("Configuration error"));
+
+        let e3 = EmbedError::NetworkError("net err".to_string());
+        assert!(format!("{}", e3).contains("Network error"));
+
+        let e4 = EmbedError::SerializationError("ser err".to_string());
+        assert!(format!("{}", e4).contains("Serialization error"));
+    }
+
+    #[tokio::test]
+    async fn test_mock_embeddings_two_char_text() {
+        let config = mock_config();
+        let client = EmbeddingClient::new(&config).unwrap();
+        let texts = vec!["ab".to_string()];
+        let result = client.generate_embeddings(&texts).await.unwrap();
+        assert_eq!(result.len(), 1);
+        // With 2+ chars, vec[2] should be set based on second byte
+        assert_ne!(result[0][2], 0.1);
+    }
+}

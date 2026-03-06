@@ -448,4 +448,707 @@ mod tests {
         let tokens = RespValue::parse_inline_tokens("SET key \"hello world\"").unwrap();
         assert_eq!(tokens, vec!["SET", "key", "hello world"]);
     }
+
+    // ========== Batch 6: Additional RESP Tests ==========
+
+    #[test]
+    fn test_encode_null() {
+        let val = RespValue::Null;
+        let mut buf = Vec::new();
+        val.encode(&mut buf).unwrap();
+        // RESP3 null type
+        assert_eq!(&buf, b"_\r\n");
+    }
+
+    #[test]
+    fn test_encode_nested_array() {
+        let val = RespValue::Array(vec![
+            RespValue::Array(vec![
+                RespValue::Integer(1),
+                RespValue::Integer(2),
+            ]),
+            RespValue::SimpleString("ok".to_string()),
+        ]);
+        let mut buf = Vec::new();
+        val.encode(&mut buf).unwrap();
+        assert!(!buf.is_empty());
+    }
+
+    #[test]
+    fn test_decode_integer() {
+        let mut buf = BytesMut::from(&b":42\r\n"[..]);
+        let val = RespValue::decode(&mut buf).unwrap().unwrap();
+        assert_eq!(val, RespValue::Integer(42));
+    }
+
+    #[test]
+    fn test_decode_negative_integer() {
+        let mut buf = BytesMut::from(&b":-10\r\n"[..]);
+        let val = RespValue::decode(&mut buf).unwrap().unwrap();
+        assert_eq!(val, RespValue::Integer(-10));
+    }
+
+    #[test]
+    fn test_decode_error() {
+        let mut buf = BytesMut::from(&b"-ERR unknown command\r\n"[..]);
+        let val = RespValue::decode(&mut buf).unwrap().unwrap();
+        assert_eq!(val, RespValue::Error("ERR unknown command".to_string()));
+    }
+
+    #[test]
+    fn test_decode_null_bulk_string() {
+        let mut buf = BytesMut::from(&b"$-1\r\n"[..]);
+        let val = RespValue::decode(&mut buf).unwrap().unwrap();
+        // $-1 decodes as BulkString(None), not Null
+        assert_eq!(val, RespValue::BulkString(None));
+    }
+
+    #[test]
+    fn test_as_array() {
+        let val = RespValue::Array(vec![RespValue::Integer(1), RespValue::Integer(2)]);
+        let arr = val.as_array().unwrap();
+        assert_eq!(arr.len(), 2);
+
+        let val2 = RespValue::Integer(42);
+        assert!(val2.as_array().is_err());
+    }
+
+    #[test]
+    fn test_as_bulk_string() {
+        let val = RespValue::BulkString(Some(b"hello".to_vec()));
+        let bs = val.as_bulk_string().unwrap();
+        assert_eq!(bs, Some(&b"hello"[..]));
+
+        let null_val = RespValue::BulkString(None);
+        let bs_null = null_val.as_bulk_string().unwrap();
+        assert!(bs_null.is_none());
+
+        let int_val = RespValue::Integer(1);
+        assert!(int_val.as_bulk_string().is_err());
+    }
+
+    #[test]
+    fn test_as_string() {
+        let val = RespValue::BulkString(Some(b"hello".to_vec()));
+        let s = val.as_string().unwrap();
+        assert_eq!(s, Some("hello".to_string()));
+
+        let null_val = RespValue::BulkString(None);
+        let s_null = null_val.as_string().unwrap();
+        assert!(s_null.is_none());
+    }
+
+    #[test]
+    fn test_encode_decode_roundtrip() {
+        let original = RespValue::Array(vec![
+            RespValue::BulkString(Some(b"GRAPH.QUERY".to_vec())),
+            RespValue::BulkString(Some(b"mygraph".to_vec())),
+            RespValue::BulkString(Some(b"MATCH (n) RETURN n".to_vec())),
+        ]);
+        let mut encoded = Vec::new();
+        original.encode(&mut encoded).unwrap();
+
+        let mut buf = BytesMut::from(&encoded[..]);
+        let decoded = RespValue::decode(&mut buf).unwrap().unwrap();
+        assert_eq!(decoded, original);
+    }
+
+    // ========== Additional RESP Coverage Tests ==========
+
+    #[test]
+    fn test_decode_empty_buffer() {
+        let mut buf = BytesMut::new();
+        let result = RespValue::decode(&mut buf).unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_decode_null_resp3() {
+        let mut buf = BytesMut::from(&b"_\r\n"[..]);
+        let val = RespValue::decode(&mut buf).unwrap().unwrap();
+        assert_eq!(val, RespValue::Null);
+        assert!(buf.is_empty());
+    }
+
+    #[test]
+    fn test_decode_invalid_null() {
+        // Null marker followed by extra characters before CRLF
+        let mut buf = BytesMut::from(&b"_extra\r\n"[..]);
+        let result = RespValue::decode(&mut buf);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_encode_empty_bulk_string() {
+        let val = RespValue::BulkString(Some(b"".to_vec()));
+        let mut buf = Vec::new();
+        val.encode(&mut buf).unwrap();
+        assert_eq!(buf, b"$0\r\n\r\n");
+    }
+
+    #[test]
+    fn test_decode_empty_bulk_string() {
+        let mut buf = BytesMut::from(&b"$0\r\n\r\n"[..]);
+        let val = RespValue::decode(&mut buf).unwrap().unwrap();
+        assert_eq!(val, RespValue::BulkString(Some(b"".to_vec())));
+        assert!(buf.is_empty());
+    }
+
+    #[test]
+    fn test_encode_large_integer() {
+        let val = RespValue::Integer(i64::MAX);
+        let mut buf = Vec::new();
+        val.encode(&mut buf).unwrap();
+        let expected = format!(":{}\r\n", i64::MAX);
+        assert_eq!(buf, expected.as_bytes());
+    }
+
+    #[test]
+    fn test_encode_negative_integer() {
+        let val = RespValue::Integer(i64::MIN);
+        let mut buf = Vec::new();
+        val.encode(&mut buf).unwrap();
+        let expected = format!(":{}\r\n", i64::MIN);
+        assert_eq!(buf, expected.as_bytes());
+    }
+
+    #[test]
+    fn test_encode_zero_integer() {
+        let val = RespValue::Integer(0);
+        let mut buf = Vec::new();
+        val.encode(&mut buf).unwrap();
+        assert_eq!(buf, b":0\r\n");
+    }
+
+    #[test]
+    fn test_decode_zero_integer() {
+        let mut buf = BytesMut::from(&b":0\r\n"[..]);
+        let val = RespValue::decode(&mut buf).unwrap().unwrap();
+        assert_eq!(val, RespValue::Integer(0));
+    }
+
+    #[test]
+    fn test_encode_empty_array() {
+        let val = RespValue::Array(vec![]);
+        let mut buf = Vec::new();
+        val.encode(&mut buf).unwrap();
+        assert_eq!(buf, b"*0\r\n");
+    }
+
+    #[test]
+    fn test_decode_empty_array() {
+        let mut buf = BytesMut::from(&b"*0\r\n"[..]);
+        let val = RespValue::decode(&mut buf).unwrap().unwrap();
+        assert_eq!(val, RespValue::Array(vec![]));
+    }
+
+    #[test]
+    fn test_encode_large_array() {
+        let items: Vec<RespValue> = (0..100)
+            .map(|i| RespValue::Integer(i))
+            .collect();
+        let val = RespValue::Array(items);
+        let mut buf = Vec::new();
+        val.encode(&mut buf).unwrap();
+
+        let mut decode_buf = BytesMut::from(&buf[..]);
+        let decoded = RespValue::decode(&mut decode_buf).unwrap().unwrap();
+        if let RespValue::Array(arr) = decoded {
+            assert_eq!(arr.len(), 100);
+            assert_eq!(arr[0], RespValue::Integer(0));
+            assert_eq!(arr[99], RespValue::Integer(99));
+        } else {
+            panic!("Expected Array");
+        }
+    }
+
+    #[test]
+    fn test_decode_nested_array() {
+        // *2\r\n *2\r\n :1\r\n :2\r\n *1\r\n :3\r\n
+        let mut buf = BytesMut::from(&b"*2\r\n*2\r\n:1\r\n:2\r\n*1\r\n:3\r\n"[..]);
+        let val = RespValue::decode(&mut buf).unwrap().unwrap();
+        assert_eq!(
+            val,
+            RespValue::Array(vec![
+                RespValue::Array(vec![
+                    RespValue::Integer(1),
+                    RespValue::Integer(2),
+                ]),
+                RespValue::Array(vec![
+                    RespValue::Integer(3),
+                ]),
+            ])
+        );
+    }
+
+    #[test]
+    fn test_encode_array_of_mixed_types() {
+        let val = RespValue::Array(vec![
+            RespValue::SimpleString("OK".to_string()),
+            RespValue::Integer(42),
+            RespValue::BulkString(Some(b"hello".to_vec())),
+            RespValue::BulkString(None),
+            RespValue::Error("ERR test".to_string()),
+            RespValue::Null,
+        ]);
+        let mut buf = Vec::new();
+        val.encode(&mut buf).unwrap();
+
+        let mut decode_buf = BytesMut::from(&buf[..]);
+        let decoded = RespValue::decode(&mut decode_buf).unwrap().unwrap();
+        assert_eq!(decoded, val);
+    }
+
+    #[test]
+    fn test_decode_simple_string_incomplete() {
+        let mut buf = BytesMut::from(&b"+OK"[..]); // Missing \r\n
+        let result = RespValue::decode(&mut buf).unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_decode_error_incomplete() {
+        let mut buf = BytesMut::from(&b"-ERR"[..]); // Missing \r\n
+        let result = RespValue::decode(&mut buf).unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_decode_integer_incomplete() {
+        let mut buf = BytesMut::from(&b":123"[..]); // Missing \r\n
+        let result = RespValue::decode(&mut buf).unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_decode_integer_invalid() {
+        let mut buf = BytesMut::from(&b":abc\r\n"[..]);
+        let result = RespValue::decode(&mut buf);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_decode_bulk_string_length_line_incomplete() {
+        let mut buf = BytesMut::from(&b"$6"[..]); // Missing \r\n after length
+        let result = RespValue::decode(&mut buf).unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_decode_array_incomplete_elements() {
+        // Array of 2 elements but only 1 provided
+        let mut buf = BytesMut::from(&b"*2\r\n:1\r\n"[..]);
+        let result = RespValue::decode(&mut buf);
+        assert!(result.is_err()); // Incomplete
+    }
+
+    #[test]
+    fn test_encode_bulk_string_with_binary_data() {
+        let data = vec![0x00, 0x01, 0xFF, 0xFE];
+        let val = RespValue::BulkString(Some(data.clone()));
+        let mut buf = Vec::new();
+        val.encode(&mut buf).unwrap();
+
+        let mut decode_buf = BytesMut::from(&buf[..]);
+        let decoded = RespValue::decode(&mut decode_buf).unwrap().unwrap();
+        assert_eq!(decoded, RespValue::BulkString(Some(data)));
+    }
+
+    #[test]
+    fn test_encode_simple_string_with_special_chars() {
+        let val = RespValue::SimpleString("hello world!@#$%".to_string());
+        let mut buf = Vec::new();
+        val.encode(&mut buf).unwrap();
+        assert_eq!(buf, b"+hello world!@#$%\r\n");
+    }
+
+    #[test]
+    fn test_encode_error_message_with_details() {
+        let val = RespValue::Error("WRONGTYPE Operation against a key holding the wrong kind".to_string());
+        let mut buf = Vec::new();
+        val.encode(&mut buf).unwrap();
+        assert_eq!(buf, b"-WRONGTYPE Operation against a key holding the wrong kind\r\n");
+    }
+
+    #[test]
+    fn test_decode_long_simple_string() {
+        let long_str = "x".repeat(10000);
+        let input = format!("+{}\r\n", long_str);
+        let mut buf = BytesMut::from(input.as_bytes());
+        let val = RespValue::decode(&mut buf).unwrap().unwrap();
+        assert_eq!(val, RespValue::SimpleString(long_str));
+    }
+
+    #[test]
+    fn test_decode_long_bulk_string() {
+        let data = vec![b'A'; 5000];
+        let header = format!("${}\r\n", data.len());
+        let mut input = Vec::new();
+        input.extend_from_slice(header.as_bytes());
+        input.extend_from_slice(&data);
+        input.extend_from_slice(b"\r\n");
+
+        let mut buf = BytesMut::from(&input[..]);
+        let val = RespValue::decode(&mut buf).unwrap().unwrap();
+        assert_eq!(val, RespValue::BulkString(Some(data)));
+    }
+
+    #[test]
+    fn test_inline_command_with_escape_sequences() {
+        let mut buf = BytesMut::from(&b"SET key \"hello\\nworld\"\r\n"[..]);
+        let val = RespValue::decode(&mut buf).unwrap().unwrap();
+        if let RespValue::Array(arr) = &val {
+            assert_eq!(arr.len(), 3);
+            // The value should have a newline in it
+            if let RespValue::BulkString(Some(data)) = &arr[2] {
+                let s = String::from_utf8(data.clone()).unwrap();
+                assert!(s.contains('\n'));
+            }
+        } else {
+            panic!("Expected Array from inline command");
+        }
+    }
+
+    #[test]
+    fn test_inline_command_with_tab_escape() {
+        let mut buf = BytesMut::from(&b"SET key \"col1\\tcol2\"\r\n"[..]);
+        let val = RespValue::decode(&mut buf).unwrap().unwrap();
+        if let RespValue::Array(arr) = &val {
+            if let RespValue::BulkString(Some(data)) = &arr[2] {
+                let s = String::from_utf8(data.clone()).unwrap();
+                assert!(s.contains('\t'));
+            }
+        }
+    }
+
+    #[test]
+    fn test_inline_command_with_backslash_escape() {
+        let mut buf = BytesMut::from(&b"SET key \"path\\\\file\"\r\n"[..]);
+        let val = RespValue::decode(&mut buf).unwrap().unwrap();
+        if let RespValue::Array(arr) = &val {
+            if let RespValue::BulkString(Some(data)) = &arr[2] {
+                let s = String::from_utf8(data.clone()).unwrap();
+                assert_eq!(s, "path\\file");
+            }
+        }
+    }
+
+    #[test]
+    fn test_inline_command_with_escaped_quote() {
+        let mut buf = BytesMut::from(&b"SET key \"say \\\"hi\\\"\"\r\n"[..]);
+        let val = RespValue::decode(&mut buf).unwrap().unwrap();
+        if let RespValue::Array(arr) = &val {
+            if let RespValue::BulkString(Some(data)) = &arr[2] {
+                let s = String::from_utf8(data.clone()).unwrap();
+                assert_eq!(s, "say \"hi\"");
+            }
+        }
+    }
+
+    #[test]
+    fn test_inline_command_with_unknown_escape() {
+        // Unknown escape like \z should produce literal \z
+        let tokens = RespValue::parse_inline_tokens(r#""hello\zworld""#).unwrap();
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(tokens[0], "hello\\zworld");
+    }
+
+    #[test]
+    fn test_inline_command_unclosed_quote() {
+        let result = RespValue::parse_inline_tokens(r#"SET key "unclosed"#);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_inline_command_tab_separator() {
+        // Tabs should also act as whitespace separators
+        let tokens = RespValue::parse_inline_tokens("SET\tkey\tvalue").unwrap();
+        assert_eq!(tokens, vec!["SET", "key", "value"]);
+    }
+
+    #[test]
+    fn test_inline_command_multiple_spaces() {
+        let tokens = RespValue::parse_inline_tokens("SET   key   value").unwrap();
+        assert_eq!(tokens, vec!["SET", "key", "value"]);
+    }
+
+    #[test]
+    fn test_inline_command_empty_string() {
+        let mut buf = BytesMut::from(&b"\r\n"[..]);
+        let result = RespValue::decode(&mut buf);
+        // Empty inline command should produce an error
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_as_string_non_utf8() {
+        let val = RespValue::BulkString(Some(vec![0xFF, 0xFE]));
+        let result = val.as_string();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_as_string_from_non_bulk_string() {
+        let val = RespValue::SimpleString("hello".to_string());
+        let result = val.as_string();
+        // SimpleString is not BulkString, should error
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_as_array_on_null() {
+        let val = RespValue::Null;
+        assert!(val.as_array().is_err());
+    }
+
+    #[test]
+    fn test_as_bulk_string_on_null() {
+        let val = RespValue::Null;
+        assert!(val.as_bulk_string().is_err());
+    }
+
+    #[test]
+    fn test_encode_decode_roundtrip_all_types() {
+        // Test roundtrip for every single variant
+        let values = vec![
+            RespValue::SimpleString("test".to_string()),
+            RespValue::Error("ERR something".to_string()),
+            RespValue::Integer(-999),
+            RespValue::BulkString(Some(b"data".to_vec())),
+            RespValue::BulkString(None),
+            RespValue::Array(vec![]),
+            RespValue::Null,
+        ];
+
+        for original in &values {
+            let mut encoded = Vec::new();
+            original.encode(&mut encoded).unwrap();
+            let mut buf = BytesMut::from(&encoded[..]);
+            let decoded = RespValue::decode(&mut buf).unwrap().unwrap();
+            assert_eq!(&decoded, original, "Roundtrip failed for {:?}", original);
+        }
+    }
+
+    #[test]
+    fn test_decode_multiple_commands_in_buffer() {
+        // Buffer with two commands
+        let mut buf = BytesMut::from(&b"+OK\r\n:42\r\n"[..]);
+
+        let val1 = RespValue::decode(&mut buf).unwrap().unwrap();
+        assert_eq!(val1, RespValue::SimpleString("OK".to_string()));
+
+        let val2 = RespValue::decode(&mut buf).unwrap().unwrap();
+        assert_eq!(val2, RespValue::Integer(42));
+
+        assert!(buf.is_empty());
+    }
+
+    #[test]
+    fn test_decode_bulk_string_invalid_length() {
+        let mut buf = BytesMut::from(&b"$abc\r\n"[..]);
+        let result = RespValue::decode(&mut buf);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_decode_array_invalid_length() {
+        let mut buf = BytesMut::from(&b"*xyz\r\n"[..]);
+        let result = RespValue::decode(&mut buf);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_encode_decode_deeply_nested() {
+        let val = RespValue::Array(vec![
+            RespValue::Array(vec![
+                RespValue::Array(vec![
+                    RespValue::Integer(42),
+                ]),
+            ]),
+        ]);
+        let mut buf = Vec::new();
+        val.encode(&mut buf).unwrap();
+
+        let mut decode_buf = BytesMut::from(&buf[..]);
+        let decoded = RespValue::decode(&mut decode_buf).unwrap().unwrap();
+        assert_eq!(decoded, val);
+    }
+
+    #[test]
+    fn test_parse_inline_tokens_empty_string() {
+        let tokens = RespValue::parse_inline_tokens("").unwrap();
+        assert!(tokens.is_empty());
+    }
+
+    #[test]
+    fn test_parse_inline_tokens_only_whitespace() {
+        let tokens = RespValue::parse_inline_tokens("   \t  ").unwrap();
+        assert!(tokens.is_empty());
+    }
+
+    #[test]
+    fn test_inline_carriage_return_escape() {
+        let tokens = RespValue::parse_inline_tokens(r#""hello\rworld""#).unwrap();
+        assert_eq!(tokens.len(), 1);
+        assert!(tokens[0].contains('\r'));
+    }
+
+    // ========== Additional RESP Coverage Tests ==========
+
+    #[test]
+    fn test_encode_decode_single_element_array() {
+        let val = RespValue::Array(vec![RespValue::Integer(42)]);
+        let mut buf = Vec::new();
+        val.encode(&mut buf).unwrap();
+        assert_eq!(buf, b"*1\r\n:42\r\n");
+
+        let mut decode_buf = BytesMut::from(&buf[..]);
+        let decoded = RespValue::decode(&mut decode_buf).unwrap().unwrap();
+        assert_eq!(decoded, val);
+    }
+
+    #[test]
+    fn test_encode_array_with_null_and_bulk_strings() {
+        let val = RespValue::Array(vec![
+            RespValue::BulkString(Some(b"key".to_vec())),
+            RespValue::BulkString(None),
+            RespValue::Null,
+            RespValue::BulkString(Some(b"val".to_vec())),
+        ]);
+        let mut buf = Vec::new();
+        val.encode(&mut buf).unwrap();
+
+        let mut decode_buf = BytesMut::from(&buf[..]);
+        let decoded = RespValue::decode(&mut decode_buf).unwrap().unwrap();
+        assert_eq!(decoded, val);
+    }
+
+    #[test]
+    fn test_decode_large_integer() {
+        let max_str = format!(":{}\r\n", i64::MAX);
+        let mut buf = BytesMut::from(max_str.as_bytes());
+        let val = RespValue::decode(&mut buf).unwrap().unwrap();
+        assert_eq!(val, RespValue::Integer(i64::MAX));
+    }
+
+    #[test]
+    fn test_decode_min_integer() {
+        let min_str = format!(":{}\r\n", i64::MIN);
+        let mut buf = BytesMut::from(min_str.as_bytes());
+        let val = RespValue::decode(&mut buf).unwrap().unwrap();
+        assert_eq!(val, RespValue::Integer(i64::MIN));
+    }
+
+    #[test]
+    fn test_encode_error_with_prefix() {
+        let val = RespValue::Error("MOVED 3999 127.0.0.1:6380".to_string());
+        let mut buf = Vec::new();
+        val.encode(&mut buf).unwrap();
+        assert_eq!(buf, b"-MOVED 3999 127.0.0.1:6380\r\n");
+    }
+
+    #[test]
+    fn test_encode_decode_large_bulk_string() {
+        let data = vec![b'X'; 100_000];
+        let val = RespValue::BulkString(Some(data.clone()));
+        let mut buf = Vec::new();
+        val.encode(&mut buf).unwrap();
+
+        let mut decode_buf = BytesMut::from(&buf[..]);
+        let decoded = RespValue::decode(&mut decode_buf).unwrap().unwrap();
+        assert_eq!(decoded, RespValue::BulkString(Some(data)));
+    }
+
+    #[test]
+    fn test_resp_error_display() {
+        let err = RespError::Protocol("test protocol error".to_string());
+        let msg = format!("{}", err);
+        assert!(msg.contains("Protocol error"));
+
+        let err2 = RespError::Incomplete;
+        let msg2 = format!("{}", err2);
+        assert!(msg2.contains("Incomplete"));
+
+        let err3 = RespError::InvalidEncoding("bad utf8".to_string());
+        let msg3 = format!("{}", err3);
+        assert!(msg3.contains("Invalid encoding"));
+    }
+
+    #[test]
+    fn test_inline_command_with_single_token() {
+        let tokens = RespValue::parse_inline_tokens("QUIT").unwrap();
+        assert_eq!(tokens, vec!["QUIT"]);
+    }
+
+    #[test]
+    fn test_inline_command_leading_trailing_spaces() {
+        let tokens = RespValue::parse_inline_tokens("  PING  ").unwrap();
+        assert_eq!(tokens, vec!["PING"]);
+    }
+
+    #[test]
+    fn test_encode_simple_string_empty() {
+        let val = RespValue::SimpleString(String::new());
+        let mut buf = Vec::new();
+        val.encode(&mut buf).unwrap();
+        assert_eq!(buf, b"+\r\n");
+    }
+
+    #[test]
+    fn test_decode_simple_string_empty() {
+        let mut buf = BytesMut::from(&b"+\r\n"[..]);
+        let val = RespValue::decode(&mut buf).unwrap().unwrap();
+        assert_eq!(val, RespValue::SimpleString(String::new()));
+    }
+
+    #[test]
+    fn test_encode_error_empty() {
+        let val = RespValue::Error(String::new());
+        let mut buf = Vec::new();
+        val.encode(&mut buf).unwrap();
+        assert_eq!(buf, b"-\r\n");
+    }
+
+    #[test]
+    fn test_decode_error_empty() {
+        let mut buf = BytesMut::from(&b"-\r\n"[..]);
+        let val = RespValue::decode(&mut buf).unwrap().unwrap();
+        assert_eq!(val, RespValue::Error(String::new()));
+    }
+
+    #[test]
+    fn test_encode_decode_array_of_arrays() {
+        let val = RespValue::Array(vec![
+            RespValue::Array(vec![
+                RespValue::BulkString(Some(b"key1".to_vec())),
+                RespValue::BulkString(Some(b"val1".to_vec())),
+            ]),
+            RespValue::Array(vec![
+                RespValue::BulkString(Some(b"key2".to_vec())),
+                RespValue::BulkString(Some(b"val2".to_vec())),
+            ]),
+        ]);
+        let mut buf = Vec::new();
+        val.encode(&mut buf).unwrap();
+
+        let mut decode_buf = BytesMut::from(&buf[..]);
+        let decoded = RespValue::decode(&mut decode_buf).unwrap().unwrap();
+        assert_eq!(decoded, val);
+    }
+
+    #[test]
+    fn test_partial_then_complete_decode() {
+        // Simulate receiving data in two chunks
+        let full_data = b"+Hello\r\n:42\r\n";
+
+        // First chunk: just the simple string
+        let mut buf = BytesMut::from(&full_data[..8]); // "+Hello\r\n"
+        let val1 = RespValue::decode(&mut buf).unwrap().unwrap();
+        assert_eq!(val1, RespValue::SimpleString("Hello".to_string()));
+
+        // Add remaining data
+        buf.extend_from_slice(&full_data[8..]);
+        let val2 = RespValue::decode(&mut buf).unwrap().unwrap();
+        assert_eq!(val2, RespValue::Integer(42));
+    }
 }

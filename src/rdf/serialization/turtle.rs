@@ -173,4 +173,27 @@ mod tests {
         let output = TurtleSerializerWrapper::serialize(&triples).unwrap();
         assert!(output.contains("http://example.org/a"));
     }
+
+    #[test]
+    fn test_turtle_multiple_triples() {
+        let input = r#"
+            <http://example.org/s1> <http://example.org/p1> "val1" .
+            <http://example.org/s2> <http://example.org/p2> "val2" .
+        "#;
+        let triples = TurtleParserWrapper::parse(input).unwrap();
+        assert_eq!(triples.len(), 2);
+    }
+
+    #[test]
+    fn test_turtle_serialize_empty() {
+        let output = TurtleSerializerWrapper::serialize(&[]).unwrap();
+        assert!(output.is_empty() || !output.contains("<http://"));
+    }
+
+    #[test]
+    fn test_turtle_parse_typed_literal() {
+        let input = r#"<http://example.org/s> <http://example.org/age> "42"^^<http://www.w3.org/2001/XMLSchema#integer> ."#;
+        let triples = TurtleParserWrapper::parse(input).unwrap();
+        assert_eq!(triples.len(), 1);
+    }
 }

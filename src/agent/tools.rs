@@ -59,3 +59,46 @@ impl Tool for WebSearchTool {
         }))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_web_search_tool_name() {
+        let tool = WebSearchTool::new("test-key".to_string());
+        assert_eq!(tool.name(), "web_search");
+    }
+
+    #[test]
+    fn test_web_search_tool_description() {
+        let tool = WebSearchTool::new("test-key".to_string());
+        assert!(!tool.description().is_empty());
+    }
+
+    #[test]
+    fn test_web_search_tool_parameters() {
+        let tool = WebSearchTool::new("test-key".to_string());
+        let params = tool.parameters();
+        assert_eq!(params["type"], "object");
+        assert!(params["properties"]["query"].is_object());
+    }
+
+    #[tokio::test]
+    async fn test_web_search_tool_execute() {
+        let tool = WebSearchTool::new("test-key".to_string());
+        let args = json!({"query": "graph database"});
+        let result = tool.execute(args).await;
+        assert!(result.is_ok());
+        let value = result.unwrap();
+        assert!(value["results"].is_array());
+    }
+
+    #[tokio::test]
+    async fn test_web_search_tool_missing_query() {
+        let tool = WebSearchTool::new("test-key".to_string());
+        let args = json!({});
+        let result = tool.execute(args).await;
+        assert!(result.is_err());
+    }
+}

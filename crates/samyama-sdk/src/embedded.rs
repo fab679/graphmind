@@ -395,4 +395,229 @@ mod tests {
             .await.unwrap();
         assert_eq!(result.records.len(), 1);
     }
+
+    // ========== Additional Embedded Client Coverage Tests ==========
+
+    #[test]
+    fn test_embedded_default() {
+        let client = EmbeddedClient::default();
+        // Default should produce a valid, empty client
+        let store = client.store();
+        assert!(Arc::strong_count(store) >= 1);
+    }
+
+    #[tokio::test]
+    async fn test_embedded_store_read() {
+        let client = EmbeddedClient::new();
+        client.query("default", r#"CREATE (n:Person {name: "Alice"})"#)
+            .await.unwrap();
+
+        let guard = client.store_read().await;
+        assert_eq!(guard.node_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_embedded_store_write() {
+        let client = EmbeddedClient::new();
+        {
+            let mut guard = client.store_write().await;
+            let id = guard.create_node("Person");
+            if let Some(node) = guard.get_node_mut(id) {
+                node.set_property("name", "DirectWrite");
+            }
+        }
+
+        let result = client.query_readonly("default", "MATCH (n:Person) RETURN n.name")
+            .await.unwrap();
+        assert_eq!(result.records.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_embedded_tenant_manager() {
+        let client = EmbeddedClient::new();
+        let tm = client.tenant_manager();
+        let tenants = tm.list_tenants();
+        // Default tenant should exist
+        assert!(!tenants.is_empty());
+        assert!(tm.is_tenant_enabled("default"));
+    }
+
+    #[tokio::test]
+    async fn test_embedded_cache_stats() {
+        let client = EmbeddedClient::new();
+        let stats = client.cache_stats();
+        // Initially no queries, so hits should be 0
+        assert_eq!(stats.hits(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_embedded_cache_stats_after_queries() {
+        let client = EmbeddedClient::new();
+        client.query("default", r#"CREATE (n:Person {name: "Alice"})"#)
+            .await.unwrap();
+        // Same query twice should potentially hit cache
+        client.query_readonly("default", "MATCH (n:Person) RETURN n.name")
+            .await.unwrap();
+        client.query_readonly("default", "MATCH (n:Person) RETURN n.name")
+            .await.unwrap();
+
+        let stats = client.cache_stats();
+        // At least one miss for the first time, then a hit
+        assert!(stats.hits() + stats.misses() >= 2);
+    }
+
+    #[tokio::test]
+    async fn test_embedded_query_readonly_error() {
+        let client = EmbeddedClient::new();
+        // Invalid Cypher syntax should produce an error
+        let result = client.query_readonly("default", "INVALID SYNTAX !!!").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_embedded_query_write_error() {
+        let client = EmbeddedClient::new();
+        // Invalid write query should produce an error
+        let result = client.query("default", "CREATE INVALID").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_embedded_version_in_status() {
+        let client = EmbeddedClient::new();
+        let status = client.status().await.unwrap();
+        // Version should be non-empty
+        assert!(!status.version.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_embedded_query_returns_nodes() {
+        let client = EmbeddedClient::new();
+        client.query("default", r#"CREATE (n:Person {name: "Alice", age: 30})"#)
+            .await.unwrap();
+
+        let result = client.query_readonly("default", "MATCH (n:Person) RETURN n")
+            .await.unwrap();
+        assert_eq!(result.records.len(), 1);
+        assert!(!result.nodes.is_empty());
+        // Check that the node has properties
+        let node = &result.nodes[0];
+        assert!(node.labels.contains(&"Person".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_embedded_query_returns_edges() {
+        let client = EmbeddedClient::new();
+        client.query("default",
+            r#"CREATE (a:Person {name: "Alice"})-[:KNOWS {since: 2020}]->(b:Person {name: "Bob"})"#
+        ).await.unwrap();
+
+        let result = client.query_readonly("default",
+            "MATCH (a)-[r:KNOWS]->(b) RETURN r"
+        ).await.unwrap();
+        assert_eq!(result.records.len(), 1);
+        assert!(!result.edges.is_empty());
+        let edge = &result.edges[0];
+        assert_eq!(edge.edge_type, "KNOWS");
+    }
+
+    #[tokio::test]
+    async fn test_embedded_query_returns_null() {
+        let client = EmbeddedClient::new();
+        client.query("default", r#"CREATE (n:Person {name: "Alice"})"#)
+            .await.unwrap();
+
+        // Query for a property that does not exist
+        let result = client.query_readonly("default", "MATCH (n:Person) RETURN n.missing")
+            .await.unwrap();
+        assert_eq!(result.records.len(), 1);
+        // The value should be JSON null
+        assert_eq!(result.records[0][0], serde_json::Value::Null);
+    }
+
+    #[tokio::test]
+    async fn test_embedded_multiple_writes_and_reads() {
+        let client = EmbeddedClient::new();
+
+        for i in 0..5 {
+            client.query("default",
+                &format!(r#"CREATE (n:Item {{id: {}}})"#, i)
+            ).await.unwrap();
+        }
+
+        let result = client.query_readonly("default", "MATCH (n:Item) RETURN n.id")
+            .await.unwrap();
+        assert_eq!(result.records.len(), 5);
+    }
+
+    #[tokio::test]
+    async fn test_embedded_delete_graph_and_recreate() {
+        let client = EmbeddedClient::new();
+
+        client.query("default", r#"CREATE (n:Person {name: "Alice"})"#)
+            .await.unwrap();
+        assert_eq!(client.status().await.unwrap().storage.nodes, 1);
+
+        client.delete_graph("default").await.unwrap();
+        assert_eq!(client.status().await.unwrap().storage.nodes, 0);
+
+        // Recreate
+        client.query("default", r#"CREATE (n:Person {name: "Bob"})"#)
+            .await.unwrap();
+        assert_eq!(client.status().await.unwrap().storage.nodes, 1);
+    }
+
+    #[tokio::test]
+    async fn test_embedded_with_store_shares_state() {
+        let store = Arc::new(RwLock::new(GraphStore::new()));
+        let client = EmbeddedClient::with_store(Arc::clone(&store));
+
+        client.query("default", r#"CREATE (n:Person {name: "Alice"})"#)
+            .await.unwrap();
+
+        // Store should reflect the changes made via client
+        let guard = store.read().await;
+        assert_eq!(guard.node_count(), 1);
+    }
+
+    #[test]
+    fn test_is_write_query_variants() {
+        assert!(is_write_query("CREATE (n:Person)"));
+        assert!(is_write_query("DELETE n"));
+        assert!(is_write_query("SET n.name = 'x'"));
+        assert!(is_write_query("MERGE (n:Person)"));
+        assert!(is_write_query("CALL db.something()"));
+        assert!(is_write_query("MATCH (n) CREATE (m)"));
+        assert!(is_write_query("MATCH (n) DELETE n"));
+        assert!(is_write_query("MATCH (n) SET n.x = 1"));
+        assert!(is_write_query("MATCH (n) MERGE (m)"));
+        assert!(is_write_query("MATCH (n) CALL db.x()"));
+
+        assert!(!is_write_query("MATCH (n) RETURN n"));
+        assert!(!is_write_query("MATCH (n:Person) RETURN n.name"));
+        assert!(!is_write_query("RETURN 1 + 2"));
+    }
+
+    #[tokio::test]
+    async fn test_embedded_query_property_values() {
+        let client = EmbeddedClient::new();
+        client.query("default",
+            r#"CREATE (n:Person {name: "Alice", age: 30, score: 95.5, active: true})"#
+        ).await.unwrap();
+
+        let result = client.query_readonly("default",
+            "MATCH (n:Person) RETURN n.name, n.age, n.score, n.active"
+        ).await.unwrap();
+        assert_eq!(result.records.len(), 1);
+        assert_eq!(result.columns.len(), 4);
+    }
+
+    #[tokio::test]
+    async fn test_embedded_store_accessor() {
+        let client = EmbeddedClient::new();
+        let store_ref = client.store();
+        // Should be able to clone the Arc
+        let _cloned = Arc::clone(store_ref);
+        assert!(Arc::strong_count(store_ref) >= 2);
+    }
 }

@@ -210,4 +210,176 @@ mod tests {
         let result = NLQPipeline::extract_cypher(input);
         assert_eq!(result, "MATCH (n) RETURN n");
     }
+
+    // ========== Coverage batch: additional NLQ pipeline tests ==========
+
+    #[test]
+    fn test_pipeline_creation_with_mock() {
+        let pipeline = make_pipeline();
+        // Just verify it was created successfully (constructor exercises NLQClient::new)
+        assert!(pipeline.is_safe_query("MATCH (n) RETURN n"));
+    }
+
+    #[test]
+    fn test_is_safe_query_call_prefix() {
+        let pipeline = make_pipeline();
+        assert!(pipeline.is_safe_query("CALL algo.pageRank({}) YIELD node"));
+        assert!(pipeline.is_safe_query("CALL db.labels()"));
+    }
+
+    #[test]
+    fn test_is_safe_query_with_prefix() {
+        let pipeline = make_pipeline();
+        assert!(pipeline.is_safe_query("WITH 1 AS x MATCH (n) RETURN n"));
+    }
+
+    #[test]
+    fn test_is_safe_query_return_only() {
+        let pipeline = make_pipeline();
+        assert!(pipeline.is_safe_query("RETURN 42"));
+        assert!(pipeline.is_safe_query("RETURN datetime()"));
+    }
+
+    #[test]
+    fn test_is_safe_query_rejects_create() {
+        let pipeline = make_pipeline();
+        assert!(!pipeline.is_safe_query("CREATE (:Person {name: 'Eve'})"));
+    }
+
+    #[test]
+    fn test_is_safe_query_rejects_drop() {
+        let pipeline = make_pipeline();
+        assert!(!pipeline.is_safe_query("DROP INDEX myIdx"));
+    }
+
+    #[test]
+    fn test_is_safe_query_rejects_set_at_start() {
+        let pipeline = make_pipeline();
+        assert!(!pipeline.is_safe_query("SET n.name = 'test'"));
+    }
+
+    #[test]
+    fn test_is_safe_query_rejects_remove_at_start() {
+        let pipeline = make_pipeline();
+        assert!(!pipeline.is_safe_query("REMOVE n.age"));
+    }
+
+    #[test]
+    fn test_is_safe_query_whitespace_handling() {
+        let pipeline = make_pipeline();
+        assert!(pipeline.is_safe_query("  MATCH (n) RETURN n  "));
+        assert!(pipeline.is_safe_query("  RETURN 1  "));
+    }
+
+    #[test]
+    fn test_is_safe_query_empty_string() {
+        let pipeline = make_pipeline();
+        assert!(!pipeline.is_safe_query(""));
+    }
+
+    #[test]
+    fn test_extract_cypher_multiple_fenced_blocks() {
+        // extract_cypher should return the first fenced code block
+        let input = "First block:\n```cypher\nMATCH (a) RETURN a\n```\nSecond:\n```cypher\nMATCH (b) RETURN b\n```";
+        let result = NLQPipeline::extract_cypher(input);
+        assert_eq!(result, "MATCH (a) RETURN a");
+    }
+
+    #[test]
+    fn test_extract_cypher_fenced_without_closing() {
+        // If there's no closing ```, the fallback should handle it
+        let input = "Here:\n```cypher\nMATCH (n) RETURN n";
+        let result = NLQPipeline::extract_cypher(input);
+        // With no closing ```, fallback to line-based extraction
+        assert!(result.contains("MATCH"));
+        assert!(result.contains("RETURN"));
+    }
+
+    #[test]
+    fn test_extract_cypher_only_non_cypher_text() {
+        // No cypher keywords at line starts => fallback to trimmed input
+        let input = "I think you should look at the data.";
+        let result = NLQPipeline::extract_cypher(input);
+        assert_eq!(result, "I think you should look at the data.");
+    }
+
+    #[test]
+    fn test_extract_cypher_unwind_at_start() {
+        let input = "UNWIND range(1, 10) AS i\nRETURN i";
+        let result = NLQPipeline::extract_cypher(input);
+        assert!(result.contains("UNWIND"));
+        assert!(result.contains("RETURN"));
+    }
+
+    #[test]
+    fn test_extract_cypher_call_at_start() {
+        let input = "CALL db.labels()";
+        let result = NLQPipeline::extract_cypher(input);
+        assert!(result.contains("CALL"));
+    }
+
+    #[test]
+    fn test_extract_cypher_with_clause_lines() {
+        let input = "MATCH (n:Person)\nWITH n.city AS city\nRETURN city";
+        let result = NLQPipeline::extract_cypher(input);
+        assert!(result.contains("MATCH"));
+        assert!(result.contains("WITH"));
+        assert!(result.contains("RETURN"));
+    }
+
+    #[tokio::test]
+    async fn test_text_to_cypher_with_mock() {
+        let pipeline = make_pipeline();
+        let schema = "Labels: Person, Company\nRelationships: WORKS_AT";
+        let result = pipeline.text_to_cypher("Find all people", schema).await;
+        // Mock returns "MATCH (n) RETURN n LIMIT 10", which starts with MATCH => safe
+        assert!(result.is_ok());
+        let cypher = result.unwrap();
+        assert!(cypher.contains("MATCH"));
+    }
+
+    #[tokio::test]
+    async fn test_text_to_cypher_validates_safety() {
+        // The mock always returns "MATCH (n) RETURN n LIMIT 10" which is safe
+        // We can only test that the pipeline works end-to-end with mock
+        let pipeline = make_pipeline();
+        let result = pipeline.text_to_cypher("test question", "schema").await;
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_extract_cypher_plain_fence_no_lang_tag() {
+        let input = "```\nRETURN 42\n```";
+        let result = NLQPipeline::extract_cypher(input);
+        assert_eq!(result, "RETURN 42");
+    }
+
+    #[test]
+    fn test_extract_cypher_mixed_case_keywords() {
+        let input = "match (n:Person)\nwhere n.age > 30\nreturn n.name";
+        let result = NLQPipeline::extract_cypher(input);
+        // Keywords are checked case-insensitively (via to_uppercase)
+        assert!(result.contains("match") || result.contains("MATCH"));
+    }
+
+    #[test]
+    fn test_nlq_pipeline_new_with_different_providers() {
+        // Test with OpenAI provider
+        let config = NLQConfig {
+            enabled: true,
+            provider: LLMProvider::OpenAI,
+            model: "gpt-4".to_string(),
+            api_key: Some("sk-test".to_string()),
+            api_base_url: None,
+            system_prompt: None,
+        };
+        let pipeline = NLQPipeline::new(config);
+        assert!(pipeline.is_ok());
+    }
+
+    #[test]
+    fn test_is_safe_query_unwind_prefix() {
+        let pipeline = make_pipeline();
+        assert!(pipeline.is_safe_query("UNWIND [1,2,3] AS x RETURN x"));
+    }
 }

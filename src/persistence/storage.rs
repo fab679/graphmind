@@ -444,4 +444,252 @@ mod tests {
         let nodes = storage.scan_nodes("default").unwrap();
         assert_eq!(nodes.len(), 5);
     }
+
+    // ========== Additional Storage Coverage Tests ==========
+
+    #[test]
+    fn test_get_node_not_found() {
+        let temp_dir = TempDir::new().unwrap();
+        let storage = PersistentStorage::open(temp_dir.path()).unwrap();
+
+        let result = storage.get_node("default", 999).unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_put_get_edge() {
+        let temp_dir = TempDir::new().unwrap();
+        let storage = PersistentStorage::open(temp_dir.path()).unwrap();
+
+        let mut edge = Edge::new(
+            EdgeId::new(1),
+            NodeId::new(10),
+            NodeId::new(20),
+            crate::graph::EdgeType::new("KNOWS"),
+        );
+        edge.set_property("since", "2020");
+
+        storage.put_edge("default", &edge).unwrap();
+
+        let retrieved = storage.get_edge("default", 1).unwrap();
+        assert!(retrieved.is_some());
+        let retrieved_edge = retrieved.unwrap();
+        assert_eq!(retrieved_edge.id, EdgeId::new(1));
+        assert_eq!(retrieved_edge.source, NodeId::new(10));
+        assert_eq!(retrieved_edge.target, NodeId::new(20));
+        assert_eq!(retrieved_edge.edge_type.as_str(), "KNOWS");
+    }
+
+    #[test]
+    fn test_get_edge_not_found() {
+        let temp_dir = TempDir::new().unwrap();
+        let storage = PersistentStorage::open(temp_dir.path()).unwrap();
+
+        let result = storage.get_edge("default", 999).unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_delete_node() {
+        let temp_dir = TempDir::new().unwrap();
+        let storage = PersistentStorage::open(temp_dir.path()).unwrap();
+
+        let node = Node::new(NodeId::new(1), Label::new("Person"));
+        storage.put_node("default", &node).unwrap();
+        assert!(storage.get_node("default", 1).unwrap().is_some());
+
+        storage.delete_node("default", 1).unwrap();
+        assert!(storage.get_node("default", 1).unwrap().is_none());
+    }
+
+    #[test]
+    fn test_delete_edge() {
+        let temp_dir = TempDir::new().unwrap();
+        let storage = PersistentStorage::open(temp_dir.path()).unwrap();
+
+        let edge = Edge::new(
+            EdgeId::new(1),
+            NodeId::new(10),
+            NodeId::new(20),
+            crate::graph::EdgeType::new("KNOWS"),
+        );
+        storage.put_edge("default", &edge).unwrap();
+        assert!(storage.get_edge("default", 1).unwrap().is_some());
+
+        storage.delete_edge("default", 1).unwrap();
+        assert!(storage.get_edge("default", 1).unwrap().is_none());
+    }
+
+    #[test]
+    fn test_delete_nonexistent_node() {
+        let temp_dir = TempDir::new().unwrap();
+        let storage = PersistentStorage::open(temp_dir.path()).unwrap();
+
+        // Deleting a non-existent node should not error (RocksDB delete is idempotent)
+        let result = storage.delete_node("default", 999);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_delete_nonexistent_edge() {
+        let temp_dir = TempDir::new().unwrap();
+        let storage = PersistentStorage::open(temp_dir.path()).unwrap();
+
+        let result = storage.delete_edge("default", 999);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_scan_edges() {
+        let temp_dir = TempDir::new().unwrap();
+        let storage = PersistentStorage::open(temp_dir.path()).unwrap();
+
+        for i in 1..=3 {
+            let edge = Edge::new(
+                EdgeId::new(i),
+                NodeId::new(i * 10),
+                NodeId::new(i * 10 + 1),
+                crate::graph::EdgeType::new("REL"),
+            );
+            storage.put_edge("default", &edge).unwrap();
+        }
+
+        let edges = storage.scan_edges("default").unwrap();
+        assert_eq!(edges.len(), 3);
+    }
+
+    #[test]
+    fn test_scan_nodes_empty_tenant() {
+        let temp_dir = TempDir::new().unwrap();
+        let storage = PersistentStorage::open(temp_dir.path()).unwrap();
+
+        let nodes = storage.scan_nodes("empty_tenant").unwrap();
+        assert!(nodes.is_empty());
+    }
+
+    #[test]
+    fn test_scan_edges_empty_tenant() {
+        let temp_dir = TempDir::new().unwrap();
+        let storage = PersistentStorage::open(temp_dir.path()).unwrap();
+
+        let edges = storage.scan_edges("empty_tenant").unwrap();
+        assert!(edges.is_empty());
+    }
+
+    #[test]
+    fn test_flush() {
+        let temp_dir = TempDir::new().unwrap();
+        let storage = PersistentStorage::open(temp_dir.path()).unwrap();
+
+        let node = Node::new(NodeId::new(1), Label::new("Person"));
+        storage.put_node("default", &node).unwrap();
+
+        let result = storage.flush();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_create_snapshot() {
+        let temp_dir = TempDir::new().unwrap();
+        let storage = PersistentStorage::open(temp_dir.path()).unwrap();
+
+        let node = Node::new(NodeId::new(1), Label::new("Person"));
+        storage.put_node("default", &node).unwrap();
+
+        // Just ensure it doesn't panic
+        let _snapshot = storage.create_snapshot();
+    }
+
+    #[test]
+    fn test_list_persisted_tenants() {
+        let temp_dir = TempDir::new().unwrap();
+        let storage = PersistentStorage::open(temp_dir.path()).unwrap();
+
+        // Initially empty
+        let tenants = storage.list_persisted_tenants().unwrap();
+        assert!(tenants.is_empty());
+
+        // Add data for two tenants
+        let node1 = Node::new(NodeId::new(1), Label::new("A"));
+        storage.put_node("tenant_a", &node1).unwrap();
+
+        let node2 = Node::new(NodeId::new(2), Label::new("B"));
+        storage.put_node("tenant_b", &node2).unwrap();
+
+        let tenants = storage.list_persisted_tenants().unwrap();
+        assert!(tenants.len() >= 2);
+        assert!(tenants.contains(&"tenant_a".to_string()));
+        assert!(tenants.contains(&"tenant_b".to_string()));
+    }
+
+    #[test]
+    fn test_node_with_multiple_labels() {
+        let temp_dir = TempDir::new().unwrap();
+        let storage = PersistentStorage::open(temp_dir.path()).unwrap();
+
+        let mut node = Node::new(NodeId::new(1), Label::new("Person"));
+        node.add_label(Label::new("Employee"));
+        node.add_label(Label::new("Manager"));
+
+        storage.put_node("default", &node).unwrap();
+
+        let retrieved = storage.get_node("default", 1).unwrap().unwrap();
+        assert_eq!(retrieved.labels.len(), 3);
+    }
+
+    #[test]
+    fn test_overwrite_node() {
+        let temp_dir = TempDir::new().unwrap();
+        let storage = PersistentStorage::open(temp_dir.path()).unwrap();
+
+        let mut node = Node::new(NodeId::new(1), Label::new("Person"));
+        node.set_property("name", "Alice");
+        storage.put_node("default", &node).unwrap();
+
+        // Overwrite with different property
+        let mut node2 = Node::new(NodeId::new(1), Label::new("Person"));
+        node2.set_property("name", "Bob");
+        storage.put_node("default", &node2).unwrap();
+
+        let retrieved = storage.get_node("default", 1).unwrap().unwrap();
+        assert_eq!(
+            retrieved.get_property("name").unwrap().as_string().unwrap(),
+            "Bob"
+        );
+    }
+
+    #[test]
+    fn test_tenant_isolation_edges() {
+        let temp_dir = TempDir::new().unwrap();
+        let storage = PersistentStorage::open(temp_dir.path()).unwrap();
+
+        let edge = Edge::new(
+            EdgeId::new(1),
+            NodeId::new(10),
+            NodeId::new(20),
+            crate::graph::EdgeType::new("KNOWS"),
+        );
+
+        storage.put_edge("tenant1", &edge).unwrap();
+        storage.put_edge("tenant2", &edge).unwrap();
+
+        assert!(storage.get_edge("tenant1", 1).unwrap().is_some());
+        assert!(storage.get_edge("tenant2", 1).unwrap().is_some());
+
+        storage.delete_edge("tenant1", 1).unwrap();
+        assert!(storage.get_edge("tenant1", 1).unwrap().is_none());
+        assert!(storage.get_edge("tenant2", 1).unwrap().is_some());
+    }
+
+    #[test]
+    fn test_storage_error_display() {
+        let err = StorageError::NotFound("test_key".to_string());
+        let msg = format!("{}", err);
+        assert!(msg.contains("Key not found"));
+        assert!(msg.contains("test_key"));
+
+        let err2 = StorageError::ColumnFamily("nodes".to_string());
+        let msg2 = format!("{}", err2);
+        assert!(msg2.contains("Column family error"));
+    }
 }

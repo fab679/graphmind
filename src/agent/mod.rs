@@ -75,3 +75,60 @@ impl AgentRuntime {
         Ok(response)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::persistence::tenant::LLMProvider;
+
+    fn mock_agent_config() -> AgentConfig {
+        AgentConfig {
+            enabled: true,
+            provider: LLMProvider::Mock,
+            model: "mock-model".to_string(),
+            api_key: None,
+            api_base_url: None,
+            system_prompt: None,
+            tools: vec![],
+            policies: std::collections::HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn test_agent_runtime_new() {
+        let config = mock_agent_config();
+        let runtime = AgentRuntime::new(config);
+        assert!(runtime.tools.is_empty());
+    }
+
+    #[test]
+    fn test_register_tool() {
+        let config = mock_agent_config();
+        let mut runtime = AgentRuntime::new(config);
+
+        // Create and register WebSearchTool
+        let tool = Arc::new(tools::WebSearchTool::new("test-key".to_string()));
+        runtime.register_tool(tool);
+        assert_eq!(runtime.tools.len(), 1);
+        assert!(runtime.tools.contains_key("web_search"));
+    }
+
+    #[test]
+    fn test_to_nlq_config() {
+        let config = mock_agent_config();
+        let nlq_config = AgentRuntime::to_nlq_config(&config);
+        assert!(nlq_config.enabled);
+        assert_eq!(nlq_config.provider, LLMProvider::Mock);
+        assert_eq!(nlq_config.model, "mock-model");
+    }
+
+    #[tokio::test]
+    async fn test_process_trigger_mock() {
+        let config = mock_agent_config();
+        let runtime = AgentRuntime::new(config);
+        let result = runtime.process_trigger("Find all persons", "context").await;
+        assert!(result.is_ok());
+        let cypher = result.unwrap();
+        assert!(cypher.contains("MATCH")); // Mock returns "MATCH (n) RETURN n LIMIT 10"
+    }
+}

@@ -56,8 +56,9 @@ spargebra = "0.3"          # SPARQL 1.1 parser
 sparesults = "0.2"         # SPARQL results formats
 # HTTP server (for SPARQL endpoint and Visualizer)
 axum = "0.7"               # HTTP framework for SPARQL endpoint
-tower = "0.4"              # Middleware
+tower = { version = "0.5", features = ["util"] }  # Middleware
 tower-http = { version = "0.5", features = ["fs", "cors"] }
+http-body-util = "0.1"     # Body utilities for HTTP testing
 rust-embed = "8.0"         # Embed static assets in binary
 percent-encoding = "2.3"   # URL encoding
 mime = "0.3"               # MIME types
@@ -78,6 +79,7 @@ reqwest = { version = "0.13.1", features = ["json"] }
 tempfile = "3.8"
 criterion = "0.5"
 samyama-sdk = { path = "crates/samyama-sdk", version = "0.6.0" }
+http-body-util = "0.1"
 
 [[bench]]
 name = "graph_benchmarks"

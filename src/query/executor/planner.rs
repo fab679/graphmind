@@ -1323,4 +1323,845 @@ mod tests {
         let plan = result.unwrap();
         assert_eq!(plan.output_columns.len(), 2);
     }
+
+    // ========== Batch 5: Additional Planner Tests ==========
+
+    #[test]
+    fn test_plan_create_only() {
+        let store = GraphStore::new();
+        let planner = QueryPlanner::new();
+
+        let query = parse_query("CREATE (n:Person {name: 'Alice'})").unwrap();
+        let result = planner.plan(&query, &store);
+        assert!(result.is_ok(), "Planner failed for CREATE: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_plan_delete() {
+        let store = GraphStore::new();
+        let planner = QueryPlanner::new();
+
+        let query = parse_query("MATCH (n:Person) DELETE n").unwrap();
+        let result = planner.plan(&query, &store);
+        assert!(result.is_ok(), "Planner failed for DELETE: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_plan_set() {
+        let store = GraphStore::new();
+        let planner = QueryPlanner::new();
+
+        let query = parse_query("MATCH (n:Person) SET n.age = 30 RETURN n").unwrap();
+        let result = planner.plan(&query, &store);
+        assert!(result.is_ok(), "Planner failed for SET: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_plan_merge() {
+        let store = GraphStore::new();
+        let planner = QueryPlanner::new();
+
+        let query = parse_query("MERGE (n:Person {name: 'Alice'})").unwrap();
+        let result = planner.plan(&query, &store);
+        assert!(result.is_ok(), "Planner failed for MERGE: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_plan_unwind() {
+        let store = GraphStore::new();
+        let planner = QueryPlanner::new();
+
+        let query = parse_query("MATCH (n) UNWIND [1,2,3] AS x RETURN x").unwrap();
+        let result = planner.plan(&query, &store);
+        assert!(result.is_ok(), "Planner failed for UNWIND: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_plan_union() {
+        let store = GraphStore::new();
+        let planner = QueryPlanner::new();
+
+        let query = parse_query("MATCH (n:Person) RETURN n.name UNION ALL MATCH (m:Company) RETURN m.name").unwrap();
+        let result = planner.plan(&query, &store);
+        assert!(result.is_ok(), "Planner failed for UNION: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_plan_optional_match() {
+        let store = GraphStore::new();
+        let planner = QueryPlanner::new();
+
+        let query = parse_query("MATCH (n:Person) OPTIONAL MATCH (n)-[:KNOWS]->(m) RETURN n, m").unwrap();
+        let result = planner.plan(&query, &store);
+        assert!(result.is_ok(), "Planner failed for OPTIONAL MATCH: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_plan_explain() {
+        let store = GraphStore::new();
+        let planner = QueryPlanner::new();
+
+        let query = parse_query("EXPLAIN MATCH (n:Person) RETURN n").unwrap();
+        let result = planner.plan(&query, &store);
+        assert!(result.is_ok(), "Planner failed for EXPLAIN: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_plan_profile() {
+        let store = GraphStore::new();
+        let planner = QueryPlanner::new();
+
+        let query = parse_query("PROFILE MATCH (n:Person) RETURN n").unwrap();
+        let result = planner.plan(&query, &store);
+        assert!(result.is_ok(), "Planner failed for PROFILE: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_plan_aggregation() {
+        let store = GraphStore::new();
+        let planner = QueryPlanner::new();
+
+        let query = parse_query("MATCH (n:Person) RETURN n.city, count(n) AS cnt").unwrap();
+        let result = planner.plan(&query, &store);
+        assert!(result.is_ok(), "Planner failed for aggregation: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_plan_order_by_limit() {
+        let store = GraphStore::new();
+        let planner = QueryPlanner::new();
+
+        let query = parse_query("MATCH (n:Person) RETURN n ORDER BY n.name LIMIT 5").unwrap();
+        let result = planner.plan(&query, &store);
+        assert!(result.is_ok(), "Planner failed for ORDER BY + LIMIT: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_plan_distinct() {
+        let store = GraphStore::new();
+        let planner = QueryPlanner::new();
+
+        let query = parse_query("MATCH (n:Person) RETURN DISTINCT n.name").unwrap();
+        let result = planner.plan(&query, &store);
+        assert!(result.is_ok(), "Planner failed for DISTINCT: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_plan_with_clause() {
+        let store = GraphStore::new();
+        let planner = QueryPlanner::new();
+
+        let query = parse_query("MATCH (n:Person) WITH n.name AS name RETURN name").unwrap();
+        let result = planner.plan(&query, &store);
+        assert!(result.is_ok(), "Planner failed for WITH: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_plan_create_index() {
+        let store = GraphStore::new();
+        let planner = QueryPlanner::new();
+
+        let query = parse_query("CREATE INDEX ON :Person(name)").unwrap();
+        let result = planner.plan(&query, &store);
+        assert!(result.is_ok(), "Planner failed for CREATE INDEX: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_plan_drop_index() {
+        let store = GraphStore::new();
+        let planner = QueryPlanner::new();
+
+        let query = parse_query("DROP INDEX ON :Person(name)").unwrap();
+        let result = planner.plan(&query, &store);
+        assert!(result.is_ok(), "Planner failed for DROP INDEX: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_plan_show_indexes() {
+        let store = GraphStore::new();
+        let planner = QueryPlanner::new();
+
+        let query = parse_query("SHOW INDEXES").unwrap();
+        let result = planner.plan(&query, &store);
+        assert!(result.is_ok(), "Planner failed for SHOW INDEXES: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_plan_show_constraints() {
+        let store = GraphStore::new();
+        let planner = QueryPlanner::new();
+
+        let query = parse_query("SHOW CONSTRAINTS").unwrap();
+        let result = planner.plan(&query, &store);
+        assert!(result.is_ok(), "Planner failed for SHOW CONSTRAINTS: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_plan_create_constraint() {
+        let store = GraphStore::new();
+        let planner = QueryPlanner::new();
+
+        let query = parse_query("CREATE CONSTRAINT ON (n:Person) ASSERT n.email IS UNIQUE").unwrap();
+        let result = planner.plan(&query, &store);
+        assert!(result.is_ok(), "Planner failed for CREATE CONSTRAINT: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_plan_call_algorithm() {
+        let store = GraphStore::new();
+        let planner = QueryPlanner::new();
+
+        let query = parse_query("CALL algo.pageRank({maxIterations: 20}) YIELD node, score").unwrap();
+        let result = planner.plan(&query, &store);
+        assert!(result.is_ok(), "Planner failed for CALL algo: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_plan_multiple_return_items() {
+        let store = GraphStore::new();
+        let planner = QueryPlanner::new();
+
+        let query = parse_query("MATCH (n:Person) RETURN n.name, n.age, id(n)").unwrap();
+        let result = planner.plan(&query, &store);
+        assert!(result.is_ok());
+        let plan = result.unwrap();
+        assert_eq!(plan.output_columns.len(), 3);
+    }
+
+    #[test]
+    fn test_plan_with_populated_store() {
+        let mut store = GraphStore::new();
+        // Populate with data so statistics-based planning kicks in
+        for i in 0..100 {
+            let id = store.create_node("Person");
+            store.get_node_mut(id).unwrap().set_property(
+                "name".to_string(),
+                crate::graph::PropertyValue::String(format!("Person{}", i)),
+            );
+        }
+        for i in 0..20 {
+            let id = store.create_node("Company");
+            store.get_node_mut(id).unwrap().set_property(
+                "name".to_string(),
+                crate::graph::PropertyValue::String(format!("Company{}", i)),
+            );
+        }
+
+        let planner = QueryPlanner::new();
+        let query = parse_query("MATCH (n:Person) WHERE n.name = 'Person50' RETURN n").unwrap();
+        let result = planner.plan(&query, &store);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_plan_detach_delete() {
+        let store = GraphStore::new();
+        let planner = QueryPlanner::new();
+
+        let query = parse_query("MATCH (n:Person) DETACH DELETE n").unwrap();
+        let result = planner.plan(&query, &store);
+        assert!(result.is_ok(), "Planner failed for DETACH DELETE: {:?}", result.err());
+    }
+
+    // ========== Coverage Enhancement Tests ==========
+
+    #[test]
+    fn test_planner_default_impl() {
+        let planner = QueryPlanner::default();
+        let store = GraphStore::new();
+        let query = parse_query("MATCH (n) RETURN n").unwrap();
+        assert!(planner.plan(&query, &store).is_ok());
+    }
+
+    #[test]
+    fn test_plan_cache_invalidation() {
+        let planner = QueryPlanner::new();
+        let store = GraphStore::new();
+        // Plan a query to populate cache
+        let query = parse_query("MATCH (n:Person) RETURN n").unwrap();
+        planner.plan(&query, &store).unwrap();
+        // Invalidate should not cause errors
+        planner.invalidate_cache();
+        // Re-planning should still work
+        let result = planner.plan(&query, &store);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_plan_create_is_write() {
+        let store = GraphStore::new();
+        let planner = QueryPlanner::new();
+
+        let query = parse_query("CREATE (n:Person {name: 'Alice'})").unwrap();
+        let plan = planner.plan(&query, &store).unwrap();
+        assert!(plan.is_write, "CREATE should be a write plan");
+    }
+
+    #[test]
+    fn test_plan_delete_is_write() {
+        let store = GraphStore::new();
+        let planner = QueryPlanner::new();
+
+        let query = parse_query("MATCH (n:Person) DELETE n").unwrap();
+        let plan = planner.plan(&query, &store).unwrap();
+        assert!(plan.is_write, "DELETE should be a write plan");
+    }
+
+    #[test]
+    fn test_plan_set_is_write() {
+        let store = GraphStore::new();
+        let planner = QueryPlanner::new();
+
+        let query = parse_query("MATCH (n:Person) SET n.age = 30 RETURN n").unwrap();
+        let plan = planner.plan(&query, &store).unwrap();
+        assert!(plan.is_write, "SET should be a write plan");
+    }
+
+    #[test]
+    fn test_plan_merge_is_write() {
+        let store = GraphStore::new();
+        let planner = QueryPlanner::new();
+
+        let query = parse_query("MERGE (n:Person {name: 'Alice'})").unwrap();
+        let plan = planner.plan(&query, &store).unwrap();
+        assert!(plan.is_write, "MERGE should be a write plan");
+    }
+
+    #[test]
+    fn test_plan_read_is_not_write() {
+        let store = GraphStore::new();
+        let planner = QueryPlanner::new();
+
+        let query = parse_query("MATCH (n:Person) RETURN n").unwrap();
+        let plan = planner.plan(&query, &store).unwrap();
+        assert!(!plan.is_write, "MATCH...RETURN should not be a write plan");
+    }
+
+    #[test]
+    fn test_plan_create_index_is_write() {
+        let store = GraphStore::new();
+        let planner = QueryPlanner::new();
+
+        let query = parse_query("CREATE INDEX ON :Person(name)").unwrap();
+        let plan = planner.plan(&query, &store).unwrap();
+        assert!(plan.is_write, "CREATE INDEX should be a write plan");
+    }
+
+    #[test]
+    fn test_plan_drop_index_is_write() {
+        let store = GraphStore::new();
+        let planner = QueryPlanner::new();
+
+        let query = parse_query("DROP INDEX ON :Person(name)").unwrap();
+        let plan = planner.plan(&query, &store).unwrap();
+        assert!(plan.is_write, "DROP INDEX should be a write plan");
+    }
+
+    #[test]
+    fn test_plan_show_indexes_not_write() {
+        let store = GraphStore::new();
+        let planner = QueryPlanner::new();
+
+        let query = parse_query("SHOW INDEXES").unwrap();
+        let plan = planner.plan(&query, &store).unwrap();
+        assert!(!plan.is_write, "SHOW INDEXES should not be a write plan");
+        assert!(plan.output_columns.contains(&"label".to_string()));
+        assert!(plan.output_columns.contains(&"property".to_string()));
+        assert!(plan.output_columns.contains(&"type".to_string()));
+    }
+
+    #[test]
+    fn test_plan_show_constraints_not_write() {
+        let store = GraphStore::new();
+        let planner = QueryPlanner::new();
+
+        let query = parse_query("SHOW CONSTRAINTS").unwrap();
+        let plan = planner.plan(&query, &store).unwrap();
+        assert!(!plan.is_write, "SHOW CONSTRAINTS should not be a write plan");
+    }
+
+    #[test]
+    fn test_plan_constraint_is_write() {
+        let store = GraphStore::new();
+        let planner = QueryPlanner::new();
+
+        let query = parse_query("CREATE CONSTRAINT ON (n:Person) ASSERT n.email IS UNIQUE").unwrap();
+        let plan = planner.plan(&query, &store).unwrap();
+        assert!(plan.is_write, "CREATE CONSTRAINT should be a write plan");
+    }
+
+    #[test]
+    fn test_plan_create_with_edge() {
+        let store = GraphStore::new();
+        let planner = QueryPlanner::new();
+
+        let query = parse_query("CREATE (a:Person {name: 'Alice'})-[:KNOWS]->(b:Person {name: 'Bob'})").unwrap();
+        let plan = planner.plan(&query, &store).unwrap();
+        assert!(plan.is_write);
+        // Both variables should appear in output columns
+        assert!(plan.output_columns.contains(&"a".to_string()));
+        assert!(plan.output_columns.contains(&"b".to_string()));
+    }
+
+    #[test]
+    fn test_plan_match_create_edge() {
+        let store = GraphStore::new();
+        let planner = QueryPlanner::new();
+
+        let query = parse_query("MATCH (a:Person), (b:Company) CREATE (a)-[:WORKS_AT]->(b)").unwrap();
+        let result = planner.plan(&query, &store);
+        assert!(result.is_ok(), "MATCH...CREATE should plan: {:?}", result.err());
+        let plan = result.unwrap();
+        assert!(plan.is_write);
+    }
+
+    #[test]
+    fn test_plan_skip() {
+        let store = GraphStore::new();
+        let planner = QueryPlanner::new();
+
+        let query = parse_query("MATCH (n:Person) RETURN n SKIP 5").unwrap();
+        let result = planner.plan(&query, &store);
+        assert!(result.is_ok(), "SKIP should plan: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_plan_skip_and_limit() {
+        let store = GraphStore::new();
+        let planner = QueryPlanner::new();
+
+        let query = parse_query("MATCH (n:Person) RETURN n SKIP 5 LIMIT 10").unwrap();
+        let result = planner.plan(&query, &store);
+        assert!(result.is_ok(), "SKIP + LIMIT should plan: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_plan_remove_property() {
+        let store = GraphStore::new();
+        let planner = QueryPlanner::new();
+
+        let query = parse_query("MATCH (n:Person) REMOVE n.age RETURN n").unwrap();
+        let result = planner.plan(&query, &store);
+        assert!(result.is_ok(), "REMOVE should plan: {:?}", result.err());
+        let plan = result.unwrap();
+        assert!(plan.is_write, "REMOVE should be a write plan");
+    }
+
+    #[test]
+    fn test_plan_index_scan_selection() {
+        let mut store = GraphStore::new();
+        // Create nodes and an index so the planner can choose IndexScan
+        for i in 0..100 {
+            let id = store.create_node("Person");
+            store.set_node_property("default", id, "name", crate::graph::PropertyValue::String(format!("Person{}", i))).unwrap();
+        }
+        // Create a property index
+        store.property_index.create_index(crate::graph::Label::new("Person"), "name".to_string());
+
+        let planner = QueryPlanner::new();
+        let query = parse_query("MATCH (n:Person) WHERE n.name = 'Person50' RETURN n").unwrap();
+        let result = planner.plan(&query, &store);
+        assert!(result.is_ok(), "Index scan planning failed: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_plan_composite_create_index() {
+        let store = GraphStore::new();
+        let planner = QueryPlanner::new();
+
+        let query = parse_query("CREATE INDEX ON :Person(name, age)").unwrap();
+        let result = planner.plan(&query, &store);
+        assert!(result.is_ok(), "Composite CREATE INDEX should plan: {:?}", result.err());
+        let plan = result.unwrap();
+        assert!(plan.is_write);
+    }
+
+    #[test]
+    fn test_plan_multiple_match_cartesian_product() {
+        let store = GraphStore::new();
+        let planner = QueryPlanner::new();
+
+        // Two independent patterns produce CartesianProduct
+        let query = parse_query("MATCH (a:Person), (b:Company) RETURN a, b").unwrap();
+        let result = planner.plan(&query, &store);
+        assert!(result.is_ok(), "Multiple MATCH patterns should plan: {:?}", result.err());
+        let plan = result.unwrap();
+        assert_eq!(plan.output_columns.len(), 2);
+    }
+
+    #[test]
+    fn test_plan_optional_match_output_columns() {
+        let store = GraphStore::new();
+        let planner = QueryPlanner::new();
+
+        let query = parse_query("MATCH (n:Person) OPTIONAL MATCH (n)-[:KNOWS]->(m) RETURN n, m").unwrap();
+        let plan = planner.plan(&query, &store).unwrap();
+        assert_eq!(plan.output_columns.len(), 2);
+        assert!(plan.output_columns.contains(&"n".to_string()));
+        assert!(plan.output_columns.contains(&"m".to_string()));
+    }
+
+    #[test]
+    fn test_plan_with_aggregation() {
+        let store = GraphStore::new();
+        let planner = QueryPlanner::new();
+
+        let query = parse_query("MATCH (n:Person) WITH n.city AS city, count(n) AS cnt RETURN city, cnt").unwrap();
+        let result = planner.plan(&query, &store);
+        assert!(result.is_ok(), "WITH + aggregation should plan: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_plan_with_order_by_limit() {
+        let store = GraphStore::new();
+        let planner = QueryPlanner::new();
+
+        let query = parse_query("MATCH (n:Person) WITH n ORDER BY n.name LIMIT 10 RETURN n").unwrap();
+        let result = planner.plan(&query, &store);
+        assert!(result.is_ok(), "WITH ORDER BY LIMIT should plan: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_plan_with_distinct() {
+        let store = GraphStore::new();
+        let planner = QueryPlanner::new();
+
+        let query = parse_query("MATCH (n:Person) WITH DISTINCT n.city AS city RETURN city").unwrap();
+        let result = planner.plan(&query, &store);
+        assert!(result.is_ok(), "WITH DISTINCT should plan: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_plan_multiple_aggregations() {
+        let store = GraphStore::new();
+        let planner = QueryPlanner::new();
+
+        let query = parse_query("MATCH (n:Person) RETURN count(n) AS cnt, sum(n.age) AS total_age, avg(n.age) AS avg_age").unwrap();
+        let result = planner.plan(&query, &store);
+        assert!(result.is_ok(), "Multiple aggregations should plan: {:?}", result.err());
+        let plan = result.unwrap();
+        assert_eq!(plan.output_columns.len(), 3);
+        assert!(plan.output_columns.contains(&"cnt".to_string()));
+        assert!(plan.output_columns.contains(&"total_age".to_string()));
+        assert!(plan.output_columns.contains(&"avg_age".to_string()));
+    }
+
+    #[test]
+    fn test_plan_collect_aggregation() {
+        let store = GraphStore::new();
+        let planner = QueryPlanner::new();
+
+        let query = parse_query("MATCH (n:Person) RETURN collect(n.name) AS names").unwrap();
+        let result = planner.plan(&query, &store);
+        assert!(result.is_ok(), "collect() aggregation should plan: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_plan_min_max_aggregation() {
+        let store = GraphStore::new();
+        let planner = QueryPlanner::new();
+
+        let query = parse_query("MATCH (n:Person) RETURN min(n.age) AS youngest, max(n.age) AS oldest").unwrap();
+        let result = planner.plan(&query, &store);
+        assert!(result.is_ok(), "min/max aggregation should plan: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_plan_where_complex_and_chain() {
+        let store = GraphStore::new();
+        let planner = QueryPlanner::new();
+
+        let query = parse_query("MATCH (n:Person) WHERE n.age > 18 AND n.city = 'NYC' AND n.active = true RETURN n").unwrap();
+        let result = planner.plan(&query, &store);
+        assert!(result.is_ok(), "Complex AND chain WHERE should plan: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_plan_where_or_predicate() {
+        let store = GraphStore::new();
+        let planner = QueryPlanner::new();
+
+        let query = parse_query("MATCH (n:Person) WHERE n.age > 18 OR n.name = 'Admin' RETURN n").unwrap();
+        let result = planner.plan(&query, &store);
+        assert!(result.is_ok(), "OR predicate should plan: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_plan_no_match_no_create_errors() {
+        let store = GraphStore::new();
+        let planner = QueryPlanner::new();
+
+        // Build a query manually with no MATCH and no CREATE
+        let query = crate::query::ast::Query {
+            match_clauses: vec![],
+            where_clause: None,
+            return_clause: None,
+            create_clause: None,
+            order_by: None,
+            limit: None,
+            skip: None,
+            call_clause: None,
+            call_subquery: None,
+            delete_clause: None,
+            set_clauses: vec![],
+            remove_clauses: vec![],
+            with_clause: None,
+            create_vector_index_clause: None,
+            create_index_clause: None,
+            drop_index_clause: None,
+            create_constraint_clause: None,
+            show_indexes: false,
+            show_constraints: false,
+            profile: false,
+            params: std::collections::HashMap::new(),
+            foreach_clause: None,
+            unwind_clause: None,
+            merge_clause: None,
+            union_queries: vec![],
+            explain: false,
+            with_split_index: None,
+            post_with_where_clause: None,
+        };
+        let result = planner.plan(&query, &store);
+        assert!(result.is_err());
+        if let Err(e) = result {
+            let msg = format!("{}", e);
+            assert!(msg.contains("MATCH") || msg.contains("CALL") || msg.contains("CREATE"),
+                "Error should mention required clauses: {}", msg);
+        }
+    }
+
+    #[test]
+    fn test_plan_match_with_edge_variable() {
+        let store = GraphStore::new();
+        let planner = QueryPlanner::new();
+
+        let query = parse_query("MATCH (a:Person)-[r:KNOWS]->(b:Person) RETURN a, r, b").unwrap();
+        let result = planner.plan(&query, &store);
+        assert!(result.is_ok(), "Edge variable should plan: {:?}", result.err());
+        let plan = result.unwrap();
+        assert_eq!(plan.output_columns.len(), 3);
+    }
+
+    #[test]
+    fn test_plan_return_expressions() {
+        let store = GraphStore::new();
+        let planner = QueryPlanner::new();
+
+        let query = parse_query("MATCH (n:Person) RETURN n.name AS name, n.age AS age, id(n) AS node_id").unwrap();
+        let plan = planner.plan(&query, &store).unwrap();
+        assert_eq!(plan.output_columns, vec!["name", "age", "node_id"]);
+    }
+
+    #[test]
+    fn test_plan_return_without_alias() {
+        let store = GraphStore::new();
+        let planner = QueryPlanner::new();
+
+        let query = parse_query("MATCH (n:Person) RETURN n.name, n.age").unwrap();
+        let plan = planner.plan(&query, &store).unwrap();
+        // Without alias, the output column should be "variable.property"
+        assert!(plan.output_columns.contains(&"n.name".to_string()));
+        assert!(plan.output_columns.contains(&"n.age".to_string()));
+    }
+
+    #[test]
+    fn test_plan_no_return_clause() {
+        let store = GraphStore::new();
+        let planner = QueryPlanner::new();
+
+        // DELETE without RETURN — should still plan successfully
+        let query = parse_query("MATCH (n:Person) DELETE n").unwrap();
+        let plan = planner.plan(&query, &store).unwrap();
+        // Output columns come from MATCH variables
+        assert!(plan.output_columns.contains(&"n".to_string()));
+    }
+
+    #[test]
+    fn test_plan_order_by_with_aggregation() {
+        let store = GraphStore::new();
+        let planner = QueryPlanner::new();
+
+        let query = parse_query("MATCH (n:Person) RETURN n.city, count(n) AS cnt ORDER BY cnt").unwrap();
+        let result = planner.plan(&query, &store);
+        assert!(result.is_ok(), "ORDER BY with aggregation should plan: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_plan_unwind_with_return() {
+        let store = GraphStore::new();
+        let planner = QueryPlanner::new();
+
+        let query = parse_query("MATCH (n) UNWIND [1, 2, 3] AS x RETURN x, n").unwrap();
+        let result = planner.plan(&query, &store);
+        assert!(result.is_ok(), "UNWIND with RETURN should plan: {:?}", result.err());
+        let plan = result.unwrap();
+        assert!(plan.output_columns.contains(&"x".to_string()));
+        assert!(plan.output_columns.contains(&"n".to_string()));
+    }
+
+    #[test]
+    fn test_plan_merge_with_return() {
+        let store = GraphStore::new();
+        let planner = QueryPlanner::new();
+
+        let query = parse_query("MERGE (n:Person {name: 'Alice'}) RETURN n").unwrap();
+        let result = planner.plan(&query, &store);
+        assert!(result.is_ok(), "MERGE with RETURN should plan: {:?}", result.err());
+        let plan = result.unwrap();
+        assert!(plan.is_write);
+        assert!(plan.output_columns.contains(&"n".to_string()));
+    }
+
+    #[test]
+    fn test_plan_with_where_filter() {
+        let store = GraphStore::new();
+        let planner = QueryPlanner::new();
+
+        let query = parse_query("MATCH (n:Person) WITH n WHERE n.age > 30 RETURN n").unwrap();
+        let result = planner.plan(&query, &store);
+        assert!(result.is_ok(), "WITH WHERE should plan: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_plan_with_skip() {
+        let store = GraphStore::new();
+        let planner = QueryPlanner::new();
+
+        let query = parse_query("MATCH (n:Person) WITH n SKIP 5 RETURN n").unwrap();
+        let result = planner.plan(&query, &store);
+        assert!(result.is_ok(), "WITH SKIP should plan: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_plan_with_resets_known_vars() {
+        let store = GraphStore::new();
+        let planner = QueryPlanner::new();
+
+        // WITH clause should project only selected variables
+        let query = parse_query("MATCH (n:Person) WITH n.name AS name RETURN name").unwrap();
+        let plan = planner.plan(&query, &store).unwrap();
+        assert!(plan.output_columns.contains(&"name".to_string()));
+    }
+
+    #[test]
+    fn test_plan_match_with_node_properties() {
+        let store = GraphStore::new();
+        let planner = QueryPlanner::new();
+
+        let query = parse_query("MATCH (n:Person {name: 'Alice'}) RETURN n").unwrap();
+        let result = planner.plan(&query, &store);
+        assert!(result.is_ok(), "Node with inline properties should plan: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_plan_edge_direction() {
+        let store = GraphStore::new();
+        let planner = QueryPlanner::new();
+
+        // Forward direction
+        let query = parse_query("MATCH (a:Person)-[:KNOWS]->(b:Person) RETURN a, b").unwrap();
+        assert!(planner.plan(&query, &store).is_ok());
+
+        // Backward direction
+        let query = parse_query("MATCH (a:Person)<-[:KNOWS]-(b:Person) RETURN a, b").unwrap();
+        assert!(planner.plan(&query, &store).is_ok());
+    }
+
+    #[test]
+    fn test_plan_multi_hop_path() {
+        let store = GraphStore::new();
+        let planner = QueryPlanner::new();
+
+        let query = parse_query("MATCH (a:Person)-[:KNOWS]->(b:Person)-[:LIVES_IN]->(c:City) RETURN a, b, c").unwrap();
+        let result = planner.plan(&query, &store);
+        assert!(result.is_ok(), "Multi-hop path should plan: {:?}", result.err());
+        let plan = result.unwrap();
+        assert_eq!(plan.output_columns.len(), 3);
+    }
+
+    #[test]
+    fn test_plan_index_scan_with_gt_operator() {
+        let mut store = GraphStore::new();
+        for i in 0..50 {
+            let id = store.create_node("Person");
+            store.set_node_property("default", id, "age", crate::graph::PropertyValue::Integer(i as i64)).unwrap();
+        }
+        store.property_index.create_index(crate::graph::Label::new("Person"), "age".to_string());
+
+        let planner = QueryPlanner::new();
+        let query = parse_query("MATCH (n:Person) WHERE n.age > 25 RETURN n").unwrap();
+        let result = planner.plan(&query, &store);
+        assert!(result.is_ok(), "Index scan with > should plan: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_plan_index_scan_with_lt_operator() {
+        let mut store = GraphStore::new();
+        for i in 0..50 {
+            let id = store.create_node("Person");
+            store.set_node_property("default", id, "age", crate::graph::PropertyValue::Integer(i as i64)).unwrap();
+        }
+        store.property_index.create_index(crate::graph::Label::new("Person"), "age".to_string());
+
+        let planner = QueryPlanner::new();
+        let query = parse_query("MATCH (n:Person) WHERE n.age < 25 RETURN n").unwrap();
+        let result = planner.plan(&query, &store);
+        assert!(result.is_ok(), "Index scan with < should plan: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_plan_cross_match_where_predicate() {
+        let store = GraphStore::new();
+        let planner = QueryPlanner::new();
+
+        // WHERE predicate references variables from different MATCH patterns
+        let query = parse_query("MATCH (a:Person), (b:Company) WHERE a.company = b.name RETURN a, b").unwrap();
+        let result = planner.plan(&query, &store);
+        assert!(result.is_ok(), "Cross-match WHERE should plan: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_plan_match_all_nodes() {
+        let store = GraphStore::new();
+        let planner = QueryPlanner::new();
+
+        // Match without label — all node scan
+        let query = parse_query("MATCH (n) RETURN n").unwrap();
+        let result = planner.plan(&query, &store);
+        assert!(result.is_ok(), "All-node scan should plan: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_plan_function_alias_generation() {
+        let store = GraphStore::new();
+        let planner = QueryPlanner::new();
+
+        // Function without alias should auto-generate column name
+        let query = parse_query("MATCH (n:Person) RETURN count(n)").unwrap();
+        let plan = planner.plan(&query, &store).unwrap();
+        assert_eq!(plan.output_columns.len(), 1);
+        // Auto-generated alias should be like "count(n)"
+        assert!(plan.output_columns[0].contains("count"));
+    }
+
+    #[test]
+    fn test_plan_collect_distinct() {
+        let store = GraphStore::new();
+        let planner = QueryPlanner::new();
+
+        let query = parse_query("MATCH (n:Person) RETURN collect(DISTINCT n.name) AS unique_names").unwrap();
+        let result = planner.plan(&query, &store);
+        assert!(result.is_ok(), "collect(DISTINCT) should plan: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_plan_with_multiple_aggregations() {
+        let store = GraphStore::new();
+        let planner = QueryPlanner::new();
+
+        let query = parse_query("MATCH (n:Person) WITH n.city AS city, count(n) AS cnt, collect(n.name) AS names RETURN city, cnt, names").unwrap();
+        let result = planner.plan(&query, &store);
+        assert!(result.is_ok(), "WITH multiple aggregations should plan: {:?}", result.err());
+    }
 }

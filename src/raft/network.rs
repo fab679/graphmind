@@ -250,4 +250,278 @@ mod tests {
         let response = network.send(2, message).await;
         assert!(response.is_ok());
     }
+
+    // ========== Additional Network Coverage Tests ==========
+
+    #[test]
+    fn test_node_address_new() {
+        let addr = NodeAddress::new("10.0.0.1".to_string(), 8080);
+        assert_eq!(addr.host, "10.0.0.1");
+        assert_eq!(addr.port, 8080);
+    }
+
+    #[test]
+    fn test_node_address_to_string() {
+        let addr = NodeAddress::new("localhost".to_string(), 6379);
+        assert_eq!(addr.to_string(), "localhost:6379");
+    }
+
+    #[test]
+    fn test_node_address_serialization() {
+        let addr = NodeAddress::new("192.168.1.1".to_string(), 9000);
+        let json = serde_json::to_string(&addr).unwrap();
+        let deserialized: NodeAddress = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.host, "192.168.1.1");
+        assert_eq!(deserialized.port, 9000);
+    }
+
+    #[test]
+    fn test_raft_message_append_entries_serialization() {
+        let msg = RaftMessage::AppendEntries {
+            term: 5,
+            leader_id: 1,
+            prev_log_index: 10,
+            prev_log_term: 4,
+            entries: vec![vec![1, 2, 3], vec![4, 5, 6]],
+            leader_commit: 9,
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        let deserialized: RaftMessage = serde_json::from_str(&json).unwrap();
+        if let RaftMessage::AppendEntries { term, leader_id, entries, .. } = deserialized {
+            assert_eq!(term, 5);
+            assert_eq!(leader_id, 1);
+            assert_eq!(entries.len(), 2);
+        } else {
+            panic!("Expected AppendEntries");
+        }
+    }
+
+    #[test]
+    fn test_raft_message_append_entries_response_serialization() {
+        let msg = RaftMessage::AppendEntriesResponse {
+            term: 5,
+            success: true,
+            match_index: Some(10),
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        let deserialized: RaftMessage = serde_json::from_str(&json).unwrap();
+        if let RaftMessage::AppendEntriesResponse { term, success, match_index } = deserialized {
+            assert_eq!(term, 5);
+            assert!(success);
+            assert_eq!(match_index, Some(10));
+        } else {
+            panic!("Expected AppendEntriesResponse");
+        }
+    }
+
+    #[test]
+    fn test_raft_message_request_vote_serialization() {
+        let msg = RaftMessage::RequestVote {
+            term: 3,
+            candidate_id: 2,
+            last_log_index: 5,
+            last_log_term: 2,
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        let deserialized: RaftMessage = serde_json::from_str(&json).unwrap();
+        if let RaftMessage::RequestVote { term, candidate_id, .. } = deserialized {
+            assert_eq!(term, 3);
+            assert_eq!(candidate_id, 2);
+        } else {
+            panic!("Expected RequestVote");
+        }
+    }
+
+    #[test]
+    fn test_raft_message_vote_response_serialization() {
+        let msg = RaftMessage::VoteResponse {
+            term: 3,
+            vote_granted: false,
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        let deserialized: RaftMessage = serde_json::from_str(&json).unwrap();
+        if let RaftMessage::VoteResponse { term, vote_granted } = deserialized {
+            assert_eq!(term, 3);
+            assert!(!vote_granted);
+        } else {
+            panic!("Expected VoteResponse");
+        }
+    }
+
+    #[test]
+    fn test_raft_message_install_snapshot_serialization() {
+        let msg = RaftMessage::InstallSnapshot {
+            term: 7,
+            leader_id: 1,
+            last_included_index: 100,
+            last_included_term: 6,
+            data: vec![0xDE, 0xAD, 0xBE, 0xEF],
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        let deserialized: RaftMessage = serde_json::from_str(&json).unwrap();
+        if let RaftMessage::InstallSnapshot { term, leader_id, data, .. } = deserialized {
+            assert_eq!(term, 7);
+            assert_eq!(leader_id, 1);
+            assert_eq!(data, vec![0xDE, 0xAD, 0xBE, 0xEF]);
+        } else {
+            panic!("Expected InstallSnapshot");
+        }
+    }
+
+    #[test]
+    fn test_raft_message_snapshot_response_serialization() {
+        let msg = RaftMessage::SnapshotResponse { term: 7 };
+        let json = serde_json::to_string(&msg).unwrap();
+        let deserialized: RaftMessage = serde_json::from_str(&json).unwrap();
+        if let RaftMessage::SnapshotResponse { term } = deserialized {
+            assert_eq!(term, 7);
+        } else {
+            panic!("Expected SnapshotResponse");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_send_request_vote() {
+        let network = RaftNetwork::new(1);
+        let addr = NodeAddress::new("127.0.0.1".to_string(), 5000);
+        network.add_peer(2, addr).await;
+
+        let message = RaftMessage::RequestVote {
+            term: 1,
+            candidate_id: 1,
+            last_log_index: 0,
+            last_log_term: 0,
+        };
+
+        let response = network.send(2, message).await.unwrap();
+        if let RaftMessage::VoteResponse { term, vote_granted } = response {
+            assert_eq!(term, 1);
+            assert!(vote_granted);
+        } else {
+            panic!("Expected VoteResponse");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_send_install_snapshot() {
+        let network = RaftNetwork::new(1);
+        let addr = NodeAddress::new("127.0.0.1".to_string(), 5000);
+        network.add_peer(2, addr).await;
+
+        let message = RaftMessage::InstallSnapshot {
+            term: 3,
+            leader_id: 1,
+            last_included_index: 50,
+            last_included_term: 2,
+            data: vec![1, 2, 3],
+        };
+
+        let response = network.send(2, message).await.unwrap();
+        if let RaftMessage::SnapshotResponse { term } = response {
+            assert_eq!(term, 3);
+        } else {
+            panic!("Expected SnapshotResponse");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_send_unexpected_message_type() {
+        let network = RaftNetwork::new(1);
+        let addr = NodeAddress::new("127.0.0.1".to_string(), 5000);
+        network.add_peer(2, addr).await;
+
+        // Sending a response type (not a request type) should return error
+        let message = RaftMessage::AppendEntriesResponse {
+            term: 1,
+            success: true,
+            match_index: Some(0),
+        };
+
+        let result = network.send(2, message).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_send_to_unknown_peer() {
+        let network = RaftNetwork::new(1);
+
+        let message = RaftMessage::AppendEntries {
+            term: 1,
+            leader_id: 1,
+            prev_log_index: 0,
+            prev_log_term: 0,
+            entries: vec![],
+            leader_commit: 0,
+        };
+
+        let result = network.send(999, message).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_broadcast() {
+        let network = RaftNetwork::new(1);
+        network.add_peer(2, NodeAddress::new("127.0.0.1".to_string(), 5000)).await;
+        network.add_peer(3, NodeAddress::new("127.0.0.1".to_string(), 5001)).await;
+        network.add_peer(4, NodeAddress::new("127.0.0.1".to_string(), 5002)).await;
+
+        let message = RaftMessage::AppendEntries {
+            term: 1,
+            leader_id: 1,
+            prev_log_index: 0,
+            prev_log_term: 0,
+            entries: vec![],
+            leader_commit: 0,
+        };
+
+        let responses = network.broadcast(message).await;
+        assert_eq!(responses.len(), 3);
+        for response in &responses {
+            assert!(response.is_ok());
+        }
+    }
+
+    #[tokio::test]
+    async fn test_broadcast_empty_peers() {
+        let network = RaftNetwork::new(1);
+
+        let message = RaftMessage::AppendEntries {
+            term: 1,
+            leader_id: 1,
+            prev_log_index: 0,
+            prev_log_term: 0,
+            entries: vec![],
+            leader_commit: 0,
+        };
+
+        let responses = network.broadcast(message).await;
+        assert!(responses.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_get_peers() {
+        let network = RaftNetwork::new(1);
+        assert!(network.get_peers().await.is_empty());
+
+        network.add_peer(2, NodeAddress::new("127.0.0.1".to_string(), 5000)).await;
+        network.add_peer(3, NodeAddress::new("127.0.0.1".to_string(), 5001)).await;
+
+        let peers = network.get_peers().await;
+        assert_eq!(peers.len(), 2);
+        assert!(peers.contains(&2));
+        assert!(peers.contains(&3));
+    }
+
+    #[tokio::test]
+    async fn test_is_reachable() {
+        let network = RaftNetwork::new(1);
+
+        assert!(!network.is_reachable(2).await);
+
+        network.add_peer(2, NodeAddress::new("127.0.0.1".to_string(), 5000)).await;
+        assert!(network.is_reachable(2).await);
+
+        network.remove_peer(2).await;
+        assert!(!network.is_reachable(2).await);
+    }
 }

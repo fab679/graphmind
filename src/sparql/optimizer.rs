@@ -27,3 +27,20 @@ impl Default for SparqlOptimizer {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_optimizer_creation() {
+        let opt = SparqlOptimizer::new();
+        opt.optimize(); // should not panic
+    }
+
+    #[test]
+    fn test_optimizer_default() {
+        let opt = SparqlOptimizer::default();
+        opt.optimize();
+    }
+}
