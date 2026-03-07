@@ -13,14 +13,14 @@
 
 **Samyama** is a high-performance, distributed, AI-native graph database written in **Rust**. It combines a **property graph engine**, **vector search**, **graph analytics**, and **natural language querying** in a single binary.
 
-### LDBC Benchmark Results (v0.5.8, Mac Mini M2 Pro)
+### LDBC Benchmark Results (v0.6.0, Mac Mini M4)
 
 | Benchmark | Queries | Pass Rate | Dataset |
 |-----------|---------|-----------|---------|
-| **SNB Interactive** | 21 reads + 8 updates | **21/21 (100%)** | SF1: 3.18M nodes, 17.26M edges |
-| **SNB Business Intelligence** | 20 analytical | **5/6 run** (BI-7+ timeout) | SF1 (same dataset) |
-| **Graphalytics** | 6 algorithms x 2 datasets | **9/12 (75%)** | LDBC XS reference graphs |
-| **FinBench** | 12 CR + 6 SR + 3 RW | **21/21 (100%)** | Synthetic: 7.7K nodes, 42.2K edges |
+| **SNB Interactive** | 21 reads | **21/21 (100%)** | SF1: 3.18M nodes, 17.26M edges |
+| **SNB Business Intelligence** | 20 analytical | **16/16 run (100%)** (BI-17+ timeout) | SF1 (same dataset) |
+| **Graphalytics** | 6 algorithms x 2 datasets | **12/12 (100%)** | LDBC XS reference graphs |
+| **FinBench** | 12 CR + 6 SR + 3 RW + 19 W | **40/40 (100%)** | Synthetic: 7.7K nodes, 42.2K edges |
 
 See [docs/ldbc/](docs/ldbc/) for detailed per-query results, latency tables, and analysis.
 
