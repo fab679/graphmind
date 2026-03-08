@@ -119,6 +119,7 @@ primary = {
     predicate_function |
     pattern_comprehension |
     list_comprehension |
+    count_star |
     function_call |
     property_access |
     parameter |
@@ -126,6 +127,9 @@ primary = {
     variable |
     "(" ~ expression ~ ")"
 }
+
+// COUNT(*) — special rule since * is not a valid expression
+count_star = { ^"COUNT" ~ "(" ~ distinct? ~ "*" ~ ")" }
 
 // Query parameter: $name
 parameter = @{ "$" ~ (ASCII_ALPHANUMERIC | "_")+ }

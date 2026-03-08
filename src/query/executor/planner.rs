@@ -370,8 +370,13 @@ impl QueryPlanner {
                         if let Some(func) = func_type {
                             is_agg_func = true;
                             has_aggregation = true;
-                            let arg_expr = args.first().cloned()
-                                .unwrap_or(Expression::Literal(PropertyValue::Null));
+                            let arg_expr = if matches!(func, AggregateType::Count) && args.is_empty() {
+                                // count(*) — use non-null literal so every row is counted
+                                Expression::Literal(PropertyValue::Integer(1))
+                            } else {
+                                args.first().cloned()
+                                    .unwrap_or(Expression::Literal(PropertyValue::Null))
+                            };
                             aggregates.push(AggregateFunction {
                                 func,
                                 expr: arg_expr,
@@ -716,7 +721,12 @@ impl QueryPlanner {
                     if let Some(func) = func_type {
                         is_agg_func = true;
                         has_aggregation = true;
-                        let arg_expr = args.first().cloned().unwrap_or(Expression::Literal(PropertyValue::Null));
+                        let arg_expr = if matches!(func, AggregateType::Count) && args.is_empty() {
+                            // count(*) — use non-null literal so every row is counted
+                            Expression::Literal(PropertyValue::Integer(1))
+                        } else {
+                            args.first().cloned().unwrap_or(Expression::Literal(PropertyValue::Null))
+                        };
                         aggregates.push(AggregateFunction {
                             func,
                             expr: arg_expr,
@@ -952,12 +962,17 @@ impl QueryPlanner {
             }
         }
 
+        let mut anon_counter: usize = 0;
+
         for &(path_idx, _) in &paths_with_cost {
             let path = &pattern.paths[path_idx];
             // Start with node scan for this path
-            let start_var = path.start.variable.as_ref()
-                .ok_or_else(|| ExecutionError::PlanningError("Start node must have a variable".to_string()))?
-                .clone();
+            // Auto-generate variable names for anonymous nodes (e.g., `()` in patterns)
+            let start_var = path.start.variable.clone().unwrap_or_else(|| {
+                let name = format!("_anon_{}", anon_counter);
+                anon_counter += 1;
+                name
+            });
 
             // Optimization: Check for index usage (using this path's assigned predicates)
             let mut index_op: Option<OperatorBox> = None;
@@ -1087,9 +1102,11 @@ impl QueryPlanner {
                 // Normal path: use ExpandOperator for each segment
                 let mut current_var = start_var.clone();
                 for segment in &path.segments {
-                    let target_var = segment.node.variable.as_ref()
-                        .ok_or_else(|| ExecutionError::PlanningError("Target node must have a variable".to_string()))?
-                        .clone();
+                    let target_var = segment.node.variable.clone().unwrap_or_else(|| {
+                        let name = format!("_anon_{}", anon_counter);
+                        anon_counter += 1;
+                        name
+                    });
 
                     let edge_var = segment.edge.variable.clone();
                     let edge_types: Vec<String> = segment.edge.types.iter()

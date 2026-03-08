@@ -1296,6 +1296,19 @@ fn parse_primary(pair: pest::iterators::Pair<Rule>) -> ParseResult<Expression> {
             Rule::list_comprehension => {
                 return parse_list_comprehension(inner);
             }
+            Rule::count_star => {
+                let mut distinct = false;
+                for cs_inner in inner.into_inner() {
+                    if cs_inner.as_rule() == Rule::distinct {
+                        distinct = true;
+                    }
+                }
+                return Ok(Expression::Function {
+                    name: "count".to_string(),
+                    args: vec![],
+                    distinct,
+                });
+            }
             Rule::property_access => {
                 return parse_property_access(inner);
             }
@@ -2249,6 +2262,50 @@ mod tests {
         let query = "MATCH (n:Person) RETURN count(n)";
         let result = parse_query(query);
         assert!(result.is_ok(), "Failed to parse count(n): {:?}", result.err());
+    }
+
+    #[test]
+    fn test_parse_count_star() {
+        let query = "MATCH (n) RETURN count(*)";
+        let result = parse_query(query);
+        assert!(result.is_ok(), "Failed to parse count(*): {:?}", result.err());
+        let ast = result.unwrap();
+        let items = &ast.return_clause.unwrap().items;
+        assert_eq!(items.len(), 1);
+        match &items[0].expression {
+            Expression::Function { name, args, distinct } => {
+                assert_eq!(name, "count");
+                assert!(args.is_empty(), "count(*) should have empty args");
+                assert!(!distinct);
+            }
+            other => panic!("Expected Function, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_count_star_with_alias() {
+        let query = "MATCH (n:Person) RETURN count(*) AS total";
+        let result = parse_query(query);
+        assert!(result.is_ok(), "Failed to parse count(*) AS total: {:?}", result.err());
+        let ast = result.unwrap();
+        let items = &ast.return_clause.unwrap().items;
+        assert_eq!(items[0].alias, Some("total".to_string()));
+    }
+
+    #[test]
+    fn test_parse_count_star_distinct() {
+        let query = "MATCH (n) RETURN count(DISTINCT *)";
+        let result = parse_query(query);
+        assert!(result.is_ok(), "Failed to parse count(DISTINCT *): {:?}", result.err());
+        let ast = result.unwrap();
+        let items = &ast.return_clause.unwrap().items;
+        match &items[0].expression {
+            Expression::Function { name, distinct, .. } => {
+                assert_eq!(name, "count");
+                assert!(*distinct);
+            }
+            other => panic!("Expected Function, got: {:?}", other),
+        }
     }
 
     #[test]

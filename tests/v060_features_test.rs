@@ -277,9 +277,17 @@ fn test_profile_returns_results_and_stats() {
         &store,
     ).unwrap();
 
-    // PROFILE should return actual query results plus a profile record
-    // At minimum, we should get some records back
-    assert!(result.len() >= 5, "PROFILE should return query results (5 persons), got {}", result.len());
+    // PROFILE should return a single plan record (like EXPLAIN) with timing info
+    assert_eq!(result.len(), 1, "PROFILE should return 1 plan record, got {}", result.len());
+    assert_eq!(result.columns, vec!["plan".to_string()]);
+    let plan_text = result.records[0].get("plan").unwrap();
+    let text = match plan_text {
+        samyama::query::Value::Property(samyama::graph::PropertyValue::String(s)) => s.clone(),
+        _ => panic!("Expected string plan text"),
+    };
+    assert!(text.contains("Profile"), "Should contain Profile section");
+    assert!(text.contains("Rows:"), "Should contain Rows count");
+    assert!(text.contains("Execution time:"), "Should contain timing");
 }
 
 // ===== QE-03: shortestPath() Cypher pattern ==================================

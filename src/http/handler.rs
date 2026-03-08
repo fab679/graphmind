@@ -53,7 +53,7 @@ pub async fn query_handler(
             for record in &batch.records {
                 let mut row = Vec::new();
                 for col in &batch.columns {
-                    let val = record.get(col).unwrap();
+                    let val = record.get(col).unwrap_or(&Value::Null);
                     
                     // Extract graph elements for visualization
                     match val {
@@ -606,6 +606,50 @@ mod tests {
         // The nodes map should deduplicate — 2 unique nodes
         let nodes = json["nodes"].as_array().unwrap();
         assert_eq!(nodes.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_query_handler_profile_no_panic() {
+        let (app, state) = test_app();
+
+        // Seed data
+        {
+            let mut store = state.store.write().await;
+            let n = store.create_node("Person");
+            store.get_node_mut(n).unwrap().set_property("name", "Alice");
+        }
+
+        // PROFILE should not panic — returns plan-format RecordBatch
+        let (status, json) = post_query(
+            app,
+            r#"{"query": "PROFILE MATCH (n:Person) RETURN n"}"#,
+        ).await;
+
+        assert_eq!(status, StatusCode::OK);
+        // Should have plan column in records
+        let records = json["records"].as_array().unwrap();
+        assert_eq!(records.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_query_handler_count_star() {
+        let (app, state) = test_app();
+
+        {
+            let mut store = state.store.write().await;
+            store.create_node("Person");
+            store.create_node("Person");
+        }
+
+        let (status, json) = post_query(
+            app,
+            r#"{"query": "MATCH (n:Person) RETURN count(*) AS total"}"#,
+        ).await;
+
+        assert_eq!(status, StatusCode::OK);
+        let records = json["records"].as_array().unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0][0], 2);
     }
 
     #[tokio::test]
