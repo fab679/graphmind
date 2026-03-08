@@ -370,8 +370,13 @@ impl QueryPlanner {
                         if let Some(func) = func_type {
                             is_agg_func = true;
                             has_aggregation = true;
-                            let arg_expr = args.first().cloned()
-                                .unwrap_or(Expression::Literal(PropertyValue::Null));
+                            let arg_expr = if matches!(func, AggregateType::Count) && args.is_empty() {
+                                // count(*) — use non-null literal so every row is counted
+                                Expression::Literal(PropertyValue::Integer(1))
+                            } else {
+                                args.first().cloned()
+                                    .unwrap_or(Expression::Literal(PropertyValue::Null))
+                            };
                             aggregates.push(AggregateFunction {
                                 func,
                                 expr: arg_expr,
@@ -716,7 +721,12 @@ impl QueryPlanner {
                     if let Some(func) = func_type {
                         is_agg_func = true;
                         has_aggregation = true;
-                        let arg_expr = args.first().cloned().unwrap_or(Expression::Literal(PropertyValue::Null));
+                        let arg_expr = if matches!(func, AggregateType::Count) && args.is_empty() {
+                            // count(*) — use non-null literal so every row is counted
+                            Expression::Literal(PropertyValue::Integer(1))
+                        } else {
+                            args.first().cloned().unwrap_or(Expression::Literal(PropertyValue::Null))
+                        };
                         aggregates.push(AggregateFunction {
                             func,
                             expr: arg_expr,

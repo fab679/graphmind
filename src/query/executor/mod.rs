@@ -99,29 +99,24 @@ impl<'a> QueryExecutor<'a> {
             ));
         }
 
-        // Handle PROFILE - execute query and append plan + timing info
+        // Handle PROFILE - execute query and return plan + timing info (like EXPLAIN)
         if query.profile {
+            use crate::graph::PropertyValue;
+
+            let plan_text = plan.root.describe().format(0);
             let start = std::time::Instant::now();
             let result = self.execute_plan(plan)?;
             let elapsed = start.elapsed();
 
-            // Add profile info as additional records
-            let mut profile_record = Record::new();
+            let stats = self.store.compute_statistics();
             let profile_text = format!(
-                "Rows: {}, Execution time: {:.3}ms",
-                result.records.len(),
-                elapsed.as_secs_f64() * 1000.0
+                "{}\n\n--- Profile ---\nRows: {}, Execution time: {:.3}ms\n\n--- Statistics ---\n{}",
+                plan_text, result.records.len(), elapsed.as_secs_f64() * 1000.0, stats.format()
             );
-            profile_record.bind("profile".to_string(),
-                Value::Property(crate::graph::PropertyValue::String(profile_text)));
 
-            let mut records = result.records;
-            records.push(profile_record);
-            let mut columns = result.columns;
-            if !columns.contains(&"profile".to_string()) {
-                columns.push("profile".to_string());
-            }
-            return Ok(RecordBatch { records, columns });
+            let mut record = Record::new();
+            record.bind("plan".to_string(), Value::Property(PropertyValue::String(profile_text)));
+            return Ok(RecordBatch { records: vec![record], columns: vec!["plan".to_string()] });
         }
 
         // Execute the plan
@@ -1597,16 +1592,13 @@ mod tests {
         let query = parse_query("PROFILE MATCH (n:Person) RETURN n").unwrap();
         let executor = QueryExecutor::new(&store);
         let result = executor.execute(&query).unwrap();
-        // PROFILE should return the actual query results plus a profile record
-        assert!(result.records.len() >= 1);
-        // Check that at least one record has a "profile" key
-        let has_profile = result.records.iter().any(|r| r.get("profile").is_some());
-        assert!(has_profile, "PROFILE should include profile information");
-        // Check profile text contains timing info
-        let profile_record = result.records.iter().find(|r| r.get("profile").is_some()).unwrap();
-        let profile_text = profile_record.get("profile").unwrap().as_property().unwrap().as_string().unwrap();
-        assert!(profile_text.contains("Rows:"), "Profile should contain Rows: {}", profile_text);
-        assert!(profile_text.contains("Execution time:"), "Profile should contain Execution time: {}", profile_text);
+        // PROFILE should return a single record with "plan" column (like EXPLAIN)
+        assert_eq!(result.columns, vec!["plan".to_string()]);
+        assert_eq!(result.records.len(), 1);
+        let plan_text = result.records[0].get("plan").unwrap().as_property().unwrap().as_string().unwrap();
+        assert!(plan_text.contains("Rows:"), "Profile should contain Rows: {}", plan_text);
+        assert!(plan_text.contains("Execution time:"), "Profile should contain Execution time: {}", plan_text);
+        assert!(plan_text.contains("Profile"), "Profile should contain Profile section: {}", plan_text);
     }
 
     #[test]
@@ -5934,5 +5926,67 @@ mod tests {
         store.set_node_property("default", id, "v", "hello world").unwrap();
         let r = exec_read(&store, "MATCH (n:I) RETURN right(n.v, 5) AS r");
         assert_eq!(r.records[0].get("r").unwrap().as_property().unwrap(), &PropertyValue::String("world".to_string()));
+    }
+
+    // ==================== Bug fix tests ====================
+
+    #[test]
+    fn test_count_star_execution() {
+        let mut store = GraphStore::new();
+        store.create_node("Person");
+        store.create_node("Person");
+        store.create_node("Person");
+
+        let r = exec_read(&store, "MATCH (n:Person) RETURN count(*) AS total");
+        assert_eq!(r.records.len(), 1);
+        let total = r.records[0].get("total").unwrap().as_property().unwrap().as_integer().unwrap();
+        assert_eq!(total, 3);
+    }
+
+    #[test]
+    fn test_count_star_with_group_by() {
+        let mut store = GraphStore::new();
+        let a = store.create_node("Person");
+        store.set_node_property("default", a, "city", "NYC").unwrap();
+        let b = store.create_node("Person");
+        store.set_node_property("default", b, "city", "NYC").unwrap();
+        let c = store.create_node("Person");
+        store.set_node_property("default", c, "city", "LA").unwrap();
+
+        let r = exec_read(&store, "MATCH (n:Person) RETURN n.city AS city, count(*) AS cnt");
+        assert_eq!(r.records.len(), 2);
+        let mut counts = std::collections::HashMap::new();
+        for rec in &r.records {
+            let city = rec.get("city").unwrap().as_property().unwrap().as_string().unwrap().to_string();
+            let cnt = rec.get("cnt").unwrap().as_property().unwrap().as_integer().unwrap();
+            counts.insert(city, cnt);
+        }
+        assert_eq!(counts["NYC"], 2);
+        assert_eq!(counts["LA"], 1);
+    }
+
+    #[test]
+    fn test_labels_with_count_aggregation() {
+        let mut store = GraphStore::new();
+        store.create_node("Person");
+        store.create_node("Person");
+        store.create_node("Company");
+
+        let r = exec_read(&store, "MATCH (n) RETURN labels(n) AS l, count(n) AS c");
+        assert_eq!(r.records.len(), 2);
+    }
+
+    #[test]
+    fn test_profile_returns_plan_format() {
+        let mut store = GraphStore::new();
+        store.create_node("Person");
+
+        let r = exec_read(&store, "PROFILE MATCH (n:Person) RETURN n LIMIT 5");
+        assert_eq!(r.columns, vec!["plan".to_string()]);
+        assert_eq!(r.records.len(), 1);
+        let text = r.records[0].get("plan").unwrap().as_property().unwrap().as_string().unwrap();
+        assert!(text.contains("Profile"), "Should contain Profile section");
+        assert!(text.contains("Rows:"), "Should contain row count");
+        assert!(text.contains("Statistics"), "Should contain Statistics section");
     }
 }

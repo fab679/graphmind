@@ -225,7 +225,7 @@ fn eval_expression(expr: &Expression, record: &Record, store: &GraphStore) -> Ex
             let arg_vals: Vec<Value> = args.iter()
                 .map(|a| eval_expression(a, record, store))
                 .collect::<Result<_, _>>()?;
-            eval_function(name, &arg_vals)
+            eval_function(name, &arg_vals, Some(store))
         }
         Expression::Case { operand, when_clauses, else_result } => {
             eval_case(operand.as_deref(), when_clauses, else_result.as_deref(), |e| eval_expression(e, record, store))
@@ -567,7 +567,7 @@ fn eval_pattern_comprehension(
 }
 
 /// Shared function evaluation for scalar functions (not aggregates)
-fn eval_function(name: &str, args: &[Value]) -> ExecutionResult<Value> {
+fn eval_function(name: &str, args: &[Value], store: Option<&GraphStore>) -> ExecutionResult<Value> {
     match name.to_lowercase().as_str() {
         // String functions
         "toupper" | "touppercase" => {
@@ -811,6 +811,14 @@ fn eval_function(name: &str, args: &[Value]) -> ExecutionResult<Value> {
                         .collect();
                     Ok(Value::Property(PropertyValue::Array(labels)))
                 }
+                Value::NodeRef(id) => {
+                    let s = store.ok_or_else(|| ExecutionError::RuntimeError("labels() on NodeRef requires store".to_string()))?;
+                    let node = s.get_node(*id).ok_or_else(|| ExecutionError::RuntimeError(format!("Node {} not found", id.as_u64())))?;
+                    let labels: Vec<PropertyValue> = node.labels.iter()
+                        .map(|l| PropertyValue::String(l.as_str().to_string()))
+                        .collect();
+                    Ok(Value::Property(PropertyValue::Array(labels)))
+                }
                 _ => Err(ExecutionError::TypeError("labels() requires a node".to_string())),
             }
         }
@@ -818,6 +826,9 @@ fn eval_function(name: &str, args: &[Value]) -> ExecutionResult<Value> {
             match &args[0] {
                 Value::Edge(_, edge) => {
                     Ok(Value::Property(PropertyValue::String(edge.edge_type.as_str().to_string())))
+                }
+                Value::EdgeRef(_, _, _, et) => {
+                    Ok(Value::Property(PropertyValue::String(et.as_str().to_string())))
                 }
                 _ => Err(ExecutionError::TypeError("type() requires an edge".to_string())),
             }
@@ -830,7 +841,23 @@ fn eval_function(name: &str, args: &[Value]) -> ExecutionResult<Value> {
                         .collect();
                     Ok(Value::Property(PropertyValue::Array(keys)))
                 }
+                Value::NodeRef(id) => {
+                    let s = store.ok_or_else(|| ExecutionError::RuntimeError("keys() on NodeRef requires store".to_string()))?;
+                    let node = s.get_node(*id).ok_or_else(|| ExecutionError::RuntimeError(format!("Node {} not found", id.as_u64())))?;
+                    let keys: Vec<PropertyValue> = node.properties.keys()
+                        .map(|k| PropertyValue::String(k.clone()))
+                        .collect();
+                    Ok(Value::Property(PropertyValue::Array(keys)))
+                }
                 Value::Edge(_, edge) => {
+                    let keys: Vec<PropertyValue> = edge.properties.keys()
+                        .map(|k| PropertyValue::String(k.clone()))
+                        .collect();
+                    Ok(Value::Property(PropertyValue::Array(keys)))
+                }
+                Value::EdgeRef(eid, _, _, _) => {
+                    let s = store.ok_or_else(|| ExecutionError::RuntimeError("keys() on EdgeRef requires store".to_string()))?;
+                    let edge = s.get_edge(*eid).ok_or_else(|| ExecutionError::RuntimeError(format!("Edge {} not found", eid.as_u64())))?;
                     let keys: Vec<PropertyValue> = edge.properties.keys()
                         .map(|k| PropertyValue::String(k.clone()))
                         .collect();
@@ -2213,7 +2240,7 @@ impl ProjectOperator {
                 let arg_vals: Vec<Value> = args.iter()
                     .map(|a| self.evaluate_expression(a, record, store))
                     .collect::<ExecutionResult<Vec<_>>>()?;
-                eval_function(name, &arg_vals)
+                eval_function(name, &arg_vals, Some(store))
             }
             Expression::Case { operand, when_clauses, else_result } => {
                 eval_case(operand.as_deref(), when_clauses, else_result.as_deref(), |e| self.evaluate_expression(e, record, store))
@@ -2491,7 +2518,7 @@ impl AggregateOperator {
                 let arg_vals: Vec<Value> = args.iter()
                     .map(|a| Self::evaluate_expression(a, record, store))
                     .collect::<ExecutionResult<Vec<_>>>()?;
-                eval_function(name, &arg_vals)
+                eval_function(name, &arg_vals, Some(store))
             }
             Expression::Case { operand, when_clauses, else_result } => {
                 eval_case(operand.as_deref(), when_clauses, else_result.as_deref(), |e| Self::evaluate_expression(e, record, store))
@@ -2746,7 +2773,7 @@ impl SortOperator {
                 let arg_vals: Vec<Value> = args.iter()
                     .map(|a| Self::evaluate_expression(a, record, store))
                     .collect::<ExecutionResult<Vec<_>>>()?;
-                eval_function(name, &arg_vals)
+                eval_function(name, &arg_vals, Some(store))
             }
             Expression::Case { operand, when_clauses, else_result } => {
                 eval_case(operand.as_deref(), when_clauses, else_result.as_deref(), |e| Self::evaluate_expression(e, record, store))
@@ -5682,7 +5709,7 @@ impl WithBarrierOperator {
                 let arg_vals: Vec<Value> = args.iter()
                     .map(|a| Self::evaluate_expression(a, record, store))
                     .collect::<ExecutionResult<Vec<_>>>()?;
-                eval_function(name, &arg_vals)
+                eval_function(name, &arg_vals, Some(store))
             }
             Expression::Case { operand, when_clauses, else_result } => {
                 eval_case(operand.as_deref(), when_clauses, else_result.as_deref(), |e| Self::evaluate_expression(e, record, store))
@@ -6271,7 +6298,7 @@ mod tests {
 
     #[test]
     fn test_eval_function_date_no_args() {
-        let result = eval_function("date", &[]).unwrap();
+        let result = eval_function("date", &[], None).unwrap();
         match result {
             Value::Property(PropertyValue::DateTime(ts)) => assert!(ts > 0),
             _ => panic!("Expected DateTime"),
@@ -6280,7 +6307,7 @@ mod tests {
 
     #[test]
     fn test_eval_function_date_string() {
-        let result = eval_function("date", &[Value::Property(PropertyValue::String("2024-01-15".to_string()))]).unwrap();
+        let result = eval_function("date", &[Value::Property(PropertyValue::String("2024-01-15".to_string()))], None).unwrap();
         match result {
             Value::Property(PropertyValue::DateTime(ts)) => {
                 // 2024-01-15 00:00:00 UTC
@@ -6298,7 +6325,7 @@ mod tests {
         map.insert("year".to_string(), PropertyValue::Integer(2024));
         map.insert("month".to_string(), PropertyValue::Integer(6));
         map.insert("day".to_string(), PropertyValue::Integer(15));
-        let result = eval_function("date", &[Value::Property(PropertyValue::Map(map))]).unwrap();
+        let result = eval_function("date", &[Value::Property(PropertyValue::Map(map))], None).unwrap();
         match result {
             Value::Property(PropertyValue::DateTime(ts)) => {
                 let expected = chrono::NaiveDate::from_ymd_opt(2024, 6, 15).unwrap()
@@ -6311,7 +6338,7 @@ mod tests {
 
     #[test]
     fn test_eval_function_date_invalid_string() {
-        let result = eval_function("date", &[Value::Property(PropertyValue::String("not-a-date".to_string()))]);
+        let result = eval_function("date", &[Value::Property(PropertyValue::String("not-a-date".to_string()))], None);
         assert!(result.is_err());
     }
 
@@ -6321,19 +6348,19 @@ mod tests {
         map.insert("year".to_string(), PropertyValue::Integer(2024));
         map.insert("month".to_string(), PropertyValue::Integer(13)); // invalid month
         map.insert("day".to_string(), PropertyValue::Integer(1));
-        let result = eval_function("date", &[Value::Property(PropertyValue::Map(map))]);
+        let result = eval_function("date", &[Value::Property(PropertyValue::Map(map))], None);
         assert!(result.is_err());
     }
 
     #[test]
     fn test_eval_function_date_type_error() {
-        let result = eval_function("date", &[Value::Property(PropertyValue::Integer(42))]);
+        let result = eval_function("date", &[Value::Property(PropertyValue::Integer(42))], None);
         assert!(result.is_err());
     }
 
     #[test]
     fn test_eval_function_datetime_no_args() {
-        let result = eval_function("datetime", &[]).unwrap();
+        let result = eval_function("datetime", &[], None).unwrap();
         match result {
             Value::Property(PropertyValue::DateTime(ts)) => assert!(ts > 0),
             _ => panic!("Expected DateTime"),
@@ -6342,7 +6369,7 @@ mod tests {
 
     #[test]
     fn test_eval_function_datetime_rfc3339() {
-        let result = eval_function("datetime", &[Value::Property(PropertyValue::String("2024-01-15T10:30:00Z".to_string()))]).unwrap();
+        let result = eval_function("datetime", &[Value::Property(PropertyValue::String("2024-01-15T10:30:00Z".to_string()))], None).unwrap();
         match result {
             Value::Property(PropertyValue::DateTime(ts)) => {
                 let expected = chrono::DateTime::parse_from_rfc3339("2024-01-15T10:30:00Z").unwrap().timestamp_millis();
@@ -6354,7 +6381,7 @@ mod tests {
 
     #[test]
     fn test_eval_function_datetime_naive() {
-        let result = eval_function("datetime", &[Value::Property(PropertyValue::String("2024-01-15T10:30:00".to_string()))]).unwrap();
+        let result = eval_function("datetime", &[Value::Property(PropertyValue::String("2024-01-15T10:30:00".to_string()))], None).unwrap();
         match result {
             Value::Property(PropertyValue::DateTime(_ts)) => {} // valid
             _ => panic!("Expected DateTime"),
@@ -6370,7 +6397,7 @@ mod tests {
         map.insert("hour".to_string(), PropertyValue::Integer(10));
         map.insert("minute".to_string(), PropertyValue::Integer(30));
         map.insert("second".to_string(), PropertyValue::Integer(45));
-        let result = eval_function("datetime", &[Value::Property(PropertyValue::Map(map))]).unwrap();
+        let result = eval_function("datetime", &[Value::Property(PropertyValue::Map(map))], None).unwrap();
         match result {
             Value::Property(PropertyValue::DateTime(ts)) => {
                 use chrono::TimeZone;
@@ -6383,19 +6410,19 @@ mod tests {
 
     #[test]
     fn test_eval_function_datetime_invalid_string() {
-        let result = eval_function("datetime", &[Value::Property(PropertyValue::String("garbage".to_string()))]);
+        let result = eval_function("datetime", &[Value::Property(PropertyValue::String("garbage".to_string()))], None);
         assert!(result.is_err());
     }
 
     #[test]
     fn test_eval_function_datetime_type_error() {
-        let result = eval_function("datetime", &[Value::Property(PropertyValue::Boolean(true))]);
+        let result = eval_function("datetime", &[Value::Property(PropertyValue::Boolean(true))], None);
         assert!(result.is_err());
     }
 
     #[test]
     fn test_eval_function_duration_iso_string() {
-        let result = eval_function("duration", &[Value::Property(PropertyValue::String("P1Y2M3D".to_string()))]).unwrap();
+        let result = eval_function("duration", &[Value::Property(PropertyValue::String("P1Y2M3D".to_string()))], None).unwrap();
         match result {
             Value::Property(PropertyValue::Duration { months, days, seconds, .. }) => {
                 assert_eq!(months, 14); // 1Y = 12M + 2M
@@ -6408,7 +6435,7 @@ mod tests {
 
     #[test]
     fn test_eval_function_duration_with_time() {
-        let result = eval_function("duration", &[Value::Property(PropertyValue::String("P1DT2H30M".to_string()))]).unwrap();
+        let result = eval_function("duration", &[Value::Property(PropertyValue::String("P1DT2H30M".to_string()))], None).unwrap();
         match result {
             Value::Property(PropertyValue::Duration { months, days, seconds, .. }) => {
                 assert_eq!(months, 0);
@@ -6425,7 +6452,7 @@ mod tests {
         map.insert("months".to_string(), PropertyValue::Integer(3));
         map.insert("days".to_string(), PropertyValue::Integer(5));
         map.insert("hours".to_string(), PropertyValue::Integer(2));
-        let result = eval_function("duration", &[Value::Property(PropertyValue::Map(map))]).unwrap();
+        let result = eval_function("duration", &[Value::Property(PropertyValue::Map(map))], None).unwrap();
         match result {
             Value::Property(PropertyValue::Duration { months, days, seconds, .. }) => {
                 assert_eq!(months, 3);
@@ -6441,7 +6468,7 @@ mod tests {
         let mut map = HashMap::new();
         map.insert("years".to_string(), PropertyValue::Integer(2));
         map.insert("months".to_string(), PropertyValue::Integer(6));
-        let result = eval_function("duration", &[Value::Property(PropertyValue::Map(map))]).unwrap();
+        let result = eval_function("duration", &[Value::Property(PropertyValue::Map(map))], None).unwrap();
         match result {
             Value::Property(PropertyValue::Duration { months, .. }) => {
                 assert_eq!(months, 30); // 2*12 + 6
@@ -6452,25 +6479,25 @@ mod tests {
 
     #[test]
     fn test_eval_function_duration_no_args() {
-        let result = eval_function("duration", &[]);
+        let result = eval_function("duration", &[], None);
         assert!(result.is_err());
     }
 
     #[test]
     fn test_eval_function_duration_invalid_string() {
-        let result = eval_function("duration", &[Value::Property(PropertyValue::String("not-a-duration".to_string()))]);
+        let result = eval_function("duration", &[Value::Property(PropertyValue::String("not-a-duration".to_string()))], None);
         assert!(result.is_err());
     }
 
     #[test]
     fn test_eval_function_duration_type_error() {
-        let result = eval_function("duration", &[Value::Property(PropertyValue::Integer(42))]);
+        let result = eval_function("duration", &[Value::Property(PropertyValue::Integer(42))], None);
         assert!(result.is_err());
     }
 
     #[test]
     fn test_eval_function_timestamp() {
-        let result = eval_function("timestamp", &[]).unwrap();
+        let result = eval_function("timestamp", &[], None).unwrap();
         match result {
             Value::Property(PropertyValue::Integer(ts)) => assert!(ts > 0),
             _ => panic!("Expected Integer timestamp"),
@@ -6481,7 +6508,7 @@ mod tests {
     fn test_eval_function_duration_between() {
         let dt1 = Value::Property(PropertyValue::DateTime(1000000));
         let dt2 = Value::Property(PropertyValue::DateTime(2000000));
-        let result = eval_function("duration_between", &[dt1, dt2]).unwrap();
+        let result = eval_function("duration_between", &[dt1, dt2], None).unwrap();
         match result {
             Value::Property(PropertyValue::Duration { seconds, .. }) => {
                 assert_eq!(seconds, 1000); // 1000000ms diff = 1000s
@@ -6495,13 +6522,13 @@ mod tests {
         let result = eval_function("duration_between", &[
             Value::Property(PropertyValue::String("a".to_string())),
             Value::Property(PropertyValue::DateTime(0)),
-        ]);
+        ], None);
         assert!(result.is_err());
     }
 
     #[test]
     fn test_eval_function_duration_between_too_few_args() {
-        let result = eval_function("duration_between", &[Value::Property(PropertyValue::DateTime(0))]);
+        let result = eval_function("duration_between", &[Value::Property(PropertyValue::DateTime(0))], None);
         assert!(result.is_err());
     }
 
@@ -6509,7 +6536,7 @@ mod tests {
 
     #[test]
     fn test_eval_function_log_float() {
-        let result = eval_function("log", &[Value::Property(PropertyValue::Float(1.0))]).unwrap();
+        let result = eval_function("log", &[Value::Property(PropertyValue::Float(1.0))], None).unwrap();
         match result {
             Value::Property(PropertyValue::Float(f)) => assert!((f - 0.0).abs() < 1e-10),
             _ => panic!("Expected Float"),
@@ -6518,7 +6545,7 @@ mod tests {
 
     #[test]
     fn test_eval_function_log_integer() {
-        let result = eval_function("log", &[Value::Property(PropertyValue::Integer(1))]).unwrap();
+        let result = eval_function("log", &[Value::Property(PropertyValue::Integer(1))], None).unwrap();
         match result {
             Value::Property(PropertyValue::Float(f)) => assert!((f - 0.0).abs() < 1e-10),
             _ => panic!("Expected Float"),
@@ -6527,13 +6554,13 @@ mod tests {
 
     #[test]
     fn test_eval_function_log_type_error() {
-        let result = eval_function("log", &[Value::Property(PropertyValue::String("x".to_string()))]);
+        let result = eval_function("log", &[Value::Property(PropertyValue::String("x".to_string()))], None);
         assert!(result.is_err());
     }
 
     #[test]
     fn test_eval_function_exp_float() {
-        let result = eval_function("exp", &[Value::Property(PropertyValue::Float(1.0))]).unwrap();
+        let result = eval_function("exp", &[Value::Property(PropertyValue::Float(1.0))], None).unwrap();
         match result {
             Value::Property(PropertyValue::Float(f)) => assert!((f - std::f64::consts::E).abs() < 1e-10),
             _ => panic!("Expected Float"),
@@ -6542,7 +6569,7 @@ mod tests {
 
     #[test]
     fn test_eval_function_exp_zero() {
-        let result = eval_function("exp", &[Value::Property(PropertyValue::Integer(0))]).unwrap();
+        let result = eval_function("exp", &[Value::Property(PropertyValue::Integer(0))], None).unwrap();
         match result {
             Value::Property(PropertyValue::Float(f)) => assert!((f - 1.0).abs() < 1e-10),
             _ => panic!("Expected Float"),
@@ -6551,13 +6578,13 @@ mod tests {
 
     #[test]
     fn test_eval_function_exp_type_error() {
-        let result = eval_function("exp", &[Value::Property(PropertyValue::Boolean(true))]);
+        let result = eval_function("exp", &[Value::Property(PropertyValue::Boolean(true))], None);
         assert!(result.is_err());
     }
 
     #[test]
     fn test_eval_function_rand() {
-        let result = eval_function("rand", &[]).unwrap();
+        let result = eval_function("rand", &[], None).unwrap();
         match result {
             Value::Property(PropertyValue::Float(f)) => {
                 assert!(f >= 0.0 && f < 1.0);
@@ -6568,13 +6595,13 @@ mod tests {
 
     #[test]
     fn test_eval_function_abs_int() {
-        let result = eval_function("abs", &[Value::Property(PropertyValue::Integer(-42))]).unwrap();
+        let result = eval_function("abs", &[Value::Property(PropertyValue::Integer(-42))], None).unwrap();
         assert_eq!(result, Value::Property(PropertyValue::Integer(42)));
     }
 
     #[test]
     fn test_eval_function_abs_float() {
-        let result = eval_function("abs", &[Value::Property(PropertyValue::Float(-3.14))]).unwrap();
+        let result = eval_function("abs", &[Value::Property(PropertyValue::Float(-3.14))], None).unwrap();
         match result {
             Value::Property(PropertyValue::Float(f)) => assert!((f - 3.14).abs() < 1e-10),
             _ => panic!("Expected Float"),
@@ -6583,49 +6610,49 @@ mod tests {
 
     #[test]
     fn test_eval_function_abs_type_error() {
-        let result = eval_function("abs", &[Value::Property(PropertyValue::String("x".to_string()))]);
+        let result = eval_function("abs", &[Value::Property(PropertyValue::String("x".to_string()))], None);
         assert!(result.is_err());
     }
 
     #[test]
     fn test_eval_function_ceil_float() {
-        let result = eval_function("ceil", &[Value::Property(PropertyValue::Float(3.2))]).unwrap();
+        let result = eval_function("ceil", &[Value::Property(PropertyValue::Float(3.2))], None).unwrap();
         assert_eq!(result, Value::Property(PropertyValue::Integer(4)));
     }
 
     #[test]
     fn test_eval_function_ceil_int() {
-        let result = eval_function("ceil", &[Value::Property(PropertyValue::Integer(3))]).unwrap();
+        let result = eval_function("ceil", &[Value::Property(PropertyValue::Integer(3))], None).unwrap();
         assert_eq!(result, Value::Property(PropertyValue::Integer(3)));
     }
 
     #[test]
     fn test_eval_function_floor_float() {
-        let result = eval_function("floor", &[Value::Property(PropertyValue::Float(3.9))]).unwrap();
+        let result = eval_function("floor", &[Value::Property(PropertyValue::Float(3.9))], None).unwrap();
         assert_eq!(result, Value::Property(PropertyValue::Integer(3)));
     }
 
     #[test]
     fn test_eval_function_floor_int() {
-        let result = eval_function("floor", &[Value::Property(PropertyValue::Integer(5))]).unwrap();
+        let result = eval_function("floor", &[Value::Property(PropertyValue::Integer(5))], None).unwrap();
         assert_eq!(result, Value::Property(PropertyValue::Integer(5)));
     }
 
     #[test]
     fn test_eval_function_round_float() {
-        let result = eval_function("round", &[Value::Property(PropertyValue::Float(3.5))]).unwrap();
+        let result = eval_function("round", &[Value::Property(PropertyValue::Float(3.5))], None).unwrap();
         assert_eq!(result, Value::Property(PropertyValue::Integer(4)));
     }
 
     #[test]
     fn test_eval_function_round_int() {
-        let result = eval_function("round", &[Value::Property(PropertyValue::Integer(7))]).unwrap();
+        let result = eval_function("round", &[Value::Property(PropertyValue::Integer(7))], None).unwrap();
         assert_eq!(result, Value::Property(PropertyValue::Integer(7)));
     }
 
     #[test]
     fn test_eval_function_sqrt_float() {
-        let result = eval_function("sqrt", &[Value::Property(PropertyValue::Float(16.0))]).unwrap();
+        let result = eval_function("sqrt", &[Value::Property(PropertyValue::Float(16.0))], None).unwrap();
         match result {
             Value::Property(PropertyValue::Float(f)) => assert!((f - 4.0).abs() < 1e-10),
             _ => panic!("Expected Float"),
@@ -6634,7 +6661,7 @@ mod tests {
 
     #[test]
     fn test_eval_function_sqrt_int() {
-        let result = eval_function("sqrt", &[Value::Property(PropertyValue::Integer(9))]).unwrap();
+        let result = eval_function("sqrt", &[Value::Property(PropertyValue::Integer(9))], None).unwrap();
         match result {
             Value::Property(PropertyValue::Float(f)) => assert!((f - 3.0).abs() < 1e-10),
             _ => panic!("Expected Float"),
@@ -6643,31 +6670,31 @@ mod tests {
 
     #[test]
     fn test_eval_function_sign_positive() {
-        let result = eval_function("sign", &[Value::Property(PropertyValue::Integer(42))]).unwrap();
+        let result = eval_function("sign", &[Value::Property(PropertyValue::Integer(42))], None).unwrap();
         assert_eq!(result, Value::Property(PropertyValue::Integer(1)));
     }
 
     #[test]
     fn test_eval_function_sign_negative() {
-        let result = eval_function("sign", &[Value::Property(PropertyValue::Integer(-5))]).unwrap();
+        let result = eval_function("sign", &[Value::Property(PropertyValue::Integer(-5))], None).unwrap();
         assert_eq!(result, Value::Property(PropertyValue::Integer(-1)));
     }
 
     #[test]
     fn test_eval_function_sign_zero() {
-        let result = eval_function("sign", &[Value::Property(PropertyValue::Integer(0))]).unwrap();
+        let result = eval_function("sign", &[Value::Property(PropertyValue::Integer(0))], None).unwrap();
         assert_eq!(result, Value::Property(PropertyValue::Integer(0)));
     }
 
     #[test]
     fn test_eval_function_sign_float() {
-        let result = eval_function("sign", &[Value::Property(PropertyValue::Float(-2.5))]).unwrap();
+        let result = eval_function("sign", &[Value::Property(PropertyValue::Float(-2.5))], None).unwrap();
         assert_eq!(result, Value::Property(PropertyValue::Integer(-1)));
     }
 
     #[test]
     fn test_eval_function_sign_float_zero() {
-        let result = eval_function("sign", &[Value::Property(PropertyValue::Float(0.0))]).unwrap();
+        let result = eval_function("sign", &[Value::Property(PropertyValue::Float(0.0))], None).unwrap();
         assert_eq!(result, Value::Property(PropertyValue::Integer(0)));
     }
 
@@ -6675,37 +6702,37 @@ mod tests {
 
     #[test]
     fn test_eval_function_ltrim() {
-        let result = eval_function("ltrim", &[Value::Property(PropertyValue::String("  hello  ".to_string()))]).unwrap();
+        let result = eval_function("ltrim", &[Value::Property(PropertyValue::String("  hello  ".to_string()))], None).unwrap();
         assert_eq!(result, Value::Property(PropertyValue::String("hello  ".to_string())));
     }
 
     #[test]
     fn test_eval_function_rtrim() {
-        let result = eval_function("rtrim", &[Value::Property(PropertyValue::String("  hello  ".to_string()))]).unwrap();
+        let result = eval_function("rtrim", &[Value::Property(PropertyValue::String("  hello  ".to_string()))], None).unwrap();
         assert_eq!(result, Value::Property(PropertyValue::String("  hello".to_string())));
     }
 
     #[test]
     fn test_eval_function_trim() {
-        let result = eval_function("trim", &[Value::Property(PropertyValue::String("  hello  ".to_string()))]).unwrap();
+        let result = eval_function("trim", &[Value::Property(PropertyValue::String("  hello  ".to_string()))], None).unwrap();
         assert_eq!(result, Value::Property(PropertyValue::String("hello".to_string())));
     }
 
     #[test]
     fn test_eval_function_tostring_integer() {
-        let result = eval_function("tostring", &[Value::Property(PropertyValue::Integer(42))]).unwrap();
+        let result = eval_function("tostring", &[Value::Property(PropertyValue::Integer(42))], None).unwrap();
         assert_eq!(result, Value::Property(PropertyValue::String("42".to_string())));
     }
 
     #[test]
     fn test_eval_function_tostring_boolean() {
-        let result = eval_function("tostring", &[Value::Property(PropertyValue::Boolean(true))]).unwrap();
+        let result = eval_function("tostring", &[Value::Property(PropertyValue::Boolean(true))], None).unwrap();
         assert_eq!(result, Value::Property(PropertyValue::String("true".to_string())));
     }
 
     #[test]
     fn test_eval_function_tostring_float() {
-        let result = eval_function("tostring", &[Value::Property(PropertyValue::Float(3.14))]).unwrap();
+        let result = eval_function("tostring", &[Value::Property(PropertyValue::Float(3.14))], None).unwrap();
         match result {
             Value::Property(PropertyValue::String(s)) => assert!(s.starts_with("3.14")),
             _ => panic!("Expected String"),
@@ -6714,49 +6741,49 @@ mod tests {
 
     #[test]
     fn test_eval_function_tostring_null() {
-        let result = eval_function("tostring", &[Value::Null]).unwrap();
+        let result = eval_function("tostring", &[Value::Null], None).unwrap();
         assert_eq!(result, Value::Property(PropertyValue::String("null".to_string())));
     }
 
     #[test]
     fn test_eval_function_tostring_string() {
-        let result = eval_function("tostring", &[Value::Property(PropertyValue::String("hello".to_string()))]).unwrap();
+        let result = eval_function("tostring", &[Value::Property(PropertyValue::String("hello".to_string()))], None).unwrap();
         assert_eq!(result, Value::Property(PropertyValue::String("hello".to_string())));
     }
 
     #[test]
     fn test_eval_function_tointeger_string() {
-        let result = eval_function("tointeger", &[Value::Property(PropertyValue::String("42".to_string()))]).unwrap();
+        let result = eval_function("tointeger", &[Value::Property(PropertyValue::String("42".to_string()))], None).unwrap();
         assert_eq!(result, Value::Property(PropertyValue::Integer(42)));
     }
 
     #[test]
     fn test_eval_function_tointeger_bad_string() {
-        let result = eval_function("tointeger", &[Value::Property(PropertyValue::String("bad".to_string()))]);
+        let result = eval_function("tointeger", &[Value::Property(PropertyValue::String("bad".to_string()))], None);
         assert!(result.is_err());
     }
 
     #[test]
     fn test_eval_function_tointeger_float() {
-        let result = eval_function("tointeger", &[Value::Property(PropertyValue::Float(3.9))]).unwrap();
+        let result = eval_function("tointeger", &[Value::Property(PropertyValue::Float(3.9))], None).unwrap();
         assert_eq!(result, Value::Property(PropertyValue::Integer(3)));
     }
 
     #[test]
     fn test_eval_function_tointeger_integer() {
-        let result = eval_function("tointeger", &[Value::Property(PropertyValue::Integer(7))]).unwrap();
+        let result = eval_function("tointeger", &[Value::Property(PropertyValue::Integer(7))], None).unwrap();
         assert_eq!(result, Value::Property(PropertyValue::Integer(7)));
     }
 
     #[test]
     fn test_eval_function_tointeger_type_error() {
-        let result = eval_function("tointeger", &[Value::Property(PropertyValue::Boolean(true))]);
+        let result = eval_function("tointeger", &[Value::Property(PropertyValue::Boolean(true))], None);
         assert!(result.is_err());
     }
 
     #[test]
     fn test_eval_function_tofloat_string() {
-        let result = eval_function("tofloat", &[Value::Property(PropertyValue::String("3.14".to_string()))]).unwrap();
+        let result = eval_function("tofloat", &[Value::Property(PropertyValue::String("3.14".to_string()))], None).unwrap();
         match result {
             Value::Property(PropertyValue::Float(f)) => assert!((f - 3.14).abs() < 1e-10),
             _ => panic!("Expected Float"),
@@ -6765,13 +6792,13 @@ mod tests {
 
     #[test]
     fn test_eval_function_tofloat_bad_string() {
-        let result = eval_function("tofloat", &[Value::Property(PropertyValue::String("bad".to_string()))]);
+        let result = eval_function("tofloat", &[Value::Property(PropertyValue::String("bad".to_string()))], None);
         assert!(result.is_err());
     }
 
     #[test]
     fn test_eval_function_tofloat_integer() {
-        let result = eval_function("tofloat", &[Value::Property(PropertyValue::Integer(5))]).unwrap();
+        let result = eval_function("tofloat", &[Value::Property(PropertyValue::Integer(5))], None).unwrap();
         match result {
             Value::Property(PropertyValue::Float(f)) => assert!((f - 5.0).abs() < 1e-10),
             _ => panic!("Expected Float"),
@@ -6780,7 +6807,7 @@ mod tests {
 
     #[test]
     fn test_eval_function_tofloat_float() {
-        let result = eval_function("tofloat", &[Value::Property(PropertyValue::Float(2.5))]).unwrap();
+        let result = eval_function("tofloat", &[Value::Property(PropertyValue::Float(2.5))], None).unwrap();
         match result {
             Value::Property(PropertyValue::Float(f)) => assert!((f - 2.5).abs() < 1e-10),
             _ => panic!("Expected Float"),
@@ -6789,7 +6816,7 @@ mod tests {
 
     #[test]
     fn test_eval_function_tofloat_type_error() {
-        let result = eval_function("tofloat", &[Value::Property(PropertyValue::Boolean(false))]);
+        let result = eval_function("tofloat", &[Value::Property(PropertyValue::Boolean(false))], None);
         assert!(result.is_err());
     }
 
@@ -6797,13 +6824,13 @@ mod tests {
 
     #[test]
     fn test_eval_function_toupper() {
-        let result = eval_function("toupper", &[Value::Property(PropertyValue::String("hello".to_string()))]).unwrap();
+        let result = eval_function("toupper", &[Value::Property(PropertyValue::String("hello".to_string()))], None).unwrap();
         assert_eq!(result, Value::Property(PropertyValue::String("HELLO".to_string())));
     }
 
     #[test]
     fn test_eval_function_tolower() {
-        let result = eval_function("tolower", &[Value::Property(PropertyValue::String("HELLO".to_string()))]).unwrap();
+        let result = eval_function("tolower", &[Value::Property(PropertyValue::String("HELLO".to_string()))], None).unwrap();
         assert_eq!(result, Value::Property(PropertyValue::String("hello".to_string())));
     }
 
@@ -6813,7 +6840,7 @@ mod tests {
             Value::Property(PropertyValue::String("hello world".to_string())),
             Value::Property(PropertyValue::String("world".to_string())),
             Value::Property(PropertyValue::String("rust".to_string())),
-        ]).unwrap();
+        ], None).unwrap();
         assert_eq!(result, Value::Property(PropertyValue::String("hello rust".to_string())));
     }
 
@@ -6821,7 +6848,7 @@ mod tests {
     fn test_eval_function_replace_too_few_args() {
         let result = eval_function("replace", &[
             Value::Property(PropertyValue::String("hello".to_string())),
-        ]);
+        ], None);
         assert!(result.is_err());
     }
 
@@ -6830,7 +6857,7 @@ mod tests {
         let result = eval_function("substring", &[
             Value::Property(PropertyValue::String("hello world".to_string())),
             Value::Property(PropertyValue::Integer(6)),
-        ]).unwrap();
+        ], None).unwrap();
         assert_eq!(result, Value::Property(PropertyValue::String("world".to_string())));
     }
 
@@ -6840,7 +6867,7 @@ mod tests {
             Value::Property(PropertyValue::String("hello world".to_string())),
             Value::Property(PropertyValue::Integer(0)),
             Value::Property(PropertyValue::Integer(5)),
-        ]).unwrap();
+        ], None).unwrap();
         assert_eq!(result, Value::Property(PropertyValue::String("hello".to_string())));
     }
 
@@ -6849,7 +6876,7 @@ mod tests {
         let result = eval_function("substring", &[
             Value::Property(PropertyValue::String("hi".to_string())),
             Value::Property(PropertyValue::Integer(100)),
-        ]).unwrap();
+        ], None).unwrap();
         assert_eq!(result, Value::Property(PropertyValue::String("".to_string())));
     }
 
@@ -6857,7 +6884,7 @@ mod tests {
     fn test_eval_function_substring_too_few_args() {
         let result = eval_function("substring", &[
             Value::Property(PropertyValue::String("hello".to_string())),
-        ]);
+        ], None);
         assert!(result.is_err());
     }
 
@@ -6866,7 +6893,7 @@ mod tests {
         let result = eval_function("left", &[
             Value::Property(PropertyValue::String("hello".to_string())),
             Value::Property(PropertyValue::Integer(3)),
-        ]).unwrap();
+        ], None).unwrap();
         assert_eq!(result, Value::Property(PropertyValue::String("hel".to_string())));
     }
 
@@ -6875,13 +6902,13 @@ mod tests {
         let result = eval_function("right", &[
             Value::Property(PropertyValue::String("hello".to_string())),
             Value::Property(PropertyValue::Integer(3)),
-        ]).unwrap();
+        ], None).unwrap();
         assert_eq!(result, Value::Property(PropertyValue::String("llo".to_string())));
     }
 
     #[test]
     fn test_eval_function_reverse() {
-        let result = eval_function("reverse", &[Value::Property(PropertyValue::String("abc".to_string()))]).unwrap();
+        let result = eval_function("reverse", &[Value::Property(PropertyValue::String("abc".to_string()))], None).unwrap();
         assert_eq!(result, Value::Property(PropertyValue::String("cba".to_string())));
     }
 
@@ -6889,14 +6916,14 @@ mod tests {
 
     #[test]
     fn test_eval_function_size_string() {
-        let result = eval_function("size", &[Value::Property(PropertyValue::String("hello".to_string()))]).unwrap();
+        let result = eval_function("size", &[Value::Property(PropertyValue::String("hello".to_string()))], None).unwrap();
         assert_eq!(result, Value::Property(PropertyValue::Integer(5)));
     }
 
     #[test]
     fn test_eval_function_size_array() {
         let arr = vec![PropertyValue::Integer(1), PropertyValue::Integer(2), PropertyValue::Integer(3)];
-        let result = eval_function("size", &[Value::Property(PropertyValue::Array(arr))]).unwrap();
+        let result = eval_function("size", &[Value::Property(PropertyValue::Array(arr))], None).unwrap();
         assert_eq!(result, Value::Property(PropertyValue::Integer(3)));
     }
 
@@ -6907,13 +6934,13 @@ mod tests {
             nodes: vec![NodeId::new(1), NodeId::new(2), NodeId::new(3)],
             edges: vec![EdgeId::new(1), EdgeId::new(2)],
         };
-        let result = eval_function("length", &[path]).unwrap();
+        let result = eval_function("length", &[path], None).unwrap();
         assert_eq!(result, Value::Property(PropertyValue::Integer(2)));
     }
 
     #[test]
     fn test_eval_function_size_type_error() {
-        let result = eval_function("size", &[Value::Property(PropertyValue::Integer(42))]);
+        let result = eval_function("size", &[Value::Property(PropertyValue::Integer(42))], None);
         assert!(result.is_err());
     }
 
@@ -6926,7 +6953,7 @@ mod tests {
             nodes: vec![NodeId::new(1), NodeId::new(2)],
             edges: vec![EdgeId::new(10)],
         };
-        let result = eval_function("nodes", &[path]).unwrap();
+        let result = eval_function("nodes", &[path], None).unwrap();
         match result {
             Value::Property(PropertyValue::Array(arr)) => {
                 assert_eq!(arr.len(), 2);
@@ -6939,7 +6966,7 @@ mod tests {
 
     #[test]
     fn test_eval_function_nodes_type_error() {
-        let result = eval_function("nodes", &[Value::Property(PropertyValue::Integer(1))]);
+        let result = eval_function("nodes", &[Value::Property(PropertyValue::Integer(1))], None);
         assert!(result.is_err());
     }
 
@@ -6950,7 +6977,7 @@ mod tests {
             nodes: vec![NodeId::new(1), NodeId::new(2)],
             edges: vec![EdgeId::new(10)],
         };
-        let result = eval_function("relationships", &[path]).unwrap();
+        let result = eval_function("relationships", &[path], None).unwrap();
         match result {
             Value::Property(PropertyValue::Array(arr)) => {
                 assert_eq!(arr.len(), 1);
@@ -6962,7 +6989,7 @@ mod tests {
 
     #[test]
     fn test_eval_function_relationships_type_error() {
-        let result = eval_function("relationships", &[Value::Property(PropertyValue::String("x".to_string()))]);
+        let result = eval_function("relationships", &[Value::Property(PropertyValue::String("x".to_string()))], None);
         assert!(result.is_err());
     }
 
@@ -6972,7 +6999,7 @@ mod tests {
     fn test_eval_function_startnode_edgeref() {
         use crate::graph::types::{NodeId, EdgeId, EdgeType};
         let edge = Value::EdgeRef(EdgeId::new(1), NodeId::new(10), NodeId::new(20), EdgeType::new("KNOWS"));
-        let result = eval_function("startnode", &[edge]).unwrap();
+        let result = eval_function("startnode", &[edge], None).unwrap();
         assert_eq!(result, Value::NodeRef(NodeId::new(10)));
     }
 
@@ -6980,19 +7007,19 @@ mod tests {
     fn test_eval_function_endnode_edgeref() {
         use crate::graph::types::{NodeId, EdgeId, EdgeType};
         let edge = Value::EdgeRef(EdgeId::new(1), NodeId::new(10), NodeId::new(20), EdgeType::new("KNOWS"));
-        let result = eval_function("endnode", &[edge]).unwrap();
+        let result = eval_function("endnode", &[edge], None).unwrap();
         assert_eq!(result, Value::NodeRef(NodeId::new(20)));
     }
 
     #[test]
     fn test_eval_function_startnode_type_error() {
-        let result = eval_function("startnode", &[Value::Property(PropertyValue::Integer(1))]);
+        let result = eval_function("startnode", &[Value::Property(PropertyValue::Integer(1))], None);
         assert!(result.is_err());
     }
 
     #[test]
     fn test_eval_function_endnode_type_error() {
-        let result = eval_function("endnode", &[Value::Property(PropertyValue::Integer(1))]);
+        let result = eval_function("endnode", &[Value::Property(PropertyValue::Integer(1))], None);
         assert!(result.is_err());
     }
 
@@ -7003,7 +7030,7 @@ mod tests {
         let result = eval_function("range", &[
             Value::Property(PropertyValue::Integer(1)),
             Value::Property(PropertyValue::Integer(5)),
-        ]).unwrap();
+        ], None).unwrap();
         match result {
             Value::Property(PropertyValue::Array(arr)) => {
                 let vals: Vec<i64> = arr.iter().map(|v| v.as_integer().unwrap()).collect();
@@ -7019,7 +7046,7 @@ mod tests {
             Value::Property(PropertyValue::Integer(5)),
             Value::Property(PropertyValue::Integer(1)),
             Value::Property(PropertyValue::Integer(-1)),
-        ]).unwrap();
+        ], None).unwrap();
         match result {
             Value::Property(PropertyValue::Array(arr)) => {
                 let vals: Vec<i64> = arr.iter().map(|v| v.as_integer().unwrap()).collect();
@@ -7035,13 +7062,13 @@ mod tests {
             Value::Property(PropertyValue::Integer(0)),
             Value::Property(PropertyValue::Integer(10)),
             Value::Property(PropertyValue::Integer(0)),
-        ]);
+        ], None);
         assert!(result.is_err());
     }
 
     #[test]
     fn test_eval_function_range_too_few_args() {
-        let result = eval_function("range", &[Value::Property(PropertyValue::Integer(1))]);
+        let result = eval_function("range", &[Value::Property(PropertyValue::Integer(1))], None);
         assert!(result.is_err());
     }
 
@@ -7054,52 +7081,52 @@ mod tests {
             Value::Property(PropertyValue::Null),
             Value::Property(PropertyValue::Integer(42)),
             Value::Property(PropertyValue::Integer(99)),
-        ]).unwrap();
+        ], None).unwrap();
         assert_eq!(result, Value::Property(PropertyValue::Integer(42)));
     }
 
     #[test]
     fn test_eval_function_coalesce_all_null() {
-        let result = eval_function("coalesce", &[Value::Null, Value::Property(PropertyValue::Null)]).unwrap();
+        let result = eval_function("coalesce", &[Value::Null, Value::Property(PropertyValue::Null)], None).unwrap();
         assert_eq!(result, Value::Null);
     }
 
     #[test]
     fn test_eval_function_head() {
         let arr = vec![PropertyValue::Integer(10), PropertyValue::Integer(20)];
-        let result = eval_function("head", &[Value::Property(PropertyValue::Array(arr))]).unwrap();
+        let result = eval_function("head", &[Value::Property(PropertyValue::Array(arr))], None).unwrap();
         assert_eq!(result, Value::Property(PropertyValue::Integer(10)));
     }
 
     #[test]
     fn test_eval_function_head_empty() {
-        let result = eval_function("head", &[Value::Property(PropertyValue::Array(vec![]))]).unwrap();
+        let result = eval_function("head", &[Value::Property(PropertyValue::Array(vec![]))], None).unwrap();
         assert_eq!(result, Value::Null);
     }
 
     #[test]
     fn test_eval_function_head_type_error() {
-        let result = eval_function("head", &[Value::Property(PropertyValue::Integer(1))]);
+        let result = eval_function("head", &[Value::Property(PropertyValue::Integer(1))], None);
         assert!(result.is_err());
     }
 
     #[test]
     fn test_eval_function_last() {
         let arr = vec![PropertyValue::Integer(10), PropertyValue::Integer(20)];
-        let result = eval_function("last", &[Value::Property(PropertyValue::Array(arr))]).unwrap();
+        let result = eval_function("last", &[Value::Property(PropertyValue::Array(arr))], None).unwrap();
         assert_eq!(result, Value::Property(PropertyValue::Integer(20)));
     }
 
     #[test]
     fn test_eval_function_last_empty() {
-        let result = eval_function("last", &[Value::Property(PropertyValue::Array(vec![]))]).unwrap();
+        let result = eval_function("last", &[Value::Property(PropertyValue::Array(vec![]))], None).unwrap();
         assert_eq!(result, Value::Null);
     }
 
     #[test]
     fn test_eval_function_tail() {
         let arr = vec![PropertyValue::Integer(1), PropertyValue::Integer(2), PropertyValue::Integer(3)];
-        let result = eval_function("tail", &[Value::Property(PropertyValue::Array(arr))]).unwrap();
+        let result = eval_function("tail", &[Value::Property(PropertyValue::Array(arr))], None).unwrap();
         match result {
             Value::Property(PropertyValue::Array(arr)) => {
                 assert_eq!(arr.len(), 2);
@@ -7112,31 +7139,31 @@ mod tests {
 
     #[test]
     fn test_eval_function_tail_type_error() {
-        let result = eval_function("tail", &[Value::Property(PropertyValue::Integer(1))]);
+        let result = eval_function("tail", &[Value::Property(PropertyValue::Integer(1))], None);
         assert!(result.is_err());
     }
 
     #[test]
     fn test_eval_function_exists_non_null() {
-        let result = eval_function("exists", &[Value::Property(PropertyValue::Integer(42))]).unwrap();
+        let result = eval_function("exists", &[Value::Property(PropertyValue::Integer(42))], None).unwrap();
         assert_eq!(result, Value::Property(PropertyValue::Boolean(true)));
     }
 
     #[test]
     fn test_eval_function_exists_null() {
-        let result = eval_function("exists", &[Value::Null]).unwrap();
+        let result = eval_function("exists", &[Value::Null], None).unwrap();
         assert_eq!(result, Value::Property(PropertyValue::Boolean(false)));
     }
 
     #[test]
     fn test_eval_function_exists_property_null() {
-        let result = eval_function("exists", &[Value::Property(PropertyValue::Null)]).unwrap();
+        let result = eval_function("exists", &[Value::Property(PropertyValue::Null)], None).unwrap();
         assert_eq!(result, Value::Property(PropertyValue::Boolean(false)));
     }
 
     #[test]
     fn test_eval_function_unknown() {
-        let result = eval_function("no_such_function", &[]);
+        let result = eval_function("no_such_function", &[], None);
         assert!(result.is_err());
     }
 
@@ -7947,21 +7974,93 @@ mod tests {
     #[test]
     fn test_eval_function_id_noderef() {
         use crate::graph::types::NodeId;
-        let result = eval_function("id", &[Value::NodeRef(NodeId::new(42))]).unwrap();
+        let result = eval_function("id", &[Value::NodeRef(NodeId::new(42))], None).unwrap();
         assert_eq!(result, Value::Property(PropertyValue::Integer(42)));
     }
 
     #[test]
     fn test_eval_function_id_edgeref() {
         use crate::graph::types::{NodeId, EdgeId, EdgeType};
-        let result = eval_function("id", &[Value::EdgeRef(EdgeId::new(7), NodeId::new(1), NodeId::new(2), EdgeType::new("R"))]).unwrap();
+        let result = eval_function("id", &[Value::EdgeRef(EdgeId::new(7), NodeId::new(1), NodeId::new(2), EdgeType::new("R"))], None).unwrap();
         assert_eq!(result, Value::Property(PropertyValue::Integer(7)));
     }
 
     #[test]
     fn test_eval_function_id_type_error() {
-        let result = eval_function("id", &[Value::Property(PropertyValue::Integer(1))]);
+        let result = eval_function("id", &[Value::Property(PropertyValue::Integer(1))], None);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_labels_with_noderef() {
+        use crate::graph::types::NodeId;
+
+        let mut store = GraphStore::new();
+        let nid = store.create_node("Person");
+        store.get_node_mut(nid).unwrap().add_label(crate::graph::types::Label::new("Employee"));
+
+        let result = eval_function("labels", &[Value::NodeRef(nid)], Some(&store)).unwrap();
+        match result {
+            Value::Property(PropertyValue::Array(arr)) => {
+                let labels: Vec<String> = arr.iter().map(|v| v.as_string().unwrap().to_string()).collect();
+                assert!(labels.contains(&"Person".to_string()));
+                assert!(labels.contains(&"Employee".to_string()));
+            }
+            _ => panic!("Expected array from labels()"),
+        }
+    }
+
+    #[test]
+    fn test_type_with_edgeref() {
+        use crate::graph::types::{NodeId, EdgeId, EdgeType};
+
+        let result = eval_function("type", &[
+            Value::EdgeRef(EdgeId::new(1), NodeId::new(10), NodeId::new(20), EdgeType::new("KNOWS"))
+        ], None).unwrap();
+        assert_eq!(result, Value::Property(PropertyValue::String("KNOWS".to_string())));
+    }
+
+    #[test]
+    fn test_keys_with_noderef() {
+        use crate::graph::types::NodeId;
+
+        let mut store = GraphStore::new();
+        let nid = store.create_node("Person");
+        store.get_node_mut(nid).unwrap().set_property("name", "Alice");
+        store.get_node_mut(nid).unwrap().set_property("age", 30i64);
+
+        let result = eval_function("keys", &[Value::NodeRef(nid)], Some(&store)).unwrap();
+        match result {
+            Value::Property(PropertyValue::Array(arr)) => {
+                let keys: Vec<String> = arr.iter().map(|v| v.as_string().unwrap().to_string()).collect();
+                assert!(keys.contains(&"name".to_string()));
+                assert!(keys.contains(&"age".to_string()));
+            }
+            _ => panic!("Expected array from keys()"),
+        }
+    }
+
+    #[test]
+    fn test_keys_with_edgeref() {
+        use crate::graph::types::{NodeId, EdgeId, EdgeType};
+
+        let mut store = GraphStore::new();
+        let n1 = store.create_node("A");
+        let n2 = store.create_node("B");
+        let eid = store.create_edge(n1, n2, "REL").unwrap();
+        store.get_edge_mut(eid).unwrap().set_property("weight", 1.5f64);
+
+        let edge = store.get_edge(eid).unwrap();
+        let result = eval_function("keys", &[
+            Value::EdgeRef(eid, edge.source, edge.target, edge.edge_type.clone())
+        ], Some(&store)).unwrap();
+        match result {
+            Value::Property(PropertyValue::Array(arr)) => {
+                let keys: Vec<String> = arr.iter().map(|v| v.as_string().unwrap().to_string()).collect();
+                assert!(keys.contains(&"weight".to_string()));
+            }
+            _ => panic!("Expected array from keys()"),
+        }
     }
 
     // ---- ExpandIntoOperator tests (TDD) ----
