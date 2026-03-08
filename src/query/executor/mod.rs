@@ -5989,4 +5989,28 @@ mod tests {
         assert!(text.contains("Rows:"), "Should contain row count");
         assert!(text.contains("Statistics"), "Should contain Statistics section");
     }
+
+    #[test]
+    fn test_anonymous_node_patterns() {
+        // Test: MATCH ()-[r]->() RETURN type(r) with anonymous (unnamed) nodes
+        let mut store = GraphStore::new();
+        let a = store.create_node("Person");
+        store.get_node_mut(a).unwrap().set_property("name", "Alice");
+        let b = store.create_node("Person");
+        store.get_node_mut(b).unwrap().set_property("name", "Bob");
+        store.create_edge(a, b, "KNOWS").unwrap();
+        store.create_edge(b, a, "FOLLOWS").unwrap();
+
+        // Anonymous start and end nodes with named edge
+        let query = parse_query("MATCH ()-[r]->() RETURN type(r) AS t ORDER BY t").unwrap();
+        let executor = QueryExecutor::new(&store);
+        let result = executor.execute(&query).unwrap();
+        assert_eq!(result.records.len(), 2);
+
+        // Anonymous nodes with aggregation using count(*)
+        let query = parse_query("MATCH ()-[r]->() RETURN type(r) AS t, count(*) AS c ORDER BY t").unwrap();
+        let executor = QueryExecutor::new(&store);
+        let result = executor.execute(&query).unwrap();
+        assert_eq!(result.records.len(), 2);
+    }
 }

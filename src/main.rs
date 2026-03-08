@@ -1,4 +1,5 @@
 use samyama::{GraphStore, NodeId, QueryEngine, RespServer, ServerConfig};
+use samyama::http::HttpServer;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use std::collections::HashMap;
@@ -469,6 +470,16 @@ async fn start_server() {
     if let Some(ref pm) = persistence {
         pm.start_indexer(&*store.read().await, rx);
     }
+
+    // Start HTTP server for Visualizer API on port 8080
+    let http_store = Arc::clone(&store);
+    tokio::spawn(async move {
+        let http_server = HttpServer::new(http_store, 8080);
+        println!("HTTP server starting on port 8080 (visualizer + API)");
+        if let Err(e) = http_server.start().await {
+            eprintln!("HTTP server error: {}", e);
+        }
+    });
 
     let server = if let Some(pm) = persistence {
         RespServer::new_with_persistence(config, store, pm)
