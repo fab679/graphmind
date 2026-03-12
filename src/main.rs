@@ -242,7 +242,13 @@ fn build_social_network(store: &mut GraphStore) {
         let id = store.create_node("Post");
         if let Some(node) = store.get_node_mut(id) {
             let topic = post_topics[i % post_topics.len()];
-            node.set_property("title", topic);
+            let repeat = i / post_topics.len();
+            let title = if repeat == 0 {
+                topic.to_string()
+            } else {
+                format!("{} #{}", topic, repeat + 1)
+            };
+            node.set_property("title", title.as_str());
             node.set_property("content", format!("{}. This is post #{} with detailed thoughts on the topic.", topic, i));
             node.set_property("created_at", 1700000000000i64 + (i as i64 * 3_600_000));
             node.set_property("views", (i as i64 * 17) % 5000);
