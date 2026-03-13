@@ -130,6 +130,7 @@ pub mod http;
 pub mod embed;
 pub mod nlq;
 pub mod agent;
+pub mod snapshot;
 
 // Re-export main types for convenience
 pub use graph::{
@@ -148,7 +149,6 @@ pub use protocol::{
 pub use persistence::{
     PersistenceManager, PersistenceError, PersistenceResult,
     PersistentStorage, StorageError, StorageResult,
-    Tenant, TenantManager, ResourceQuotas, ResourceUsage, TenantError, TenantResult,
     Wal, WalEntry, WalError, WalResult,
     AutoEmbedConfig, NLQConfig, LLMProvider,
 };
