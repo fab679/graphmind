@@ -785,14 +785,6 @@ async fn main() {
             ),
         };
 
-        let tenant_mgr = client.tenant_manager();
-        tenant_mgr.create_tenant(
-            "industrial_nlq".to_string(),
-            "Industrial KG NLQ".to_string(),
-            None,
-        ).unwrap();
-        tenant_mgr.update_nlq_config("industrial_nlq", Some(nlq_config.clone())).unwrap();
-
         let schema_summary = "Node labels: Site, Location, Equipment, Sensor, FailureMode\n\
                               Edge types: CONTAINS_LOCATION, CONTAINS_EQUIPMENT, HAS_SENSOR, MONITORS, DEPENDS_ON, SHARES_SYSTEM_WITH\n\
                               Relationships: (Site)-[:CONTAINS_LOCATION]->(Location)-[:CONTAINS_EQUIPMENT]->(Equipment)-[:HAS_SENSOR]->(Sensor), \

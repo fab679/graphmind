@@ -762,10 +762,6 @@ async fn main() {
             system_prompt: Some("You are a Cypher query expert for a social network graph.".to_string()),
         };
 
-        let tenant_mgr = client.tenant_manager();
-        tenant_mgr.create_tenant("social_nlq".to_string(), "Social NLQ".to_string(), None).unwrap();
-        tenant_mgr.update_nlq_config("social_nlq", Some(nlq_config.clone())).unwrap();
-
         let schema_summary = "Node labels: User\n\
                               Edge types: FOLLOWS, COLLABORATES, ENDORSED\n\
                               Properties: User(name, company['Google'/'Meta'/'Apple'/'Amazon'/'Microsoft'/'Netflix'/'Stripe'/'Airbnb'/'Uber'/etc.], primary_skill, community['AI/ML Engineers'/'Frontend Developers'/'Backend Engineers'/'DevOps/SRE'/'Data Engineers'/'Mobile Developers'/'Security Engineers'/'Product Managers'/'UX Designers'/'QA Engineers'], years_experience)\n\

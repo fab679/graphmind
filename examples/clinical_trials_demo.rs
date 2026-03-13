@@ -1061,10 +1061,6 @@ async fn main() {
             system_prompt: Some("You are a Cypher query expert for a clinical trials knowledge graph.".to_string()),
         };
 
-        let tenant_mgr = client.tenant_manager();
-        tenant_mgr.create_tenant("clinical_nlq".to_string(), "Clinical NLQ".to_string(), None).unwrap();
-        tenant_mgr.update_nlq_config("clinical_nlq", Some(nlq_config.clone())).unwrap();
-
         let schema_summary = "Node labels: Trial, Drug, Condition, Site, Patient\n\
                               Edge types: TESTS, STUDIES, CONDUCTED_AT, HAS_CONDITION, INTERACTS_WITH\n\
                               Properties: Trial(nct_id, title, phase['Phase I'/'Phase II'/'Phase III'], status['Recruiting'/'Active'/'Completed'], sponsor, target_enrollment), \
