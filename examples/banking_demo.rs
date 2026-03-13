@@ -6,7 +6,7 @@
 //! - Money laundering pattern detection (structuring, rapid succession, circular transfers)
 //! - OFAC/Sanctions screening simulation
 //! - Customer relationship network analysis
-//! - Multi-tenancy for different banking divisions
+//! - Persistence with RocksDB storage
 //! - Complex Cypher queries for business intelligence
 //!
 //! Prerequisites:
@@ -36,7 +36,7 @@ use std::time::Instant;
 
 use samyama_sdk::{
     EmbeddedClient, SamyamaClient,
-    PersistenceManager, ResourceQuotas,
+    PersistenceManager,
     GraphStore, Label, NodeId,
     LLMProvider, NLQConfig,
 };
@@ -603,54 +603,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("└──────────────────────────────────────────────────────────────────────┘");
 
     let persist_mgr = PersistenceManager::new("./banking_data")?;
-
-    // Retail Banking Division
-    let retail_quotas = ResourceQuotas {
-        max_nodes: Some(10_000_000),
-        max_edges: Some(50_000_000),
-        max_memory_bytes: Some(4 * 1024 * 1024 * 1024),      // 4 GB
-        max_storage_bytes: Some(20 * 1024 * 1024 * 1024),    // 20 GB
-        max_connections: Some(500),
-        max_query_time_ms: Some(60_000),
-    };
-    persist_mgr.tenants().create_tenant(
-        "retail_banking".to_string(),
-        "Retail Banking Division".to_string(),
-        Some(retail_quotas),
-    )?;
-    println!("  ✓ Created 'retail_banking' tenant (quota: 10M nodes, 50M edges)");
-
-    // Corporate Banking Division
-    let corporate_quotas = ResourceQuotas {
-        max_nodes: Some(1_000_000),
-        max_edges: Some(10_000_000),
-        max_memory_bytes: Some(8 * 1024 * 1024 * 1024),      // 8 GB
-        max_storage_bytes: Some(50 * 1024 * 1024 * 1024),    // 50 GB
-        max_connections: Some(100),
-        max_query_time_ms: Some(120_000),
-    };
-    persist_mgr.tenants().create_tenant(
-        "corporate_banking".to_string(),
-        "Corporate Banking Division".to_string(),
-        Some(corporate_quotas),
-    )?;
-    println!("  ✓ Created 'corporate_banking' tenant (quota: 1M nodes, 10M edges)");
-
-    // Wealth Management Division
-    let wealth_quotas = ResourceQuotas {
-        max_nodes: Some(500_000),
-        max_edges: Some(5_000_000),
-        max_memory_bytes: Some(2 * 1024 * 1024 * 1024),      // 2 GB
-        max_storage_bytes: Some(10 * 1024 * 1024 * 1024),    // 10 GB
-        max_connections: Some(50),
-        max_query_time_ms: Some(180_000),
-    };
-    persist_mgr.tenants().create_tenant(
-        "wealth_management".to_string(),
-        "Wealth Management Division".to_string(),
-        Some(wealth_quotas),
-    )?;
-    println!("  ✓ Created 'wealth_management' tenant (quota: 500K nodes, 5M edges)");
+    println!("  ✓ Initialized persistence layer");
     println!();
 
     // =========================================================================
@@ -1127,34 +1080,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     drop(graph);
 
     // =========================================================================
-    // 7. TENANT USAGE REPORT
+    // 7. GRAPH USAGE REPORT
     // =========================================================================
     println!("┌──────────────────────────────────────────────────────────────────────┐");
-    println!("│ STEP 7: Tenant Usage Report                                         │");
+    println!("│ STEP 7: Graph Usage Report                                          │");
     println!("└──────────────────────────────────────────────────────────────────────┘");
     println!();
 
-    let tenants = persist_mgr.tenants().list_tenants();
-    for tenant in tenants {
-        let usage = persist_mgr.tenants().get_usage(&tenant.id)?;
-        let info = persist_mgr.tenants().get_tenant(&tenant.id)?;
-        let max_nodes = info.quotas.max_nodes.unwrap_or(0);
-        let pct = if max_nodes > 0 {
-            (usage.node_count as f64 / max_nodes as f64) * 100.0
-        } else {
-            0.0
-        };
-
-        println!("  {} ({})", tenant.name, tenant.id);
-        println!("    Nodes: {:>10} / {:>10} ({:.1}%)",
-            usage.node_count,
-            max_nodes,
-            pct
-        );
-        println!("    Edges: {:>10} / {:>10}",
-            usage.edge_count,
-            info.quotas.max_edges.unwrap_or(0)
-        );
+    {
+        let graph = client.store_read().await;
+        println!("  Graph Statistics:");
+        println!("    Nodes: {:>10}", graph.node_count());
+        println!("    Edges: {:>10}", graph.edge_count());
         println!();
     }
 
@@ -1192,8 +1129,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             api_base_url: None,
             system_prompt: Some("You are a Cypher query expert for a banking fraud detection knowledge graph.".to_string()),
         };
-
-        persist_mgr.tenants().update_nlq_config("retail_banking", Some(nlq_config.clone())).unwrap();
 
         let schema_summary = "Node labels: Branch, Customer, Account, Transaction\n\
                               Additional labels: HighRisk, MediumRisk, LowRisk, Individual, Corporate, HighNetWorth, Flagged\n\
@@ -1253,7 +1188,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("        └─[:EMPLOYED_BY]─>(Customer:Corporate)");
     println!();
     println!("  Use Cases Demonstrated:");
-    println!("    ✓ Multi-tenancy (Retail / Corporate / Wealth Management)");
+    println!("    ✓ Persistence with RocksDB storage");
     println!("    ✓ TSV data loading from synthetic data generators");
     println!("    ✓ Customer segmentation (Individual / Corporate / HNW)");
     println!("    ✓ Risk classification (Low / Medium / High)");

@@ -774,10 +774,6 @@ async fn main() {
             system_prompt: Some("You are a Cypher query expert for a smart manufacturing knowledge graph.".to_string()),
         };
 
-        let tenant_mgr = client.tenant_manager();
-        tenant_mgr.create_tenant("mfg_nlq".to_string(), "Manufacturing NLQ".to_string(), None).unwrap();
-        tenant_mgr.update_nlq_config("mfg_nlq", Some(nlq_config.clone())).unwrap();
-
         let schema_summary = "Node labels: ProductionLine, Machine, Product, Material\n\
                               Edge types: BELONGS_TO, PRODUCES, REQUIRES, FEEDS_INTO\n\
                               Relationship paths: (Machine)-[:BELONGS_TO]->(ProductionLine), (Machine)-[:PRODUCES]->(Product)-[:REQUIRES]->(Material), (ProductionLine)-[:FEEDS_INTO]->(ProductionLine)\n\

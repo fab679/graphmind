@@ -17,12 +17,10 @@
 use samyama_sdk::{
     EmbeddedClient, SamyamaClient, AlgorithmClient, VectorClient,
     EdgeType, Label, NodeId, PageRankConfig,
-    PersistenceManager,
-    NLQConfig, LLMProvider, AgentConfig, AutoEmbedConfig,
+    NLQConfig, LLMProvider, AgentConfig,
     DistanceMetric,
 };
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::time::Instant;
 
 // ---------------------------------------------------------------------------
@@ -64,8 +62,6 @@ async fn main() {
     // ======================================================================
     let client = EmbeddedClient::new();
 
-    let temp_dir = tempfile::TempDir::new().unwrap();
-    let persistence = Arc::new(PersistenceManager::new(temp_dir.path()).unwrap());
     let tenant_id = "soc_ops";
 
     let agent_config = AgentConfig {
@@ -81,19 +77,6 @@ async fn main() {
         ]),
     };
 
-    let embed_config = AutoEmbedConfig {
-        provider: LLMProvider::Mock,
-        embedding_model: "threat-embed-v1".to_string(),
-        api_key: Some("mock".to_string()),
-        api_base_url: None,
-        chunk_size: 256,
-        chunk_overlap: 32,
-        vector_dimension: 128,
-        embedding_policies: HashMap::from([
-            ("ThreatIntel".to_string(), vec!["description".to_string()]),
-        ]),
-    };
-
     let nlq_config = NLQConfig {
         enabled: true,
         provider: LLMProvider::ClaudeCode,
@@ -102,15 +85,6 @@ async fn main() {
         api_base_url: None,
         system_prompt: Some("You are a Cypher query expert for a cybersecurity knowledge graph.".to_string()),
     };
-
-    persistence.tenants().create_tenant(
-        tenant_id.to_string(),
-        "Security Operations Center".to_string(),
-        None,
-    ).unwrap();
-    persistence.tenants().update_agent_config(tenant_id, Some(agent_config.clone())).unwrap();
-    persistence.tenants().update_embed_config(tenant_id, Some(embed_config)).unwrap();
-    persistence.tenants().update_nlq_config(tenant_id, Some(nlq_config.clone())).unwrap();
 
     // Create vector index for threat signature matching (128-dim)
     client.create_vector_index("ThreatIntel", "signature_embedding", 128, DistanceMetric::Cosine).await.unwrap();
@@ -989,9 +963,8 @@ async fn main() {
 
         // Agent enrichment: generate threat intelligence for a new IOC
         println!("    --- Agentic Enrichment: Generating Threat Intel ---");
-        let tenant_data = persistence.tenants().get_tenant(tenant_id).unwrap();
-        if let Some(agent_cfg) = tenant_data.agent_config {
-            let runtime = client.agent_runtime(agent_cfg);
+        {
+            let runtime = client.agent_runtime(agent_config.clone());
             let enrichment_prompt = "Generate Cypher CREATE statements for a new threat intelligence entry:\n\
                                      1. One ThreatIntel node: CVE-2025-99999 with properties cve_id, description: 'Zero-day RCE in enterprise VPN appliance', cvss_score: 9.8, malware_family: 'VPNExploit'\n\
                                      2. One MitreTechnique node: T1190 with properties technique_id, name: 'Exploit Public-Facing Application', tactic: 'Initial Access'\n\

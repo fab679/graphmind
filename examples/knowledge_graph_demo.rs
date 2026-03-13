@@ -1446,10 +1446,6 @@ async fn main() {
             system_prompt: Some("You are a Cypher query expert for an enterprise knowledge graph.".to_string()),
         };
 
-        let tenant_mgr = client.tenant_manager();
-        tenant_mgr.create_tenant("knowledge_nlq".to_string(), "Knowledge NLQ".to_string(), None).unwrap();
-        tenant_mgr.update_nlq_config("knowledge_nlq", Some(nlq_config.clone())).unwrap();
-
         let schema_summary = "Node labels: Document, Employee, Project, Technology\n\
                               Edge types: AUTHORED, WORKS_ON, USES_TECH, REFERENCES, TAGGED_WITH, DEPENDS_ON\n\
                               Relationship paths: (Employee)-[:AUTHORED]->(Document), (Employee)-[:WORKS_ON]->(Project), (Project)-[:USES_TECH]->(Technology), (Document)-[:REFERENCES]->(Document), (Document)-[:TAGGED_WITH]->(Technology)\n\

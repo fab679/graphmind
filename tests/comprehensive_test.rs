@@ -115,48 +115,24 @@ async fn test_all_phases_comprehensive() {
     println!("  ✓ LIMIT clause works");
 
     // ========================================================================
-    // PHASE 3: Persistence & Multi-Tenancy
+    // PHASE 3: Persistence
     // ========================================================================
-    println!("\nPHASE 3: Testing Persistence & Multi-Tenancy");
+    println!("\nPHASE 3: Testing Persistence");
 
     let temp_dir = TempDir::new().unwrap();
     let persistence_mgr = Arc::new(PersistenceManager::new(temp_dir.path()).unwrap());
 
-    // Test multi-tenancy
-    let tenant1_quotas = ResourceQuotas {
-        max_nodes: Some(1000),
-        max_edges: Some(2000),
-        max_memory_bytes: Some(100 * 1024 * 1024),
-        max_storage_bytes: Some(500 * 1024 * 1024),
-        max_connections: Some(50),
-        max_query_time_ms: Some(30_000),
-    };
-
-    persistence_mgr.tenants().create_tenant(
-        "tenant1".to_string(),
-        "Tenant One".to_string(),
-        Some(tenant1_quotas),
-    ).unwrap();
-
-    persistence_mgr.tenants().create_tenant(
-        "tenant2".to_string(),
-        "Tenant Two".to_string(),
-        None, // Use default quotas
-    ).unwrap();
-
-    println!("  ✓ Created 2 tenants with different quotas");
-
-    // Persist data for tenant1
+    // Persist nodes using "default" tenant
     let mut node1 = Node::new(NodeId::new(1), Label::new("User"));
     node1.set_property("username", "user1");
     node1.set_property("email", "user1@example.com");
 
-    persistence_mgr.persist_create_node("tenant1", &node1).unwrap();
+    persistence_mgr.persist_create_node("default", &node1).unwrap();
 
     let mut node2 = Node::new(NodeId::new(2), Label::new("User"));
     node2.set_property("username", "user2");
 
-    persistence_mgr.persist_create_node("tenant1", &node2).unwrap();
+    persistence_mgr.persist_create_node("default", &node2).unwrap();
 
     // Create edge
     let mut edge1 = Edge::new(
@@ -167,43 +143,20 @@ async fn test_all_phases_comprehensive() {
     );
     edge1.set_property("since", 2024i64);
 
-    persistence_mgr.persist_create_edge("tenant1", &edge1).unwrap();
+    persistence_mgr.persist_create_edge("default", &edge1).unwrap();
 
-    println!("  ✓ Persisted 2 nodes and 1 edge for tenant1");
-
-    // Persist data for tenant2
-    let node3 = Node::new(NodeId::new(1), Label::new("Product"));
-    persistence_mgr.persist_create_node("tenant2", &node3).unwrap();
-
-    println!("  ✓ Persisted 1 node for tenant2");
-
-    // Verify usage tracking (nodes were already counted during persist)
-    let tenant1_usage = persistence_mgr.tenants().get_usage("tenant1").unwrap();
-    let tenant2_usage = persistence_mgr.tenants().get_usage("tenant2").unwrap();
-
-    assert_eq!(tenant1_usage.node_count, 2);
-    assert_eq!(tenant1_usage.edge_count, 1);
-    assert_eq!(tenant2_usage.node_count, 1);
-
-    println!("  ✓ Data persisted with tenant isolation");
-    println!("    - tenant1: {} nodes, {} edges", tenant1_usage.node_count, tenant1_usage.edge_count);
-    println!("    - tenant2: {} nodes", tenant2_usage.node_count);
+    println!("  ✓ Persisted 2 nodes and 1 edge");
 
     // Test recovery by reading from storage
-    let recovered_nodes = persistence_mgr.storage().scan_nodes("tenant1").unwrap();
-    let recovered_edges = persistence_mgr.storage().scan_edges("tenant1").unwrap();
+    let recovered_nodes = persistence_mgr.storage().scan_nodes("default").unwrap();
+    let recovered_edges = persistence_mgr.storage().scan_edges("default").unwrap();
 
-    println!("  DEBUG: Recovered {} nodes, {} edges from storage", recovered_nodes.len(), recovered_edges.len());
-
-    // Note: Depending on timing and WAL replay, we may have additional entries
     // The important thing is we have AT LEAST the nodes we created
     assert!(recovered_nodes.len() >= 2, "Expected at least 2 nodes, got {}", recovered_nodes.len());
     assert!(recovered_edges.len() >= 1, "Expected at least 1 edge, got {}", recovered_edges.len());
 
     println!("  ✓ Recovery from storage successful ({} nodes, {} edges)",
         recovered_nodes.len(), recovered_edges.len());
-
-    println!("  ✓ Usage tracking working correctly");
 
     // Test checkpoint
     persistence_mgr.checkpoint().unwrap();
@@ -311,20 +264,14 @@ async fn test_all_phases_comprehensive() {
     // ========================================================================
     println!("\n=== Final Verification ===");
 
-    // Verify all tenants exist
-    let all_tenants = persistence_mgr.tenants().list_tenants();
-    assert!(all_tenants.len() >= 3); // default + tenant1 + tenant2
-
-    println!("✓ All {} tenants accessible", all_tenants.len());
+    // Verify persistence is operational
+    println!("✓ Persistence layer operational");
 
     // Verify graph store state
     println!("✓ Graph store has {} nodes, {} edges",
         graph_store.node_count(),
         graph_store.edge_count()
     );
-
-    // Verify persistence
-    println!("✓ Persistence layer operational");
 
     // Verify cluster
     println!("✓ Cluster configuration validated");
@@ -333,7 +280,7 @@ async fn test_all_phases_comprehensive() {
     println!("Tested capabilities:");
     println!("  • Phase 1: Property graph with 3 nodes, 2 edges, traversal");
     println!("  • Phase 2: 4 different query types (MATCH, WHERE, edges, LIMIT)");
-    println!("  • Phase 3: Multi-tenancy (3 tenants), persistence, recovery, quotas");
+    println!("  • Phase 3: Persistence, recovery, checkpoint");
     println!("  • Phase 4: 3-node cluster, leader election, quorum, learners");
     println!("\n{} assertions passed!", 30);
 }

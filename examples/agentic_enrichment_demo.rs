@@ -43,14 +43,6 @@ async fn main() {
     println!("--- Setup: Tenant with ClaudeCode NLQ + Agent Config ---");
 
     let client = EmbeddedClient::new();
-    let tenant_mgr = client.tenant_manager();
-    tenant_mgr
-        .create_tenant(
-            "pharma_research".to_string(),
-            "Pharma Research".to_string(),
-            None,
-        )
-        .unwrap();
 
     // NLQ config — translates natural language to read-only Cypher
     let nlq_config = NLQConfig {
@@ -63,10 +55,6 @@ async fn main() {
             "You are a Cypher query expert for a pharmaceutical knowledge graph.".to_string(),
         ),
     };
-
-    tenant_mgr
-        .update_nlq_config("pharma_research", Some(nlq_config.clone()))
-        .unwrap();
 
     // Agent config — generates enrichment CREATE statements
     let mut policies = HashMap::new();
@@ -88,11 +76,7 @@ async fn main() {
         policies,
     };
 
-    tenant_mgr
-        .update_agent_config("pharma_research", Some(agent_config.clone()))
-        .unwrap();
-
-    println!("  Created tenant 'pharma_research'");
+    println!("  Created client");
     println!("  NLQ config: ClaudeCode provider (natural language -> Cypher)");
     println!("  Agent config: ClaudeCode provider (enrichment CREATE statements)");
     println!("  Enrichment policy: Drug -> indications, manufacturer, trials");
@@ -147,9 +131,7 @@ async fn main() {
     println!("  Waiting for Claude to generate knowledge subgraph...");
     println!();
 
-    let tenant = tenant_mgr.get_tenant("pharma_research").unwrap();
-    let config = tenant.agent_config.unwrap();
-    let runtime = client.agent_runtime(config);
+    let runtime = client.agent_runtime(agent_config);
 
     let enrichment_prompt = build_enrichment_prompt("Semaglutide");
     let response = match runtime

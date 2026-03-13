@@ -1213,6 +1213,11 @@ NodeDeleted { tenant_id: _, id, labels, properties } => {
         self.nodes.iter().flatten().collect()
     }
 
+    /// Get all edges in the graph
+    pub fn all_edges(&self) -> Vec<&Edge> {
+        self.edges.iter().flatten().collect()
+    }
+
     // ============================================================
     // Graph Statistics (for cost-based query optimization)
     // ============================================================
@@ -1966,6 +1971,19 @@ mod tests {
         store.create_node("B");
         store.create_node("C");
         assert_eq!(store.all_nodes().len(), 3);
+    }
+
+    #[test]
+    fn test_all_edges() {
+        let mut store = GraphStore::new();
+        assert!(store.all_edges().is_empty());
+
+        let a = store.create_node("A");
+        let b = store.create_node("B");
+        let c = store.create_node("C");
+        store.create_edge(a, b, "R1").unwrap();
+        store.create_edge(b, c, "R2").unwrap();
+        assert_eq!(store.all_edges().len(), 2);
     }
 
     #[test]

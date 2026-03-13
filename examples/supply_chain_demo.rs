@@ -1204,10 +1204,6 @@ async fn main() {
             system_prompt: Some("You are a Cypher query expert for a pharmaceutical supply chain knowledge graph.".to_string()),
         };
 
-        let tenant_mgr = client.tenant_manager();
-        tenant_mgr.create_tenant("supply_nlq".to_string(), "Supply Chain NLQ".to_string(), None).unwrap();
-        tenant_mgr.update_nlq_config("supply_nlq", Some(nlq_config.clone())).unwrap();
-
         let schema_summary = "Node labels: Port, Supplier, Product, ShippingLine, Shipment\n\
                               Edge types: SHIPS_FROM, SHIPS_TO, SUPPLIES, CONTAINS (Shipment->Product), CARRIES (ShippingLine->Shipment), ROUTES_THROUGH, BASED_AT\n\
                               Relationship paths: (Supplier)-[:SUPPLIES]->(Product), (Supplier)-[:BASED_AT]->(Port), (Shipment)-[:SHIPS_FROM]->(Port), (Shipment)-[:SHIPS_TO]->(Port), (Shipment)-[:CONTAINS]->(Product), (ShippingLine)-[:CARRIES]->(Shipment)\n\
