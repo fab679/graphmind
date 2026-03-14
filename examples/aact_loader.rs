@@ -109,9 +109,20 @@ async fn main() -> Result<(), Error> {
     // ========================================================================
     // OPTIONAL: Snapshot export
     // ========================================================================
-    if let Some(ref _snap_path) = snapshot_path {
+    if let Some(ref snap_path) = snapshot_path {
         eprintln!();
-        eprintln!("Snapshot export not yet implemented (planned for Phase 2).");
+        eprintln!("Exporting snapshot to {}...", snap_path.display());
+        let snap_start = Instant::now();
+        let snap_stats = client.export_snapshot("default", snap_path).await?;
+        let snap_elapsed = snap_start.elapsed();
+        let file_size = std::fs::metadata(snap_path).map(|m| m.len()).unwrap_or(0);
+        eprintln!(
+            "Snapshot exported: {} nodes, {} edges ({:.1} MB) in {}",
+            format_num(snap_stats.node_count as usize),
+            format_num(snap_stats.edge_count as usize),
+            file_size as f64 / (1024.0 * 1024.0),
+            format_duration(snap_elapsed),
+        );
     }
 
     // ========================================================================

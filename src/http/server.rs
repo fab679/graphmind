@@ -9,6 +9,7 @@ use crate::graph::GraphStore;
 use crate::query::QueryEngine;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use axum::extract::DefaultBodyLimit;
 use tower_http::cors::CorsLayer;
 use tracing::info;
 use super::handler::{
@@ -65,7 +66,8 @@ impl HttpServer {
             .route("/api/import/csv", post(import_csv_handler))
             .route("/api/import/json", post(import_json_handler))
             .route("/api/snapshot/export", post(export_snapshot_handler))
-            .route("/api/snapshot/import", post(restore_snapshot_handler))
+            .route("/api/snapshot/import", post(restore_snapshot_handler)
+                .layer(DefaultBodyLimit::max(2 * 1024 * 1024 * 1024))) // 2 GB
             .layer(CorsLayer::permissive())
             .with_state(state);
 
