@@ -1,14 +1,12 @@
-//! AACT Dataset Loader — Samyama Graph Database
+//! Cricket KG Dataset Loader — Samyama Graph Database
 //!
-//! Loads the full ClinicalTrials.gov (AACT) dataset from pipe-delimited flat
-//! files into GraphStore via the Rust SDK API. Expected to load 575K studies
-//! with ~2M nodes and ~10M edges in 3-8 minutes.
+//! Loads Cricsheet ball-by-ball cricket data (JSON files) into GraphStore
+//! via the Rust SDK API. 21K matches → ~36K nodes + ~1.4M edges in seconds.
 //!
 //! Usage:
-//!   cargo run --release --example aact_loader -- --data-dir data/aact
-//!   cargo run --release --example aact_loader -- --data-dir data/aact --max-studies 10000
-//!   cargo run --release --example aact_loader -- --data-dir data/aact --query
-//!   cargo run --release --example aact_loader -- --data-dir data/aact --snapshot output.sgsnap
+//!   cargo run --release --example cricket_loader -- --data-dir data/cricket
+//!   cargo run --release --example cricket_loader -- --data-dir data/cricket --max-matches 1000
+//!   cargo run --release --example cricket_loader -- --data-dir data/cricket --snapshot cricket.sgsnap
 
 use std::io::{self, BufRead, Write};
 use std::path::PathBuf;
@@ -16,8 +14,8 @@ use std::time::Instant;
 
 use samyama_sdk::{EmbeddedClient, SamyamaClient};
 
-mod aact_common;
-use aact_common::{format_duration, format_num};
+mod cricket_common;
+use cricket_common::{format_duration, format_num};
 
 type Error = Box<dyn std::error::Error>;
 
@@ -32,22 +30,22 @@ async fn main() -> Result<(), Error> {
                 .expect("--data-dir requires a path argument"),
         )
     } else {
-        eprintln!("Usage: cargo run --release --example aact_loader -- --data-dir <PATH>");
+        eprintln!("Usage: cargo run --release --example cricket_loader -- --data-dir <PATH>");
         eprintln!();
         eprintln!("Options:");
-        eprintln!("  --data-dir PATH      Directory containing AACT .txt files (required)");
-        eprintln!("  --max-studies N       Limit number of studies (0 = all, default 0)");
+        eprintln!("  --data-dir PATH      Directory containing Cricsheet JSON files (required)");
+        eprintln!("  --max-matches N      Limit number of matches (0 = all, default 0)");
         eprintln!("  --query              Enter interactive Cypher REPL after loading");
         eprintln!("  --snapshot PATH      Export snapshot to .sgsnap file after loading");
         std::process::exit(1);
     };
 
-    // --max-studies N (default 0 = all)
-    let max_studies = if let Some(pos) = args.iter().position(|a| a == "--max-studies") {
+    // --max-matches N (default 0 = all)
+    let max_matches = if let Some(pos) = args.iter().position(|a| a == "--max-matches") {
         args.get(pos + 1)
-            .expect("--max-studies requires a number")
+            .expect("--max-matches requires a number")
             .parse::<usize>()
-            .expect("--max-studies must be a positive integer")
+            .expect("--max-matches must be a positive integer")
     } else {
         0
     };
@@ -63,20 +61,20 @@ async fn main() -> Result<(), Error> {
         None
     };
 
-    eprintln!("AACT Dataset Loader — Samyama Graph Database");
+    eprintln!("Cricket KG Dataset Loader — Samyama Graph Database");
     eprintln!();
 
     if !data_dir.exists() {
         eprintln!("ERROR: Data directory not found: {}", data_dir.display());
-        eprintln!("Download AACT flat files from https://aact.ctti-clinicaltrials.org/");
+        eprintln!("Download Cricsheet data from https://cricsheet.org/downloads/all_json.zip");
         std::process::exit(1);
     }
 
     eprintln!("Data directory: {}", data_dir.display());
-    if max_studies > 0 {
-        eprintln!("Max studies: {}", format_num(max_studies));
+    if max_matches > 0 {
+        eprintln!("Max matches: {}", format_num(max_matches));
     } else {
-        eprintln!("Max studies: all");
+        eprintln!("Max matches: all");
     }
     eprintln!();
 
@@ -85,25 +83,16 @@ async fn main() -> Result<(), Error> {
 
     let result = {
         let mut graph = client.store_write().await;
-        aact_common::load_dataset(&mut graph, &data_dir, max_studies)?
+        cricket_common::load_dataset(&mut graph, &data_dir, max_matches)?
     };
 
     let total_elapsed = total_start.elapsed();
     eprintln!();
     eprintln!("========================================");
-    eprintln!("AACT load complete.");
-    eprintln!(
-        "  Nodes: {}",
-        format_num(result.total_nodes)
-    );
-    eprintln!(
-        "  Edges: {}",
-        format_num(result.total_edges)
-    );
-    eprintln!(
-        "  Time:  {}",
-        format_duration(total_elapsed)
-    );
+    eprintln!("Cricket KG load complete.");
+    eprintln!("  Nodes: {}", format_num(result.total_nodes));
+    eprintln!("  Edges: {}", format_num(result.total_edges));
+    eprintln!("  Time:  {}", format_duration(total_elapsed));
     eprintln!("========================================");
 
     // ========================================================================
@@ -155,10 +144,8 @@ async fn main() -> Result<(), Error> {
                     if result.columns.is_empty() {
                         eprintln!("(empty result)");
                     } else {
-                        // Print header
                         eprintln!("{}", result.columns.join(" | "));
                         eprintln!("{}", "-".repeat(result.columns.len() * 20));
-                        // Print rows
                         for row in &result.records {
                             let vals: Vec<String> =
                                 row.iter().map(|v| format!("{}", v)).collect();
