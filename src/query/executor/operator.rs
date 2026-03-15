@@ -73,6 +73,29 @@ use samyama_optimization::common::{Problem, SolverConfig, MultiObjectiveProblem}
 use samyama_optimization::algorithms::{JayaSolver, RaoSolver, RaoVariant, TLBOSolver, FireflySolver, CuckooSolver, GWOSolver, GASolver, SASolver, BatSolver, ABCSolver, GSASolver, NSGA2Solver, MOTLBOSolver, HSSolver, FPASolver};
 use ndarray::Array1;
 
+// Thread-local query deadline for cooperative timeout inside operator materialization loops.
+// Set by QueryExecutor before execution, checked by JoinOperator/AggregateOperator/SortOperator.
+thread_local! {
+    static QUERY_DEADLINE: std::cell::Cell<Option<std::time::Instant>> = const { std::cell::Cell::new(None) };
+}
+
+/// Set the query deadline for the current thread (called by QueryExecutor)
+pub fn set_query_deadline(deadline: Option<std::time::Instant>) {
+    QUERY_DEADLINE.with(|d| d.set(deadline));
+}
+
+/// Check if the query deadline has been exceeded; returns Err if so
+fn check_deadline() -> ExecutionResult<()> {
+    QUERY_DEADLINE.with(|d| {
+        if let Some(deadline) = d.get() {
+            if std::time::Instant::now() > deadline {
+                return Err(ExecutionError::RuntimeError("Query timed out".to_string()));
+            }
+        }
+        Ok(())
+    })
+}
+
 /// Extract node ID from a Value for identity comparison
 fn node_id_of(v: &Value) -> Option<NodeId> {
     match v {
@@ -2700,10 +2723,13 @@ impl PhysicalOperator for AggregateOperator {
 impl AggregateOperator {
     fn execute_all(&mut self, store: &GraphStore) -> ExecutionResult<()> {
         let mut groups: HashMap<Vec<Value>, Vec<AggregatorState>> = HashMap::new();
-        
+
         // Use next_batch from input for performance
         let batch_size = 1024;
+        let mut batch_count = 0u64;
         while let Some(batch) = self.input.next_batch(store, batch_size)? {
+            batch_count += 1;
+            if batch_count % 10 == 0 { check_deadline()?; }
             for record in batch.records {
                 // Evaluate grouping keys
                 let mut key = Vec::new();
@@ -3220,8 +3246,11 @@ impl CartesianProductOperator {
         if self.left_materialized {
             return Ok(());
         }
+        let mut count = 0u64;
         while let Some(record) = self.left.next(store)? {
             self.left_records.push(record);
+            count += 1;
+            if count % 10000 == 0 { check_deadline()?; }
         }
         self.left_materialized = true;
         Ok(())
@@ -3347,16 +3376,22 @@ impl JoinOperator {
             return Ok(());
         }
 
-        // Materialize left into a hash map
+        // Materialize left into a hash map (with periodic timeout check)
+        let mut count = 0u64;
         while let Some(record) = self.left.next(store)? {
             if let Some(val) = record.get(&self.join_var) {
                 self.left_records.entry(val.clone()).or_default().push(record);
             }
+            count += 1;
+            if count % 10000 == 0 { check_deadline()?; }
         }
 
         // Materialize right into a list
+        count = 0;
         while let Some(record) = self.right.next(store)? {
             self.right_records.push(record);
+            count += 1;
+            if count % 10000 == 0 { check_deadline()?; }
         }
 
         self.materialized = true;
@@ -3498,16 +3533,22 @@ impl LeftOuterJoinOperator {
             return Ok(());
         }
 
-        // Materialize left as flat list
+        // Materialize left as flat list (with timeout check)
+        let mut count = 0u64;
         while let Some(record) = self.left.next(store)? {
             self.left_records.push(record);
+            count += 1;
+            if count % 10000 == 0 { check_deadline()?; }
         }
 
         // Materialize right into a hash map by join variable
+        count = 0;
         while let Some(record) = self.right.next(store)? {
             if let Some(val) = record.get(&self.join_var) {
                 self.right_hash.entry(val.clone()).or_default().push(record);
             }
+            count += 1;
+            if count % 10000 == 0 { check_deadline()?; }
         }
 
         self.materialized = true;

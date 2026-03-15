@@ -233,21 +233,31 @@ impl<'a> QueryExecutor<'a> {
     }
 
     fn execute_plan(&self, mut plan: ExecutionPlan) -> ExecutionResult<RecordBatch> {
+        // Set thread-local deadline so operators can check it during materialization
+        operator::set_query_deadline(self.deadline);
+
         let mut records = Vec::new();
         let batch_size = 1024;
 
         // Pull records from the root operator in batches (Vectorized Execution)
-        while let Some(batch) = plan.root.next_batch(self.store, batch_size)? {
-            records.extend(batch.records);
-            // Cooperative timeout check every batch
-            if let Some(deadline) = self.deadline {
-                if std::time::Instant::now() > deadline {
-                    return Err(ExecutionError::RuntimeError(
-                        format!("Query timed out after {} rows", records.len())
-                    ));
+        let result = (|| {
+            while let Some(batch) = plan.root.next_batch(self.store, batch_size)? {
+                records.extend(batch.records);
+                // Cooperative timeout check every batch
+                if let Some(deadline) = self.deadline {
+                    if std::time::Instant::now() > deadline {
+                        return Err(ExecutionError::RuntimeError(
+                            format!("Query timed out after {} rows", records.len())
+                        ));
+                    }
                 }
             }
-        }
+            Ok(())
+        })();
+
+        // Clear deadline after execution
+        operator::set_query_deadline(None);
+        result?;
 
         Ok(RecordBatch {
             records,
