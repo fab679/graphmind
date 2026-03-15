@@ -61,6 +61,24 @@ export class HttpTransport {
     return (await response.json()) as GraphSchema;
   }
 
+  /** Generic POST request returning typed JSON response */
+  async post<T>(path: string, body: unknown): Promise<T> {
+    const response = await fetch(`${this.baseUrl}${path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+
+    if (!response.ok) {
+      const err = (await response.json().catch(() => ({
+        error: `HTTP ${response.status}`,
+      }))) as ErrorResponse;
+      throw new Error(err.error || `HTTP ${response.status}`);
+    }
+
+    return (await response.json()) as T;
+  }
+
   /** Import nodes from CSV via POST /api/import/csv (multipart) */
   async importCsv(
     csvContent: string,
