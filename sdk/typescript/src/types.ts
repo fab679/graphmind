@@ -80,6 +80,43 @@ export interface GraphSchema {
   };
 }
 
+/** Request for subgraph sampling (POST /api/sample) */
+export interface SampleRequest {
+  /** Maximum nodes to return (default: 200, max: 1000) */
+  max_nodes?: number;
+  /** Only include these node labels (empty = all) */
+  labels?: string[];
+  /** Tenant/graph name */
+  graph?: string;
+}
+
+/** A sampled node for visualization */
+export interface SampleNode {
+  id: number;
+  label: string;
+  name: string;
+  properties: Record<string, unknown>;
+}
+
+/** A sampled edge for visualization */
+export interface SampleEdge {
+  id: number;
+  source: number;
+  target: number;
+  type: string;
+  properties: Record<string, unknown>;
+}
+
+/** Result of subgraph sampling */
+export interface SampleResult {
+  nodes: SampleNode[];
+  edges: SampleEdge[];
+  total_nodes: number;
+  total_edges: number;
+  sampled_nodes: number;
+  sampled_edges: number;
+}
+
 /** Result of CSV import */
 export interface CsvImportResult {
   status: string;

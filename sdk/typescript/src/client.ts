@@ -3,6 +3,8 @@ import type {
   ServerStatus,
   ClientOptions,
   GraphSchema,
+  SampleRequest,
+  SampleResult,
   CsvImportResult,
   JsonImportResult,
 } from "./types.js";
@@ -99,6 +101,15 @@ export class SamyamaClient {
   /** Get graph schema (node types, edge types, indexes, constraints, statistics) */
   async schema(): Promise<GraphSchema> {
     return this.http.schema();
+  }
+
+  /**
+   * Sample a subgraph for visualization.
+   * Returns a proportionally sampled set of nodes and edges.
+   * @param options - max_nodes (default 200), labels filter, graph/tenant name
+   */
+  async sample(options: SampleRequest = {}): Promise<SampleResult> {
+    return this.http.post<SampleResult>("/api/sample", options);
   }
 
   /**
