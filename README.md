@@ -13,6 +13,12 @@
 
 **Samyama** is a high-performance, distributed, AI-native graph database written in **Rust**. It combines a **property graph engine**, **vector search**, **graph analytics**, and **natural language querying** in a single binary.
 
+### See it in action
+
+> Dashboard → Cypher Queries → Graph Simulation (Cricket KG — 36K nodes, 1.4M edges)
+
+https://github.com/samyama-ai/samyama-graph/releases/download/kg-snapshots-v2/samyama-cricket-demo.mp4
+
 ### LDBC Benchmark Results (v0.6.0, Mac Mini M4)
 
 | Benchmark | Queries | Pass Rate | Dataset |
