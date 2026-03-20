@@ -106,6 +106,8 @@ jobs:
   publish-pypi:
     name: PyPI
     runs-on: ubuntu-latest
+    env:
+      CXXFLAGS: "-include cstdint"
     steps:
       - uses: actions/checkout@v4
       - uses: PyO3/maturin-action@v1
@@ -113,6 +115,8 @@ jobs:
           working-directory: sdk/python
           command: publish
           args: --skip-existing
+          before-script-linux: |
+            yum install -y clang-devel || apt-get update && apt-get install -y libclang-dev
         env:
           MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
 
