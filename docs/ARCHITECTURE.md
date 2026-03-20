@@ -1329,6 +1329,219 @@ sequenceDiagram
 
 ---
 
+## 13. Multi-Tenancy Architecture (Implementation)
+
+The multi-tenancy system uses fully isolated in-memory graph stores per tenant, managed by `TenantStoreManager`.
+
+### 13.1 TenantStoreManager
+
+**File:** `src/tenant_store.rs`
+
+```mermaid
+graph TB
+    subgraph "TenantStoreManager"
+        TSM["TenantStoreManager<br/>Arc&lt;RwLock&lt;HashMap&lt;String, Arc&lt;RwLock&lt;GraphStore&gt;&gt;&gt;&gt;&gt;"]
+    end
+
+    subgraph "Isolated Graph Stores"
+        GS1["GraphStore: 'default'"]
+        GS2["GraphStore: 'tenant_a'"]
+        GS3["GraphStore: 'tenant_b'"]
+    end
+
+    subgraph "Access Points"
+        HTTP["HTTP Server (:8080)<br/>?graph=name param"]
+        RESP["RESP Server (:6379)<br/>GRAPH.QUERY graph ..."]
+    end
+
+    TSM --> GS1
+    TSM --> GS2
+    TSM --> GS3
+
+    HTTP --> TSM
+    RESP --> TSM
+
+    style TSM fill:#e3f2fd
+    style GS1 fill:#e8f5e9
+    style GS2 fill:#e8f5e9
+    style GS3 fill:#e8f5e9
+```
+
+**Key behaviors:**
+- Holds `HashMap<String, Arc<RwLock<GraphStore>>>` — each tenant gets its own `GraphStore` instance
+- **Lazy creation** via `get_store(name)` — creates a new empty `GraphStore` on first access
+- Shared between HTTP and RESP servers (both hold a reference to the same `TenantStoreManager`)
+- The `"default"` graph is always present
+- API: `GET /api/graphs` lists all graphs, `DELETE /api/graphs/:name` removes a graph
+- All query endpoints accept `?graph=name` to route to a specific tenant store
+
+### 13.2 Tenant Isolation Guarantees
+
+Each tenant operates on a completely separate `GraphStore` instance. There is no shared data between tenants — node IDs, edges, indices, and properties are fully isolated. Cross-tenant queries are not possible by design.
+
+---
+
+## 14. Authentication System
+
+**File:** `src/auth.rs`
+
+```mermaid
+graph TB
+    subgraph "Auth Methods"
+        TOKEN["Bearer Token<br/>Authorization: Bearer &lt;token&gt;"]
+        BASIC["Basic Auth<br/>Authorization: Basic &lt;b64&gt;"]
+        RESP_AUTH["RESP AUTH<br/>AUTH token / AUTH user pass"]
+    end
+
+    subgraph "AuthManager"
+        AM["AuthManager<br/>validate_token / validate_credentials"]
+    end
+
+    subgraph "Roles (RBAC)"
+        ADMIN["Admin<br/>Full access + user management"]
+        RW["ReadWrite<br/>Queries + mutations"]
+        RO["ReadOnly<br/>Read queries only"]
+    end
+
+    TOKEN --> AM
+    BASIC --> AM
+    RESP_AUTH --> AM
+
+    AM --> ADMIN
+    AM --> RW
+    AM --> RO
+
+    style AM fill:#fff3e0
+    style ADMIN fill:#ff6b6b
+    style RW fill:#ffd93d
+    style RO fill:#6bcf7f
+```
+
+**Auth flows:**
+- **HTTP:** Bearer token or Basic auth headers checked by Axum middleware on `/api/*` routes
+- **RESP:** `AUTH token` or `AUTH username password` commands
+- **Login endpoint:** `POST /api/auth/login` — returns a session token given valid credentials
+- **User management:** `GET /api/auth/users` and `POST /api/auth/users` (admin only)
+- **UI integration:** Login screen auto-detected when the server requires authentication
+
+---
+
+## 15. Multi-Statement Query Engine
+
+The query engine supports executing multiple Cypher statements in a single request.
+
+### 15.1 Statement Splitting
+
+`QueryEngine::split_statements()` splits input on `;` while respecting quoted strings (single and double quotes). Each statement is executed sequentially.
+
+### 15.2 Multi-CREATE Rewriting
+
+`QueryEngine::rewrite_multi_create()` handles patterns like:
+
+```cypher
+CREATE (a:Person {name: 'Alice'})
+CREATE (b:Person {name: 'Bob'})
+CREATE (a)-[:KNOWS]->(b)
+```
+
+This is rewritten internally by inserting `WITH` clauses so that variable bindings from earlier `CREATE` clauses are carried forward:
+
+```cypher
+CREATE (a:Person {name: 'Alice'})
+WITH a
+CREATE (b:Person {name: 'Bob'})
+WITH a, b
+CREATE (a)-[:KNOWS]->(b)
+```
+
+### 15.3 Grammar and Operator Changes
+
+- `create_stmt` in `cypher.pest` supports `CREATE pattern (WITH clause CREATE pattern)*`
+- `CreateNodeOperator` returns a single combined record with all node bindings
+- `CreateEdgeOperator` preserves input record bindings for chaining
+
+---
+
+## 16. Observability (Implementation)
+
+### 16.1 Prometheus Metrics
+
+**File:** `src/metrics.rs`
+
+Exposed at `GET /metrics` in Prometheus text format. Tracked metrics:
+- `graphmind_queries_total` — counter by query type (read/write)
+- `graphmind_query_duration_seconds` — histogram of query execution times
+- `graphmind_http_requests_total` — counter by method/path/status
+- `graphmind_http_request_duration_seconds` — histogram of HTTP latencies
+- `graphmind_storage_nodes` / `graphmind_storage_edges` — gauge of current counts
+- `graphmind_resp_connections` — gauge of active RESP connections
+
+### 16.2 Audit Logging
+
+**File:** `src/audit.rs`
+
+JSON-lines format audit log capturing security-relevant events (authentication attempts, user management, query execution). Entries include timestamp, user, action, and outcome.
+
+---
+
+## 17. HTTP Server Architecture (Implementation)
+
+**File:** `src/http/server.rs`
+
+- **Framework:** Axum (async, tower-based)
+- **Static files:** Served via `rust-embed` from `src/http/static/` — the React UI is compiled into the binary
+- **Auth middleware:** Checks Bearer/Basic auth on all `/api/*` routes when auth is enabled
+- **CORS:** Enabled for development (permissive origins)
+- **Tenant routing:** All query endpoints accept `?graph=name` to select the target graph store
+
+---
+
+## 18. Frontend Architecture
+
+The web visualizer is a React 19 + TypeScript single-page application.
+
+**Source:** `ui/` — build output goes to `src/http/static/` (embedded in the server binary)
+
+```mermaid
+graph TB
+    subgraph "Frontend (React 19)"
+        subgraph "State (Zustand)"
+            GRS[graphStore<br/>nodes, edges, selection]
+            QRS[queryStore<br/>execution, history, saved]
+            UIS[uiStore<br/>connection, schema, panels]
+            GSS[graphSettingsStore<br/>colors, icons, captions]
+        end
+
+        subgraph "Visualization"
+            D3[D3.js Force Graph<br/>canvas rendering]
+            LAYOUTS[Layouts: force, circular,<br/>hierarchical, grid]
+            FS[Fullscreen Explorer<br/>glassmorphism legend/search]
+        end
+
+        subgraph "Editor"
+            CM[CodeMirror 6<br/>Cypher syntax + autocomplete]
+            TMPL[Query Templates]
+            SAVED[Saved Queries]
+        end
+    end
+
+    subgraph "Backend"
+        API["HTTP API (:8080)<br/>/api/query, /api/schema, etc."]
+    end
+
+    CM -->|"POST /api/query"| API
+    API --> GRS
+    GRS --> D3
+
+    style D3 fill:#e3f2fd
+    style CM fill:#f3e5f5
+    style API fill:#e8f5e9
+```
+
+**Tech stack:** React 19, Vite 6, TypeScript, Tailwind CSS v4, shadcn/ui, D3.js (d3-force), CodeMirror 6, TanStack Table, Zustand
+
+---
+
 ## Summary
 
 This architecture provides:
@@ -1350,6 +1563,6 @@ This architecture provides:
 
 ---
 
-**Document Version**: 1.0
-**Last Updated**: 2025-10-14
+**Document Version**: 2.0
+**Last Updated**: 2026-03-20
 **Status**: System Architecture Specification

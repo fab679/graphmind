@@ -1,7 +1,7 @@
 # Cypher Compatibility Matrix
 
-**Last Updated:** 2026-03-04
-**Version:** Graphmind v0.5.12
+**Last Updated:** 2026-03-20
+**Version:** Graphmind v0.6.4
 
 This document tracks the compatibility of Graphmind's OpenCypher implementation against the industry standard (Neo4j) and modern competitors (FalkorDB).
 
@@ -74,6 +74,17 @@ Graphmind provides **~90% OpenCypher coverage** with pattern matching, CRUD oper
 | | `algo.triangleCount` | ✅ | ❌ | ❌ | Topology analysis |
 | | `algo.or.solve` | ✅ | ❌ | ❌ | In-database optimization (15+ solvers) |
 
+## Multi-Statement and Schema Commands
+
+| Feature | Graphmind | FalkorDB | Neo4j | Notes |
+| :--- | :---: | :---: | :---: | :--- |
+| Multi-statement queries (`;` separator) | ✅ | ✅ | ✅ | Splits on `;` respecting quoted strings, executes sequentially |
+| Multi-CREATE with shared variables | ✅ | ❌ | ✅ | `CREATE (a:P) CREATE (b:P) CREATE (a)-[:R]->(b)` — auto WITH insertion |
+| `SHOW LABELS` | ✅ | ❌ | ✅ | Lists all node labels in the graph |
+| `SHOW RELATIONSHIP TYPES` | ✅ | ❌ | ✅ | Lists all relationship types |
+| `SHOW PROPERTY KEYS` | ✅ | ❌ | ✅ | Lists all property keys |
+| `CALL db.schema.visualization()` | ✅ | ❌ | ✅ | Returns schema as nodes/edges for visualization |
+
 ## Remaining Gaps
 
 1. **List slicing**: `list[0..3]` syntax not yet supported.
@@ -86,3 +97,5 @@ Graphmind provides **~90% OpenCypher coverage** with pattern matching, CRUD oper
 
 - ~~**CASE expressions**~~: Fully supported as of v0.5.5 (simple and searched forms).
 - ~~**WITH projection barrier**~~: Fully enforced as of v0.5.10.
+- ~~**Multi-statement queries**~~: Supported as of v0.6.4 (semicolon splitting + multi-CREATE rewriting).
+- ~~**Schema introspection**~~: `SHOW LABELS`, `SHOW RELATIONSHIP TYPES`, `SHOW PROPERTY KEYS`, and `CALL db.schema.visualization()` supported.

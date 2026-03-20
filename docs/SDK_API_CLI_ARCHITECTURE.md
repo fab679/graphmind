@@ -35,6 +35,43 @@ The **Rust SDK** is the foundation:
 | **RESP Server** | Protocol | RESP3 (Redis) | 6379 | TCP socket | Direct `Arc<RwLock<>>` | Is the server |
 | **HTTP Server** | Protocol | HTTP/JSON | 8080 | Axum async | Direct `Arc<RwLock<>>` | Is the server |
 
+### Multi-Tenant Support
+
+All SDKs and protocols support the `graph` parameter for tenant routing:
+- **Rust SDK:** `client.query("my_graph", cypher)` — first argument is the graph name
+- **Python SDK:** `client.query("my_graph", cypher)` — same interface via PyO3
+- **TypeScript SDK:** `client.query("my_graph", cypher)` — sent as `{ "query": "...", "graph": "my_graph" }` in HTTP body
+- **CLI:** `graphmind-cli query --graph my_graph "MATCH (n) RETURN n"`
+- **RESP:** `GRAPH.QUERY my_graph "MATCH (n) RETURN n"`
+- **HTTP:** `POST /api/query?graph=my_graph` or `{ "query": "...", "graph": "my_graph" }`
+
+`status(graph)` and `schema(graph)` are also tenant-aware, returning stats/schema for the specified graph.
+
+### Authentication
+
+All remote clients support authentication:
+- **HTTP clients (Remote SDK, CLI, TS SDK):** Basic auth (`username:password` base64) or Bearer token in `Authorization` header
+- **RESP:** `AUTH token` or `AUTH username password` command
+- **Login:** `POST /api/auth/login` with `{ "username": "...", "password": "..." }` returns a session token
+- **User management:** `GET /api/auth/users` and `POST /api/auth/users` (admin-only endpoints)
+
+### Multi-Statement Queries
+
+`execute_mut` (and the `/api/query` endpoint) supports:
+- **Semicolon-separated statements:** `CREATE (a:P) ; CREATE (b:P)` — split and executed sequentially
+- **Multi-CREATE with shared variables:** `CREATE (a:P) CREATE (b:P) CREATE (a)-[:R]->(b)` — automatic WITH insertion for variable forwarding
+
+### Additional Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/auth/login` | Authenticate, returns session token |
+| GET | `/api/auth/users` | List users (admin only) |
+| POST | `/api/auth/users` | Create user (admin only) |
+| GET | `/api/graphs` | List all graph stores |
+| DELETE | `/api/graphs/:name` | Delete a graph store |
+| GET | `/metrics` | Prometheus metrics |
+
 ---
 
 ## Data Flow

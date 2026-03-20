@@ -51,6 +51,16 @@ Once Graphmind acknowledges a write, it is persisted.
 *   **Disk Persistence**: Data is written to the RocksDB WAL immediately.
 *   **Distributed Durability**: In a cluster, data is replicated to a majority of nodes before acknowledgement. Even if the leader node fails immediately after sending an "OK", the data is safe on the followers.
 
+### 5. Multi-Tenant Isolation
+**"No Cross-Tenant Data Leakage"**
+
+Graphmind's multi-tenancy model provides strong isolation guarantees through physical separation of data.
+*   **Mechanism**: Each tenant (named graph) gets its own `GraphStore` instance, managed by `TenantStoreManager`. Stores are held in a `HashMap<String, Arc<RwLock<GraphStore>>>`.
+*   **Guarantee**: There is no shared state between tenant graph stores. Node IDs, edges, indices, and properties are fully independent. A query targeting one graph cannot access or observe data in another graph.
+*   **Enforcement**: Tenant routing happens at the protocol layer (HTTP `?graph=` parameter, RESP `GRAPH.QUERY graph` argument) before any query execution begins. There is no code path that allows cross-tenant data access.
+
+---
+
 ## Performance Trade-offs
 
 To achieve these guarantees, Graphmind accepts certain trade-offs:

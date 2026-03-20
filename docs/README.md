@@ -1,16 +1,17 @@
 # Graphmind Graph Database Documentation
 
 ## Core Documentation
-- [Architecture](./ARCHITECTURE.md) - High-level system architecture and component interactions.
-- [Requirements](./REQUIREMENTS.md) - Functional and non-functional requirements.
+- [Architecture](./ARCHITECTURE.md) - System architecture: storage, query engine, multi-tenancy, auth, observability, frontend.
+- [SDK, API & CLI Architecture](./SDK_API_CLI_ARCHITECTURE.md) - How SDKs, CLI, HTTP, and RESP connect to the database.
+- [Requirements](./REQUIREMENTS.md) - Functional and non-functional requirements (Phases 1-5).
 - [Tech Stack](./TECH_STACK.md) - Technology choices (Rust, RocksDB, Tokio, etc.).
 - [Technology Comparisons](./TECHNOLOGY_COMPARISONS.md) - Benchmarks and trade-off analysis vs alternatives.
-- [ACID Guarantees](./ACID_GUARANTEES.md) - Transactional consistency and durability details.
+- [ACID Guarantees](./ACID_GUARANTEES.md) - Transactional consistency, durability, and tenant isolation.
 - [Glossary](./GLOSSARY.md) - Key terms and definitions.
 
 ## Roadmap & Features
 - [Architecture Roadmap](./ARCHITECTURE_ROADMAP.md) - Modularization and expansion plans.
-- [Cypher Compatibility](./CYPHER_COMPATIBILITY.md) - Status of OpenCypher implementation vs Neo4j/FalkorDB.
+- [Cypher Compatibility](./CYPHER_COMPATIBILITY.md) - OpenCypher coverage vs Neo4j/FalkorDB (multi-statement, schema commands).
 - [GNN Proposal](./GNN_PROPOSAL.md) - Strategy for Graph Neural Network integration (Inference).
 - [Agentic Enrichment](./AGENCY_ENRICHMENT_PROPOSAL.md) - AI-driven graph enrichment (Implemented).
 
