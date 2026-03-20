@@ -30,7 +30,8 @@ export default function App() {
 
   const checkStatus = useCallback(async () => {
     try {
-      const status = await getStatus()
+      const activeGraph = useUiStore.getState().activeGraph
+      const status = await getStatus(activeGraph)
       setConnectionStatus('connected')
       setServerInfo(status.version, status.storage.nodes, status.storage.edges)
 
@@ -66,7 +67,8 @@ export default function App() {
 
   const loadSchema = useCallback(async () => {
     try {
-      const schema = await getSchema()
+      const activeGraph = useUiStore.getState().activeGraph
+      const schema = await getSchema(activeGraph)
       setSchema(schema)
     } catch {
       // Schema not available yet
