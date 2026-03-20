@@ -143,12 +143,14 @@ export async function executeQuery(
   });
 }
 
-export async function getStatus(): Promise<StatusResponse> {
-  return request<StatusResponse>("/api/status");
+export async function getStatus(graph?: string): Promise<StatusResponse> {
+  const q = graph ? `?graph=${encodeURIComponent(graph)}` : "";
+  return request<StatusResponse>(`/api/status${q}`);
 }
 
-export async function getSchema(): Promise<SchemaResponse> {
-  return request<SchemaResponse>("/api/schema");
+export async function getSchema(graph?: string): Promise<SchemaResponse> {
+  const q = graph ? `?graph=${encodeURIComponent(graph)}` : "";
+  return request<SchemaResponse>(`/api/schema${q}`);
 }
 
 export async function sampleGraph(

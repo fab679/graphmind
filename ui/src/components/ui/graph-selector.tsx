@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Database, Plus, Trash2, ChevronDown } from "lucide-react";
 import { useUiStore } from "@/stores/uiStore";
 import { useGraphStore } from "@/stores/graphStore";
-import { listGraphs, deleteGraph, getSchema } from "@/api/client";
+import { listGraphs, deleteGraph, getSchema, getStatus } from "@/api/client";
 import { cn } from "@/lib/utils";
 
 export function GraphSelector() {
@@ -31,22 +31,27 @@ export function GraphSelector() {
     useGraphStore.getState().setGraphData([], []);
     useGraphStore.getState().selectNode(null);
 
-    // Refresh schema for new tenant
+    // Refresh schema and status for new tenant
     try {
-      const schema = await getSchema();
+      const schema = await getSchema(graph);
       useUiStore.getState().setSchema(schema);
+      const status = await getStatus(graph);
+      useUiStore.getState().setServerInfo(
+        status.version || "",
+        status.storage?.nodes ?? 0,
+        status.storage?.edges ?? 0,
+      );
     } catch {
       /* ignore */
     }
   };
 
-  const handleCreate = () => {
+  const handleCreate = async () => {
     if (newGraphName.trim() && !availableGraphs.includes(newGraphName.trim())) {
       const name = newGraphName.trim();
       setAvailableGraphs([...availableGraphs, name]);
-      setActiveGraph(name);
       setNewGraphName("");
-      setOpen(false);
+      await handleSelect(name);
     }
   };
 

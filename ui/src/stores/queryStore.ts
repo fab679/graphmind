@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
-import { executeQuery as apiExecuteQuery, getSchema } from "../api/client";
+import { executeQuery as apiExecuteQuery, getSchema, getStatus } from "../api/client";
 import { useGraphStore } from "./graphStore";
 import { useUiStore } from "./uiStore";
 
@@ -98,8 +98,16 @@ export const useQueryStore = create<QueryState>()(
           const upperQuery = q.toUpperCase();
           const isWrite = ['CREATE', 'DELETE', 'SET', 'MERGE', 'REMOVE', 'DETACH'].some(kw => upperQuery.includes(kw));
           if (isWrite) {
-            getSchema().then(schema => {
+            const activeGraph = useUiStore.getState().activeGraph;
+            getSchema(activeGraph).then(schema => {
               useUiStore.getState().setSchema(schema);
+            }).catch(() => {});
+            getStatus(activeGraph).then(status => {
+              useUiStore.getState().setServerInfo(
+                status.version || "",
+                status.storage?.nodes ?? 0,
+                status.storage?.edges ?? 0,
+              );
             }).catch(() => {});
           }
         } catch (err) {

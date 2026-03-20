@@ -338,8 +338,12 @@ pub async fn nlq_handler(
 }
 
 /// Handler for system status
-pub async fn status_handler(State(state): State<AppState>) -> impl IntoResponse {
-    let store = state.stores.get_store("default").await;
+pub async fn status_handler(
+    State(state): State<AppState>,
+    query: axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> impl IntoResponse {
+    let graph = query.get("graph").map(|s| s.as_str()).unwrap_or("default");
+    let store = state.stores.get_store(graph).await;
     let store_guard = store.read().await;
     let stats = state.engine.cache_stats();
     let node_count = store_guard.node_count();
@@ -361,8 +365,12 @@ pub async fn status_handler(State(state): State<AppState>) -> impl IntoResponse 
 }
 
 /// Handler for graph schema introspection
-pub async fn schema_handler(State(state): State<AppState>) -> impl IntoResponse {
-    let store = state.stores.get_store("default").await;
+pub async fn schema_handler(
+    State(state): State<AppState>,
+    query: axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> impl IntoResponse {
+    let graph = query.get("graph").map(|s| s.as_str()).unwrap_or("default");
+    let store = state.stores.get_store(graph).await;
     let store_guard = store.read().await;
 
     let stats = store_guard.compute_statistics();
