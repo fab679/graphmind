@@ -1,8 +1,6 @@
 import { useState } from "react";
-import { Table2, PanelBottom, Lock, LockOpen, X } from "lucide-react";
+import { Lock, LockOpen, X } from "lucide-react";
 import { useUiStore } from "@/stores/uiStore";
-import { useQueryStore } from "@/stores/queryStore";
-import { ThemeToggle } from "@/components/ui/theme-toggle";
 import { GraphSelector } from "@/components/ui/graph-selector";
 import { getAuthToken, setAuthToken } from "@/api/client";
 import { cn } from "@/lib/utils";
@@ -40,14 +38,23 @@ function AuthButton() {
         )}
         title={hasToken ? "Authenticated (click to manage)" : "Set auth token"}
       >
-        {hasToken ? <Lock className="h-3.5 w-3.5" /> : <LockOpen className="h-3.5 w-3.5" />}
+        {hasToken ? (
+          <Lock className="h-3.5 w-3.5" />
+        ) : (
+          <LockOpen className="h-3.5 w-3.5" />
+        )}
       </button>
 
       {showDialog && (
         <div className="absolute right-0 top-full mt-2 z-50 w-72 rounded-lg border bg-popover p-3 shadow-lg">
           <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-medium text-foreground">Auth Token</span>
-            <button onClick={() => setShowDialog(false)} className="text-muted-foreground hover:text-foreground">
+            <span className="text-xs font-medium text-foreground">
+              Auth Token
+            </span>
+            <button
+              onClick={() => setShowDialog(false)}
+              className="text-muted-foreground hover:text-foreground"
+            >
               <X className="h-3.5 w-3.5" />
             </button>
           </div>
@@ -103,20 +110,11 @@ export function Navbar() {
   const nodeCount = useUiStore((s) => s.nodeCount);
   const edgeCount = useUiStore((s) => s.edgeCount);
 
-  const bottomPanelOpen = useUiStore((s) => s.bottomPanelOpen);
-  const toggleBottomPanel = useUiStore((s) => s.toggleBottomPanel);
-  const recordCount = useQueryStore((s) => s.records.length);
-
   const isConnected = connectionStatus === "connected";
 
   return (
-    <header className="flex h-12 shrink-0 items-center justify-between border-b border-border bg-background px-4">
+    <header className="flex h-10 shrink-0 items-center justify-between border-b border-border bg-background px-4">
       <div className="flex items-center gap-3">
-        <img src="/favicon.svg" alt="Graphmind" className="h-8 w-8" />
-        <span className="text-sm font-semibold text-foreground">
-          Graphmind
-        </span>
-        <span className="text-sm font-medium text-primary">Visualizer</span>
         <GraphSelector />
       </div>
 
@@ -156,24 +154,7 @@ export function Navbar() {
           </span>
         )}
 
-        <button
-          onClick={toggleBottomPanel}
-          className={cn(
-            "flex items-center gap-1 rounded-md px-2 py-1 text-xs transition-colors",
-            bottomPanelOpen
-              ? "bg-primary/20 text-primary"
-              : "text-muted-foreground hover:text-foreground"
-          )}
-          title={bottomPanelOpen ? "Hide results table" : "Show results table"}
-        >
-          {bottomPanelOpen ? <PanelBottom className="h-3.5 w-3.5" /> : <Table2 className="h-3.5 w-3.5" />}
-          {recordCount > 0 && (
-            <span className="tabular-nums">{recordCount}</span>
-          )}
-        </button>
-
         <AuthButton />
-        <ThemeToggle />
       </div>
     </header>
   );

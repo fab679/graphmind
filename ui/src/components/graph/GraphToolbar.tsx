@@ -4,7 +4,6 @@ import {
   Highlighter,
   LayoutGrid,
   Maximize,
-  Maximize2,
   Route,
   ZoomIn,
   ZoomOut,
@@ -17,7 +16,6 @@ import { useGraphSettingsStore } from "@/stores/graphSettingsStore";
 
 interface GraphToolbarProps {
   onLayoutChange: (layout: string) => void;
-  onFullscreen: () => void;
   onFitToScreen: () => void;
   onZoomIn: () => void;
   onZoomOut: () => void;
@@ -75,7 +73,6 @@ function ToolbarButton({
 
 export function GraphToolbar({
   onLayoutChange,
-  onFullscreen,
   onFitToScreen,
   onZoomIn,
   onZoomOut,
@@ -161,11 +158,6 @@ export function GraphToolbar({
         onClick={handleShortestPathToggle}
       >
         <Route className="h-4 w-4" />
-      </ToolbarButton>
-
-      {/* Fullscreen */}
-      <ToolbarButton title="Fullscreen" onClick={onFullscreen}>
-        <Maximize2 className="h-4 w-4" />
       </ToolbarButton>
 
       {/* Export dropdown */}

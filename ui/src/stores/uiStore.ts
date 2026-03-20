@@ -3,6 +3,9 @@ import type { SchemaResponse } from "../types/api";
 
 type ConnectionStatus = "connected" | "disconnected" | "checking";
 
+type ActiveTab = "query" | "explore" | "nlq" | "schema" | "admin" | "settings";
+type ResultView = "auto" | "graph" | "table";
+
 interface UiState {
   connectionStatus: ConnectionStatus;
   serverVersion: string;
@@ -11,6 +14,10 @@ interface UiState {
   bottomPanelOpen: boolean;
   rightPanelOpen: boolean;
   schema: SchemaResponse | null;
+  activeTab: ActiveTab;
+  setActiveTab: (tab: ActiveTab) => void;
+  resultView: ResultView;
+  setResultView: (view: ResultView) => void;
 
   setConnectionStatus: (status: ConnectionStatus) => void;
   setServerInfo: (version: string, nodes: number, edges: number) => void;
@@ -32,6 +39,10 @@ export const useUiStore = create<UiState>((set) => ({
   bottomPanelOpen: false,
   rightPanelOpen: true,
   schema: null,
+  activeTab: "query",
+  setActiveTab: (activeTab) => set({ activeTab }),
+  resultView: "auto",
+  setResultView: (resultView) => set({ resultView }),
 
   setConnectionStatus: (connectionStatus) => set({ connectionStatus }),
 

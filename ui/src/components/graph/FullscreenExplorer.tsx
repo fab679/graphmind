@@ -85,8 +85,15 @@ function exportPNG() {
     "[data-fullscreen-explorer] canvas",
   ) as HTMLCanvasElement | null;
   if (!canvas) return;
-  const dataUrl = canvas.toDataURL("image/png");
-  triggerDownload(dataUrl, "graphmind-export.png");
+  const exportCanvas = document.createElement("canvas");
+  exportCanvas.width = canvas.width;
+  exportCanvas.height = canvas.height;
+  const ctx = exportCanvas.getContext("2d");
+  if (!ctx) return;
+  ctx.fillStyle = isDark() ? "#0a0f1a" : "#ffffff";
+  ctx.fillRect(0, 0, exportCanvas.width, exportCanvas.height);
+  ctx.drawImage(canvas, 0, 0);
+  triggerDownload(exportCanvas.toDataURL("image/png"), "graphmind-export.png");
 }
 
 function exportCSV() {
@@ -725,7 +732,7 @@ export function FullscreenExplorer({ open, onClose }: FullscreenExplorerProps) {
 
       {/* Canvas area (fills remaining space) */}
       <div className="flex-1 min-h-0 relative">
-        <ForceGraph ref={graphRef} searchQuery={searchText} hideToolbar onFullscreen={onClose} />
+        <ForceGraph ref={graphRef} searchQuery={searchText} hideToolbar />
 
         {/* Left column: search + legend */}
         <div className="absolute top-3 left-3 z-10 flex flex-col gap-2 w-[220px]">

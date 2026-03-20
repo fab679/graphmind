@@ -105,7 +105,6 @@ interface ForceGraphProps {
   nodes?: GraphNode[];
   edges?: GraphEdge[];
   onNodeDoubleClick?: (node: GraphNode) => void;
-  onFullscreen?: () => void;
   /** Hide the toolbar (useful when embedded in fullscreen explorer which has its own) */
   hideToolbar?: boolean;
   /** Search query to highlight matching nodes on canvas */
@@ -449,7 +448,6 @@ export const ForceGraph = forwardRef<ForceGraphHandle, ForceGraphProps>(function
   nodes: propNodes,
   edges: propEdges,
   onNodeDoubleClick,
-  onFullscreen,
   hideToolbar,
   searchQuery: searchQueryProp,
 }, ref) {
@@ -483,6 +481,7 @@ export const ForceGraph = forwardRef<ForceGraphHandle, ForceGraphProps>(function
   const highlightModeRef = useRef(highlightMode);
   const layoutRef = useRef<LayoutType>("force");
   const searchQueryRef = useRef("");
+  const prevNodesLenRef = useRef(0);
 
   // Context menu state
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
@@ -1136,9 +1135,17 @@ export const ForceGraph = forwardRef<ForceGraphHandle, ForceGraphProps>(function
     exportPNG: () => {
       const canvas = canvasRef.current;
       if (!canvas) return;
-      const url = canvas.toDataURL("image/png");
+      const exportCanvas = document.createElement("canvas");
+      exportCanvas.width = canvas.width;
+      exportCanvas.height = canvas.height;
+      const ctx = exportCanvas.getContext("2d");
+      if (!ctx) return;
+      const dark = document.documentElement.classList.contains("dark");
+      ctx.fillStyle = dark ? "#0a0f1a" : "#ffffff";
+      ctx.fillRect(0, 0, exportCanvas.width, exportCanvas.height);
+      ctx.drawImage(canvas, 0, 0);
       const a = document.createElement("a");
-      a.href = url;
+      a.href = exportCanvas.toDataURL("image/png");
       a.download = "graphmind-export.png";
       a.click();
     },
@@ -1168,13 +1175,16 @@ export const ForceGraph = forwardRef<ForceGraphHandle, ForceGraphProps>(function
       degreeMap.set(edge.target, (degreeMap.get(edge.target) ?? 0) + 1);
     }
 
+    // Initialize nodes near center with small random offset so the simulation spreads them out
+    const cx = (canvasRef.current?.clientWidth ?? 800) / 2;
+    const cy = (canvasRef.current?.clientHeight ?? 600) / 2;
     const simNodes: SimNode[] = nodes.map((n) => ({
       id: n.id,
       labels: n.labels,
       properties: n.properties,
       radius: nodeRadius(degreeMap.get(n.id) ?? 0),
-      x: undefined as unknown as number,
-      y: undefined as unknown as number,
+      x: cx + (Math.random() - 0.5) * 50,
+      y: cy + (Math.random() - 0.5) * 50,
     }));
 
     const nodeIdSet = new Set(simNodes.map((n) => n.id));
@@ -1248,6 +1258,60 @@ export const ForceGraph = forwardRef<ForceGraphHandle, ForceGraphProps>(function
       cancelAnimationFrame(rafRef.current);
     };
   }, [nodes, edges, draw, applyLayout]);
+
+  // Auto-fit when data changes: fit after short delays to catch both initial load and simulation settling
+  useEffect(() => {
+    const prevLen = prevNodesLenRef.current;
+    prevNodesLenRef.current = nodes.length;
+    if (nodes.length === 0) return;
+
+    const doFit = () => {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      const simNodes = simNodesRef.current;
+      const dpr = window.devicePixelRatio || 1;
+      const cw = canvas.width / dpr;
+      const ch = canvas.height / dpr;
+      if (simNodes.length === 0 || cw === 0 || ch === 0) return;
+
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      for (const n of simNodes) {
+        if (n.x != null && n.y != null) {
+          minX = Math.min(minX, n.x - n.radius);
+          minY = Math.min(minY, n.y - n.radius);
+          maxX = Math.max(maxX, n.x + n.radius);
+          maxY = Math.max(maxY, n.y + n.radius);
+        }
+      }
+      if (!isFinite(minX)) return;
+
+      const graphW = maxX - minX || 1;
+      const graphH = maxY - minY || 1;
+      const padding = 60;
+      const scale = Math.min((cw - padding * 2) / graphW, (ch - padding * 2) / graphH, 2);
+      const tx = (cw - graphW * scale) / 2 - minX * scale;
+      const ty = (ch - graphH * scale) / 2 - minY * scale;
+
+      transformRef.current = { x: tx, y: ty, k: scale };
+      if (zoomRef.current) {
+        select<HTMLCanvasElement, unknown>(canvas).call(
+          zoomRef.current.transform,
+          zoomIdentity.translate(tx, ty).scale(scale),
+        );
+      }
+      draw();
+    };
+
+    // Fit at multiple points: immediately (for re-renders), and after simulation settles
+    const t1 = setTimeout(doFit, 50);
+    const t2 = setTimeout(doFit, 300);
+    const t3 = prevLen === 0 ? setTimeout(doFit, 800) : null;
+    return () => {
+      clearTimeout(t1);
+      clearTimeout(t2);
+      if (t3) clearTimeout(t3);
+    };
+  }, [nodes, draw]);
 
   // --------------------------------------------------
   // Canvas setup: zoom, resize, interaction
@@ -1538,16 +1602,54 @@ export const ForceGraph = forwardRef<ForceGraphHandle, ForceGraphProps>(function
           onLayoutChange={(layout) => {
             applyLayout(layout as LayoutType);
           }}
-          onFullscreen={onFullscreen ?? (() => {})}
           onFitToScreen={() => {
-            if (zoomRef.current && canvasRef.current) {
-              select<HTMLCanvasElement, unknown>(canvasRef.current).call(
-                zoomRef.current.transform,
-                zoomIdentity,
-              );
+            // Use the proper fitToScreen that computes bounding box
+            const canvas = canvasRef.current;
+            if (!canvas) return;
+            const simNodes = simNodesRef.current;
+            const dpr = window.devicePixelRatio || 1;
+            const cw = canvas.width / dpr;
+            const ch = canvas.height / dpr;
+
+            if (simNodes.length === 0 || cw === 0 || ch === 0) {
+              if (zoomRef.current) {
+                select<HTMLCanvasElement, unknown>(canvas).call(zoomRef.current.transform, zoomIdentity);
+              }
               transformRef.current = { x: 0, y: 0, k: 1 };
               draw();
+              return;
             }
+
+            let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+            for (const n of simNodes) {
+              if (n.x != null && n.y != null) {
+                minX = Math.min(minX, n.x - n.radius);
+                minY = Math.min(minY, n.y - n.radius);
+                maxX = Math.max(maxX, n.x + n.radius);
+                maxY = Math.max(maxY, n.y + n.radius);
+              }
+            }
+            if (!isFinite(minX)) {
+              transformRef.current = { x: 0, y: 0, k: 1 };
+              draw();
+              return;
+            }
+
+            const graphW = maxX - minX || 1;
+            const graphH = maxY - minY || 1;
+            const padding = 40;
+            const scale = Math.min((cw - padding * 2) / graphW, (ch - padding * 2) / graphH, 2);
+            const tx = (cw - graphW * scale) / 2 - minX * scale;
+            const ty = (ch - graphH * scale) / 2 - minY * scale;
+
+            transformRef.current = { x: tx, y: ty, k: scale };
+            if (zoomRef.current) {
+              select<HTMLCanvasElement, unknown>(canvas).call(
+                zoomRef.current.transform,
+                zoomIdentity.translate(tx, ty).scale(scale),
+              );
+            }
+            draw();
           }}
           onZoomIn={() => {
             if (zoomRef.current && canvasRef.current) {
@@ -1568,9 +1670,17 @@ export const ForceGraph = forwardRef<ForceGraphHandle, ForceGraphProps>(function
           onExportPNG={() => {
             const cvs = canvasRef.current;
             if (!cvs) return;
-            const url = cvs.toDataURL("image/png");
+            const exportCanvas = document.createElement("canvas");
+            exportCanvas.width = cvs.width;
+            exportCanvas.height = cvs.height;
+            const ctx = exportCanvas.getContext("2d");
+            if (!ctx) return;
+            const dark = document.documentElement.classList.contains("dark");
+            ctx.fillStyle = dark ? "#0a0f1a" : "#ffffff";
+            ctx.fillRect(0, 0, exportCanvas.width, exportCanvas.height);
+            ctx.drawImage(cvs, 0, 0);
             const a = document.createElement("a");
-            a.href = url;
+            a.href = exportCanvas.toDataURL("image/png");
             a.download = "graphmind-export.png";
             a.click();
           }}

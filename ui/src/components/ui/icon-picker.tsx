@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState, useMemo } from "react";
+import { createPortal } from "react-dom";
 import { RotateCcw } from "lucide-react";
 import { NODE_ICON_CATALOG } from "@/lib/icons";
 import { cn } from "@/lib/utils";
@@ -38,13 +39,30 @@ export function IconPicker({
 }: IconPickerProps) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const [popupPos, setPopupPos] = useState({ top: 0, left: 0 });
 
   const handleClose = useCallback(() => setOpen(false), []);
+
+  const handleOpen = useCallback(() => {
+    if (btnRef.current) {
+      const rect = btnRef.current.getBoundingClientRect();
+      // Position to the right of the button, but flip left if near right edge
+      const spaceRight = window.innerWidth - rect.right;
+      const left = spaceRight > 280 ? rect.right + 4 : rect.left - 268;
+      // Position below button, but flip up if near bottom
+      const spaceBelow = window.innerHeight - rect.top;
+      const top = spaceBelow > 400 ? rect.top : Math.max(8, rect.bottom - 400);
+      setPopupPos({ top, left: Math.max(4, left) });
+    }
+    setOpen((v) => !v);
+  }, []);
 
   useEffect(() => {
     if (!open) return;
     function handleClickOutside(e: MouseEvent) {
-      if (ref.current && !ref.current.contains(e.target as Node)) {
+      if (ref.current && !ref.current.contains(e.target as Node) &&
+          btnRef.current && !btnRef.current.contains(e.target as Node)) {
         handleClose();
       }
     }
@@ -68,11 +86,12 @@ export function IconPicker({
   return (
     <span className="relative" ref={ref}>
       <button
+        ref={btnRef}
         type="button"
         className="flex h-5 w-5 items-center justify-center rounded border border-border bg-background transition-colors hover:bg-accent"
         onClick={(e) => {
           e.stopPropagation();
-          setOpen((v) => !v);
+          handleOpen();
         }}
         title={`Icon for ${label}: ${currentIcon ?? "circle"}`}
       >
@@ -85,9 +104,11 @@ export function IconPicker({
         )}
       </button>
 
-      {open && (
+      {open && createPortal(
         <div
-          className="absolute left-0 top-6 z-50 w-64 rounded-md border border-border bg-popover p-2 shadow-lg"
+          ref={ref}
+          className="fixed z-[100] w-64 max-h-[400px] overflow-auto rounded-md border border-border bg-popover p-2 shadow-xl"
+          style={{ top: popupPos.top, left: popupPos.left }}
           onClick={(e) => e.stopPropagation()}
         >
           {CATEGORIES.map((cat) => {
@@ -168,8 +189,8 @@ export function IconPicker({
               </select>
             </>
           )}
-        </div>
-      )}
+        </div>,
+      document.body)}
     </span>
   );
 }
