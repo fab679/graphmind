@@ -6,7 +6,7 @@ Rust SDK for [Graphmind](https://github.com/fab679/graphmind) — use as an embe
 
 ```toml
 [dependencies]
-graphmind-sdk = "0.6.2"
+graphmind-sdk = "0.6.3"
 ```
 
 ## Embedded Mode
@@ -60,10 +60,10 @@ The parent `graphmind` crate supports feature flags for minimal builds:
 
 ```toml
 # Minimal embedded engine (no server, no persistence)
-graphmind = { version = "0.6.2", default-features = false }
+graphmind = { version = "0.6.3", default-features = false }
 
 # With persistence and vector search
-graphmind = { version = "0.6.2", default-features = false, features = ["persistence", "vector"] }
+graphmind = { version = "0.6.3", default-features = false, features = ["persistence", "vector"] }
 ```
 
 ## License
