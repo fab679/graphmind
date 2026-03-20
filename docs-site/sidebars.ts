@@ -11,7 +11,7 @@ const sidebars: SidebarsConfig = {
     {
       type: 'category',
       label: 'Cypher Guide',
-      items: ['cypher/basics', 'cypher/crud', 'cypher/patterns', 'cypher/aggregations', 'cypher/functions'],
+      items: ['cypher/basics', 'cypher/crud', 'cypher/patterns', 'cypher/aggregations', 'cypher/functions', 'cypher/indexes'],
     },
     {
       type: 'category',

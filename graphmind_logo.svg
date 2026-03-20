@@ -1,33 +1,47 @@
 <svg width="200" height="200" viewBox="0 0 200 200" fill="none" xmlns="http://www.w3.org/2000/svg">
   <defs>
-    <!-- Gradient for AI feel -->
     <linearGradient id="grad" x1="0" y1="0" x2="200" y2="200">
-      <stop offset="0%" stop-color="#4F46E5"/>
+      <stop offset="0%" stop-color="#6366F1"/>
+      <stop offset="50%" stop-color="#3B82F6"/>
       <stop offset="100%" stop-color="#06B6D4"/>
+    </linearGradient>
+    <linearGradient id="gradLight" x1="0" y1="0" x2="200" y2="200">
+      <stop offset="0%" stop-color="#4F46E5"/>
+      <stop offset="100%" stop-color="#0891B2"/>
     </linearGradient>
   </defs>
 
-  <!-- Graph connections -->
-  <g stroke="url(#grad)" stroke-width="2">
-    <line x1="60" y1="60" x2="140" y2="60"/>
-    <line x1="60" y1="60" x2="100" y2="120"/>
-    <line x1="140" y1="60" x2="100" y2="120"/>
-    <line x1="100" y1="120" x2="60" y2="140"/>
-    <line x1="100" y1="120" x2="140" y2="140"/>
+  <!-- Background circle for contrast in both themes -->
+  <circle cx="100" cy="100" r="92" fill="url(#grad)" opacity="0.08"/>
+  <circle cx="100" cy="100" r="92" stroke="url(#grad)" stroke-width="3" fill="none" opacity="0.3"/>
+
+  <!-- Graph connections (thicker strokes) -->
+  <g stroke="url(#grad)" stroke-width="3.5" stroke-linecap="round">
+    <line x1="55" y1="55" x2="145" y2="55"/>
+    <line x1="55" y1="55" x2="100" y2="115"/>
+    <line x1="145" y1="55" x2="100" y2="115"/>
+    <line x1="100" y1="115" x2="55" y2="148"/>
+    <line x1="100" y1="115" x2="145" y2="148"/>
+    <line x1="55" y1="148" x2="145" y2="148"/>
   </g>
 
-  <!-- Nodes -->
-  <g fill="url(#grad)">
-    <circle cx="60" cy="60" r="5"/>
-    <circle cx="140" cy="60" r="5"/>
-    <circle cx="100" cy="120" r="6"/>
-    <circle cx="60" cy="140" r="5"/>
-    <circle cx="140" cy="140" r="5"/>
+  <!-- Nodes (larger, with white center for visibility) -->
+  <g>
+    <circle cx="55" cy="55" r="10" fill="url(#grad)"/>
+    <circle cx="55" cy="55" r="5" fill="white" opacity="0.4"/>
+    <circle cx="145" cy="55" r="10" fill="url(#grad)"/>
+    <circle cx="145" cy="55" r="5" fill="white" opacity="0.4"/>
+    <circle cx="100" cy="115" r="13" fill="url(#grad)"/>
+    <circle cx="100" cy="115" r="7" fill="white" opacity="0.4"/>
+    <circle cx="55" cy="148" r="10" fill="url(#grad)"/>
+    <circle cx="55" cy="148" r="5" fill="white" opacity="0.4"/>
+    <circle cx="145" cy="148" r="10" fill="url(#grad)"/>
+    <circle cx="145" cy="148" r="5" fill="white" opacity="0.4"/>
   </g>
 
-  <!-- Brain-like curve overlay -->
-  <path d="M75 95 C85 75, 115 75, 125 95 
-           C135 115, 115 135, 100 130 
-           C85 135, 65 115, 75 95 Z"
-        stroke="url(#grad)" stroke-width="2" fill="none" opacity="0.6"/>
+  <!-- Brain-like curve overlay (thicker) -->
+  <path d="M72 90 C84 68, 116 68, 128 90
+           C140 112, 118 138, 100 132
+           C82 138, 60 112, 72 90 Z"
+        stroke="url(#grad)" stroke-width="3" fill="none" opacity="0.5"/>
 </svg>

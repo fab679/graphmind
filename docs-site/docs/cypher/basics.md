@@ -216,6 +216,65 @@ CREATE (n:Note {text: 'Use semicolons; they work!'});
 CREATE (m:Note {text: 'Another note'})
 ```
 
+## Schema Commands
+
+### Create Index
+
+Speed up property lookups:
+
+```cypher
+-- Single property index
+CREATE INDEX ON :Person(name)
+
+-- Composite index
+CREATE INDEX ON :Person(name, age)
+
+-- Drop an index
+DROP INDEX ON :Person(name)
+```
+
+### Create Constraint
+
+Enforce uniqueness:
+
+```cypher
+CREATE CONSTRAINT ON (p:Person) ASSERT p.email IS UNIQUE
+```
+
+### Create Vector Index
+
+For similarity search:
+
+```cypher
+CREATE VECTOR INDEX person_embed
+  FOR (n:Person) ON (n.embedding)
+  OPTIONS {dimensions: 128, similarity: 'cosine'}
+```
+
+### Schema Introspection
+
+```cypher
+-- List all indexes
+SHOW INDEXES
+
+-- List all constraints
+SHOW CONSTRAINTS
+
+-- List all node labels
+SHOW LABELS
+
+-- List all relationship types
+SHOW RELATIONSHIP TYPES
+
+-- List all property keys
+SHOW PROPERTY KEYS
+
+-- Visualize schema as a graph
+CALL db.schema.visualization()
+```
+
+See [Indexes & Constraints](indexes) for full details.
+
 ## Type Coercion
 
 Graphmind automatically coerces types in comparisons:
