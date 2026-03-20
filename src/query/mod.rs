@@ -236,14 +236,18 @@ impl QueryEngine {
         store: &crate::graph::GraphStore,
     ) -> Result<RecordBatch, Box<dyn std::error::Error>> {
         let statements = Self::split_statements(query_str);
-        let mut last_result = RecordBatch { records: Vec::new(), columns: Vec::new() };
+        let mut last_result = RecordBatch {
+            records: Vec::new(),
+            columns: Vec::new(),
+        };
 
         for stmt in &statements {
             let query = self.cached_parse(stmt)?;
             let mut executor = QueryExecutor::new(store);
             if self.query_timeout_secs > 0 {
                 executor = executor.with_deadline(
-                    std::time::Instant::now() + std::time::Duration::from_secs(self.query_timeout_secs),
+                    std::time::Instant::now()
+                        + std::time::Duration::from_secs(self.query_timeout_secs),
                 );
             }
             last_result = executor.execute(&query)?;
@@ -262,7 +266,10 @@ impl QueryEngine {
         tenant_id: &str,
     ) -> Result<RecordBatch, Box<dyn std::error::Error>> {
         let statements = Self::split_statements(query_str);
-        let mut last_result = RecordBatch { records: Vec::new(), columns: Vec::new() };
+        let mut last_result = RecordBatch {
+            records: Vec::new(),
+            columns: Vec::new(),
+        };
 
         for stmt in &statements {
             let query = self.cached_parse(stmt)?;
@@ -688,7 +695,10 @@ mod tests {
     #[test]
     fn test_split_statements_respects_double_quotes() {
         let stmts = QueryEngine::split_statements(r#"CREATE (n:P {x: "a;b"}); MATCH (n) RETURN n"#);
-        assert_eq!(stmts, vec![r#"CREATE (n:P {x: "a;b"})"#, "MATCH (n) RETURN n"]);
+        assert_eq!(
+            stmts,
+            vec![r#"CREATE (n:P {x: "a;b"})"#, "MATCH (n) RETURN n"]
+        );
     }
 
     #[test]
@@ -696,15 +706,24 @@ mod tests {
         let mut store = GraphStore::new();
         let engine = QueryEngine::new();
 
-        engine.execute_mut(
-            "CREATE (a:Person {name: 'Alice'}); CREATE (b:Person {name: 'Bob'})",
-            &mut store,
-            "default",
-        ).unwrap();
+        engine
+            .execute_mut(
+                "CREATE (a:Person {name: 'Alice'}); CREATE (b:Person {name: 'Bob'})",
+                &mut store,
+                "default",
+            )
+            .unwrap();
 
-        let result = engine.execute("MATCH (n:Person) RETURN count(n)", &store).unwrap();
-        let count = result.records[0].get("count(n)").unwrap()
-            .as_property().unwrap().as_integer().unwrap();
+        let result = engine
+            .execute("MATCH (n:Person) RETURN count(n)", &store)
+            .unwrap();
+        let count = result.records[0]
+            .get("count(n)")
+            .unwrap()
+            .as_property()
+            .unwrap()
+            .as_integer()
+            .unwrap();
         assert_eq!(count, 2);
     }
 
@@ -714,19 +733,23 @@ mod tests {
         let engine = QueryEngine::new();
 
         // Create nodes and relationship in one multi-statement call
-        engine.execute_mut(
-            "CREATE (a:Person {name: 'Alice'}); \
+        engine
+            .execute_mut(
+                "CREATE (a:Person {name: 'Alice'}); \
              CREATE (b:Person {name: 'Bob'}); \
              MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'}) CREATE (a)-[:KNOWS]->(b)",
-            &mut store,
-            "default",
-        ).unwrap();
+                &mut store,
+                "default",
+            )
+            .unwrap();
 
         // Verify
-        let result = engine.execute(
-            "MATCH (a:Person)-[:KNOWS]->(b:Person) RETURN a.name, b.name",
-            &store,
-        ).unwrap();
+        let result = engine
+            .execute(
+                "MATCH (a:Person)-[:KNOWS]->(b:Person) RETURN a.name, b.name",
+                &store,
+            )
+            .unwrap();
         assert_eq!(result.len(), 1);
     }
 
@@ -736,15 +759,20 @@ mod tests {
         let engine = QueryEngine::new();
 
         // Trailing semicolons should be fine
-        engine.execute_mut(
-            "CREATE (n:Test {val: 1});",
-            &mut store,
-            "default",
-        ).unwrap();
+        engine
+            .execute_mut("CREATE (n:Test {val: 1});", &mut store, "default")
+            .unwrap();
 
-        let result = engine.execute("MATCH (n:Test) RETURN count(n)", &store).unwrap();
-        let count = result.records[0].get("count(n)").unwrap()
-            .as_property().unwrap().as_integer().unwrap();
+        let result = engine
+            .execute("MATCH (n:Test) RETURN count(n)", &store)
+            .unwrap();
+        let count = result.records[0]
+            .get("count(n)")
+            .unwrap()
+            .as_property()
+            .unwrap()
+            .as_integer()
+            .unwrap();
         assert_eq!(count, 1);
     }
 }
