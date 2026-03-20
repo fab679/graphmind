@@ -115,8 +115,7 @@ jobs:
           working-directory: sdk/python
           command: publish
           args: --skip-existing
-          before-script-linux: |
-            yum install -y clang-devel || apt-get update && apt-get install -y libclang-dev
+          before-script-linux: yum install -y clang-devel cmake3 || (apt-get update && apt-get install -y libclang-dev cmake)
         env:
           MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
 
