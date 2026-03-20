@@ -79,8 +79,8 @@ impl GraphmindClient for RemoteClient {
         Ok(vec!["default".to_string()])
     }
 
-    async fn status(&self) -> GraphmindResult<ServerStatus> {
-        let url = format!("{}/api/status", self.http_base_url);
+    async fn status(&self, graph: &str) -> GraphmindResult<ServerStatus> {
+        let url = format!("{}/api/status?graph={}", self.http_base_url, graph);
         let response = self.http_client.get(&url).send().await?;
 
         if response.status().is_success() {
@@ -95,7 +95,7 @@ impl GraphmindClient for RemoteClient {
     }
 
     async fn ping(&self) -> GraphmindResult<String> {
-        let status = self.status().await?;
+        let status = self.status("default").await?;
         if status.status == "healthy" {
             Ok("PONG".to_string())
         } else {
@@ -106,8 +106,8 @@ impl GraphmindClient for RemoteClient {
         }
     }
 
-    async fn schema(&self, _graph: &str) -> GraphmindResult<String> {
-        let url = format!("{}/api/schema", self.http_base_url);
+    async fn schema(&self, graph: &str) -> GraphmindResult<String> {
+        let url = format!("{}/api/schema?graph={}", self.http_base_url, graph);
         let response = self.http_client.get(&url).send().await?;
 
         if response.status().is_success() {

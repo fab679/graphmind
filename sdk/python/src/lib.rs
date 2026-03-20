@@ -218,11 +218,12 @@ impl GraphmindClient {
     }
 
     /// Get server status
-    fn status(&self) -> PyResult<ServerStatus> {
+    #[pyo3(signature = (graph="default"))]
+    fn status(&self, graph: &str) -> PyResult<ServerStatus> {
         let rt = get_runtime();
         let result = match &*self.inner {
-            ClientInner::Embedded(c) => rt.block_on(c.status()),
-            ClientInner::Remote(c) => rt.block_on(c.status()),
+            ClientInner::Embedded(c) => rt.block_on(c.status(graph)),
+            ClientInner::Remote(c) => rt.block_on(c.status(graph)),
         };
         match result {
             Ok(s) => Ok(ServerStatus {

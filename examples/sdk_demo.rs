@@ -25,7 +25,7 @@ async fn main() {
     let client = EmbeddedClient::new();
 
     // Check status
-    let status = client.status().await.unwrap();
+    let status = client.status("default").await.unwrap();
     println!("Status: {} (v{})", status.status, status.version);
     println!(
         "Initial: {} nodes, {} edges\n",
@@ -73,7 +73,7 @@ async fn main() {
         )).await.unwrap();
     }
 
-    let status = client.status().await.unwrap();
+    let status = client.status("default").await.unwrap();
     println!(
         "Created: {} nodes, {} edges\n",
         status.storage.nodes, status.storage.edges

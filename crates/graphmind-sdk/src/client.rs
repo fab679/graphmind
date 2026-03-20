@@ -23,8 +23,8 @@ pub trait GraphmindClient: Send + Sync {
     /// List all graphs
     async fn list_graphs(&self) -> GraphmindResult<Vec<String>>;
 
-    /// Get server status
-    async fn status(&self) -> GraphmindResult<ServerStatus>;
+    /// Get server status for a specific graph
+    async fn status(&self, graph: &str) -> GraphmindResult<ServerStatus>;
 
     /// Ping the server
     async fn ping(&self) -> GraphmindResult<String>;

@@ -39,8 +39,9 @@ export class HttpTransport {
   }
 
   /** Get server status via GET /api/status */
-  async status(): Promise<ServerStatus> {
-    const response = await fetch(`${this.baseUrl}/api/status`, {
+  async status(graph?: string): Promise<ServerStatus> {
+    const q = graph ? `?graph=${encodeURIComponent(graph)}` : "";
+    const response = await fetch(`${this.baseUrl}/api/status${q}`, {
       headers: this.extraHeaders,
     });
 
@@ -52,8 +53,9 @@ export class HttpTransport {
   }
 
   /** Get graph schema via GET /api/schema */
-  async schema(): Promise<GraphSchema> {
-    const response = await fetch(`${this.baseUrl}/api/schema`, {
+  async schema(graph?: string): Promise<GraphSchema> {
+    const q = graph ? `?graph=${encodeURIComponent(graph)}` : "";
+    const response = await fetch(`${this.baseUrl}/api/schema${q}`, {
       headers: this.extraHeaders,
     });
 

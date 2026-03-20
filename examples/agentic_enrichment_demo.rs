@@ -311,7 +311,7 @@ async fn main() {
 
     // Graph stats
     println!("--- Graph Statistics ---");
-    let status = client.status().await.unwrap();
+    let status = client.status("default").await.unwrap();
     println!("  Nodes: {}", status.storage.nodes);
     println!("  Edges: {}", status.storage.edges);
     println!();

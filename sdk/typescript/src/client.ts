@@ -96,20 +96,20 @@ export class GraphmindClient {
 
   /** List graphs (fetches graph name from server status) */
   async listGraphs(): Promise<string[]> {
-    const s = await this.http.status();
+    const s = await this.http.status(this.defaultGraph);
     // OSS mode returns a single graph; use the status graph field if present
     const graph = (s as any).graph ?? "default";
     return [graph];
   }
 
   /** Get server status */
-  async status(): Promise<ServerStatus> {
-    return this.http.status();
+  async status(graph?: string): Promise<ServerStatus> {
+    return this.http.status(graph || this.defaultGraph);
   }
 
   /** Get graph schema (node types, edge types, indexes, constraints, statistics) */
-  async schema(): Promise<GraphSchema> {
-    return this.http.schema();
+  async schema(graph?: string): Promise<GraphSchema> {
+    return this.http.schema(graph || this.defaultGraph);
   }
 
   /**

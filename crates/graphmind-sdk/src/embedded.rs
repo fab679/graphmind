@@ -320,7 +320,7 @@ impl GraphmindClient for EmbeddedClient {
         Ok(vec!["default".to_string()])
     }
 
-    async fn status(&self) -> GraphmindResult<ServerStatus> {
+    async fn status(&self, _graph: &str) -> GraphmindResult<ServerStatus> {
         let store_guard = self.store.read().await;
         Ok(ServerStatus {
             status: "healthy".to_string(),
@@ -416,7 +416,7 @@ mod tests {
     #[tokio::test]
     async fn test_embedded_status() {
         let client = EmbeddedClient::new();
-        let status = client.status().await.unwrap();
+        let status = client.status("default").await.unwrap();
         assert_eq!(status.status, "healthy");
         assert_eq!(status.storage.nodes, 0);
     }
@@ -444,7 +444,7 @@ mod tests {
         assert_eq!(result.records.len(), 2);
 
         // Status should reflect 2 nodes
-        let status = client.status().await.unwrap();
+        let status = client.status("default").await.unwrap();
         assert_eq!(status.storage.nodes, 2);
     }
 
@@ -457,12 +457,12 @@ mod tests {
             .await
             .unwrap();
 
-        let status = client.status().await.unwrap();
+        let status = client.status("default").await.unwrap();
         assert_eq!(status.storage.nodes, 1);
 
         client.delete_graph("default").await.unwrap();
 
-        let status = client.status().await.unwrap();
+        let status = client.status("default").await.unwrap();
         assert_eq!(status.storage.nodes, 0);
     }
 
@@ -603,7 +603,7 @@ mod tests {
     #[tokio::test]
     async fn test_embedded_version_in_status() {
         let client = EmbeddedClient::new();
-        let status = client.status().await.unwrap();
+        let status = client.status("default").await.unwrap();
         // Version should be non-empty
         assert!(!status.version.is_empty());
     }
@@ -688,17 +688,17 @@ mod tests {
             .query("default", r#"CREATE (n:Person {name: "Alice"})"#)
             .await
             .unwrap();
-        assert_eq!(client.status().await.unwrap().storage.nodes, 1);
+        assert_eq!(client.status("default").await.unwrap().storage.nodes, 1);
 
         client.delete_graph("default").await.unwrap();
-        assert_eq!(client.status().await.unwrap().storage.nodes, 0);
+        assert_eq!(client.status("default").await.unwrap().storage.nodes, 0);
 
         // Recreate
         client
             .query("default", r#"CREATE (n:Person {name: "Bob"})"#)
             .await
             .unwrap();
-        assert_eq!(client.status().await.unwrap().storage.nodes, 1);
+        assert_eq!(client.status("default").await.unwrap().storage.nodes, 1);
     }
 
     #[tokio::test]
