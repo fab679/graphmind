@@ -4855,21 +4855,20 @@ impl PhysicalOperator for CreateNodeOperator {
             self.executed = true;
         }
 
-        // Return created nodes one by one
-        if self.current >= self.created_nodes.len() {
+        // Return created nodes: if multiple nodes have variables, return a single
+        // combined record with all bindings (needed for multi-CREATE with edges)
+        if self.current > 0 {
             return Ok(None);
         }
-
-        let (node_id, variable) = &self.created_nodes[self.current];
-        self.current += 1;
-
-        let node = store.get_node(*node_id).ok_or_else(|| {
-            ExecutionError::RuntimeError(format!("Created node {:?} not found", node_id))
-        })?;
+        self.current = 1;
 
         let mut record = Record::new();
-        if let Some(var) = variable {
-            record.bind(var.clone(), Value::Node(*node_id, node.clone()));
+        for (node_id, variable) in &self.created_nodes {
+            if let Some(var) = variable {
+                if let Some(node) = store.get_node(*node_id) {
+                    record.bind(var.clone(), Value::Node(*node_id, node.clone()));
+                }
+            }
         }
 
         Ok(Some(record))
@@ -5598,6 +5597,8 @@ pub struct CreateEdgeOperator {
     ),
     /// Created edges
     created_edges: Vec<(crate::graph::EdgeId, Option<String>)>,
+    /// Saved input records (to carry forward bindings)
+    saved_input_records: Vec<Record>,
     /// Current index
     current: usize,
     /// Whether we've processed input
@@ -5618,6 +5619,7 @@ impl CreateEdgeOperator {
             input,
             edge_pattern: (source_var, target_var, edge_type, properties, edge_var),
             created_edges: Vec::new(),
+            saved_input_records: Vec::new(),
             current: 0,
             processed: false,
         }
@@ -5641,7 +5643,7 @@ impl PhysicalOperator for CreateEdgeOperator {
         // Process input records and create edges
         if !self.processed {
             if let Some(ref mut input) = self.input {
-                // Create edge for each input record
+                // Create edge for each input record, saving input bindings
                 while let Some(record) = input.next_mut(store, tenant_id)? {
                     let source_val = record
                         .get(source_var)
@@ -5669,6 +5671,7 @@ impl PhysicalOperator for CreateEdgeOperator {
                     }
 
                     self.created_edges.push((edge_id, edge_var.clone()));
+                    self.saved_input_records.push(record);
                 }
             }
             self.processed = true;
@@ -5680,13 +5683,21 @@ impl PhysicalOperator for CreateEdgeOperator {
         }
 
         let (edge_id, variable) = &self.created_edges[self.current];
+        let idx = self.current;
         self.current += 1;
 
         let edge = store.get_edge(*edge_id).ok_or_else(|| {
             ExecutionError::RuntimeError(format!("Created edge {:?} not found", edge_id))
         })?;
 
-        let mut record = Record::new();
+        // Start with the input record's bindings (carries forward node variables)
+        let mut record = if idx < self.saved_input_records.len() {
+            self.saved_input_records[idx].clone()
+        } else {
+            Record::new()
+        };
+
+        // Add edge binding
         if let Some(var) = variable {
             record.bind(var.clone(), Value::Edge(*edge_id, edge.clone()));
         }
@@ -5701,6 +5712,7 @@ impl PhysicalOperator for CreateEdgeOperator {
         self.current = 0;
         self.processed = false;
         self.created_edges.clear();
+        self.saved_input_records.clear();
     }
 
     fn is_mutating(&self) -> bool {

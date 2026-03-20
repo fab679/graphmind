@@ -1,5 +1,5 @@
 # Graphmind Configuration
-# See https://github.com/graphmind-ai/graphmind for documentation
+# See https://github.com/fab679/graphmind for documentation
 
 [server]
 # RESP (Redis protocol) server

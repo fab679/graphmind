@@ -228,6 +228,108 @@ impl QueryEngine {
         statements
     }
 
+    /// Rewrite multi-CREATE statements by inserting WITH clauses to carry variables forward.
+    /// E.g.: `CREATE (a:Person) CREATE (b:Person) CREATE (a)-[:KNOWS]->(b)`
+    /// becomes: `CREATE (a:Person) WITH a CREATE (b:Person) WITH a, b CREATE (a)-[:KNOWS]->(b)`
+    fn rewrite_multi_create(input: &str) -> String {
+        // Regex-free approach: split on CREATE keyword boundaries (not inside quotes)
+        let upper = input.to_uppercase();
+        if upper.matches("CREATE").count() <= 1 {
+            return input.to_string();
+        }
+
+        // Find positions of each CREATE keyword (not inside quotes)
+        let mut create_positions = Vec::new();
+        let bytes = input.as_bytes();
+        let upper_bytes = upper.as_bytes();
+        let mut in_single = false;
+        let mut in_double = false;
+        let mut i = 0;
+        while i < bytes.len() {
+            match bytes[i] {
+                b'\'' if !in_double => in_single = !in_single,
+                b'"' if !in_single => in_double = !in_double,
+                _ if !in_single && !in_double && i + 6 <= upper_bytes.len() => {
+                    if &upper[i..i + 6] == "CREATE" {
+                        // Make sure it's a keyword boundary (not part of another word)
+                        let before_ok = i == 0 || !bytes[i - 1].is_ascii_alphanumeric();
+                        let after_ok =
+                            i + 6 >= bytes.len() || !bytes[i + 6].is_ascii_alphanumeric();
+                        if before_ok && after_ok {
+                            create_positions.push(i);
+                        }
+                    }
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+
+        if create_positions.len() <= 1 {
+            return input.to_string();
+        }
+
+        // Check if the query also has MATCH/WITH/RETURN — if so, don't rewrite
+        // (it's a MATCH ... CREATE pattern that the engine handles natively)
+        let has_match = upper.contains("MATCH");
+        let has_with = upper.contains("WITH");
+        if has_match || has_with {
+            return input.to_string();
+        }
+
+        // Extract variables from each CREATE clause and insert WITH between them
+        let mut result = String::new();
+        let mut accumulated_vars: Vec<String> = Vec::new();
+
+        for (idx, &pos) in create_positions.iter().enumerate() {
+            let end = if idx + 1 < create_positions.len() {
+                create_positions[idx + 1]
+            } else {
+                input.len()
+            };
+            let clause = input[pos..end].trim();
+
+            // If not the first CREATE and we have accumulated variables, insert WITH
+            if idx > 0 && !accumulated_vars.is_empty() {
+                result.push_str(" WITH ");
+                result.push_str(&accumulated_vars.join(", "));
+                result.push(' ');
+            }
+
+            result.push_str(clause);
+
+            // Extract variable names from this CREATE clause: (varname:Label ...) or (varname)
+            let clause_bytes = clause.as_bytes();
+            let mut j = 0;
+            while j < clause_bytes.len() {
+                if clause_bytes[j] == b'(' {
+                    j += 1;
+                    // Skip whitespace
+                    while j < clause_bytes.len() && clause_bytes[j].is_ascii_whitespace() {
+                        j += 1;
+                    }
+                    // Read variable name (alphanumeric + underscore)
+                    let var_start = j;
+                    while j < clause_bytes.len()
+                        && (clause_bytes[j].is_ascii_alphanumeric() || clause_bytes[j] == b'_')
+                    {
+                        j += 1;
+                    }
+                    if j > var_start {
+                        let var = &clause[var_start..j];
+                        // Only collect if it looks like a variable (not a label after colon)
+                        if !accumulated_vars.contains(&var.to_string()) {
+                            accumulated_vars.push(var.to_string());
+                        }
+                    }
+                }
+                j += 1;
+            }
+        }
+
+        result
+    }
+
     /// Parse and execute a read-only Cypher query (MATCH, RETURN, etc.)
     /// Supports multiple semicolon-separated statements.
     pub fn execute(
@@ -259,6 +361,7 @@ impl QueryEngine {
     /// Parse and execute a write Cypher query (CREATE, DELETE, SET, etc.)
     /// Supports multiple semicolon-separated statements. Each statement
     /// sees the effects of previous statements (shared store).
+    /// Also rewrites multi-CREATE queries to use WITH for variable sharing.
     pub fn execute_mut(
         &self,
         query_str: &str,
@@ -272,7 +375,9 @@ impl QueryEngine {
         };
 
         for stmt in &statements {
-            let query = self.cached_parse(stmt)?;
+            // Rewrite multi-CREATE to use WITH for variable sharing
+            let rewritten = Self::rewrite_multi_create(stmt);
+            let query = self.cached_parse(&rewritten)?;
             let mut executor = MutQueryExecutor::new(store, tenant_id.to_string());
             last_result = executor.execute(&query)?;
         }
@@ -774,5 +879,70 @@ mod tests {
             .as_integer()
             .unwrap();
         assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn test_multi_create_no_semicolons_shared_variables() {
+        // This is the key user request: multi-line CREATE with variable sharing
+        let mut store = GraphStore::new();
+        let engine = QueryEngine::new();
+
+        engine
+            .execute_mut(
+                "CREATE (a:Person {name: 'Alice', age: 30})
+                 CREATE (b:Person {name: 'Bob', age: 25})
+                 CREATE (a)-[:KNOWS {since: 2020}]->(b)",
+                &mut store,
+                "default",
+            )
+            .unwrap();
+
+        // Verify nodes
+        let result = engine
+            .execute("MATCH (n:Person) RETURN count(n)", &store)
+            .unwrap();
+        let count = result.records[0]
+            .get("count(n)")
+            .unwrap()
+            .as_property()
+            .unwrap()
+            .as_integer()
+            .unwrap();
+        assert_eq!(count, 2, "Should have 2 Person nodes");
+
+        // Verify relationship
+        let result = engine
+            .execute(
+                "MATCH (a:Person)-[r:KNOWS]->(b:Person) RETURN a.name, b.name, r.since",
+                &store,
+            )
+            .unwrap();
+        assert_eq!(result.len(), 1, "Should have 1 KNOWS relationship");
+    }
+
+    #[test]
+    fn test_multi_create_with_match_no_semicolons() {
+        let mut store = GraphStore::new();
+        let engine = QueryEngine::new();
+
+        // Create then query in one go (use semicolons to separate CREATE+MATCH)
+        engine
+            .execute_mut(
+                "CREATE (c:City {name: 'Paris'});
+                 CREATE (p:Person {name: 'Alice'});
+                 MATCH (p:Person {name: 'Alice'}), (c:City {name: 'Paris'})
+                 CREATE (p)-[:LIVES_IN]->(c)",
+                &mut store,
+                "default",
+            )
+            .unwrap();
+
+        let result = engine
+            .execute(
+                "MATCH (p:Person)-[:LIVES_IN]->(c:City) RETURN p.name, c.name",
+                &store,
+            )
+            .unwrap();
+        assert_eq!(result.len(), 1);
     }
 }

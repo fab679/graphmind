@@ -64,7 +64,7 @@ use crate::query::executor::{
     operator::{
         AggregateFunction, AggregateOperator, AggregateType, AlgorithmOperator,
         CartesianProductOperator, CompositeCreateIndexOperator, CreateConstraintOperator,
-        CreateIndexOperator, CreateNodeOperator, CreateNodesAndEdgesOperator,
+        CreateEdgeOperator, CreateIndexOperator, CreateNodeOperator, CreateNodesAndEdgesOperator,
         CreateVectorIndexOperator, DeleteOperator, DropIndexOperator, ExpandOperator,
         FilterOperator, ForeachOperator, IndexScanOperator, JoinOperator, LeftOuterJoinOperator,
         LimitOperator, MergeOperator, NodeScanOperator, ProjectOperator, RemovePropertyOperator,
@@ -429,8 +429,11 @@ impl QueryPlanner {
 
         // Handle CREATE-only queries (no MATCH/CALL required)
         if query.match_clauses.is_empty() && query.call_clause.is_none() {
+            if !query.create_clauses.is_empty() {
+                return self.plan_create_only_multi(&query.create_clauses);
+            }
             if let Some(create_clause) = &query.create_clause {
-                return self.plan_create_only(create_clause);
+                return self.plan_create_only_multi(std::slice::from_ref(create_clause));
             }
             return Err(ExecutionError::PlanningError(
                 "Query must have at least one MATCH, CALL or CREATE clause".to_string(),
@@ -1753,11 +1756,116 @@ impl QueryPlanner {
         }
     }
 
-    /// Plan a CREATE-only query (no MATCH clause)
-    /// Supports:
-    /// - CREATE (n:Person {name: "Alice", age: 30})
-    /// - CREATE (a:Person)-[:KNOWS]->(b:Person)
-    /// - CREATE (a:Person)-[:KNOWS {since: 2020}]->(b:Person)
+    /// Plan multiple CREATE-only clauses, sharing variables across them.
+    ///
+    /// E.g.: `CREATE (a:Person) CREATE (b:Person) CREATE (a)-[:KNOWS]->(b)`
+    fn plan_create_only_multi(
+        &self,
+        create_clauses: &[CreateClause],
+    ) -> ExecutionResult<ExecutionPlan> {
+        let mut all_nodes: Vec<(Vec<Label>, HashMap<String, PropertyValue>, Option<String>)> =
+            Vec::new();
+        let mut all_edges: Vec<(
+            String,
+            String,
+            EdgeType,
+            HashMap<String, PropertyValue>,
+            Option<String>,
+        )> = Vec::new();
+        let mut output_columns: Vec<String> = Vec::new();
+
+        for create_clause in create_clauses {
+            let pattern = &create_clause.pattern;
+            for path in &pattern.paths {
+                let start = &path.start;
+                let labels: Vec<Label> = start.labels.clone();
+                let properties: HashMap<String, PropertyValue> =
+                    start.properties.clone().unwrap_or_default();
+                let variable = start.variable.clone();
+
+                if let Some(ref var) = variable {
+                    // Only add to nodes if not already seen (avoid duplicate node creation)
+                    if !all_nodes
+                        .iter()
+                        .any(|(_, _, v)| v.as_deref() == Some(var.as_str()))
+                    {
+                        output_columns.push(var.clone());
+                        all_nodes.push((labels, properties, variable.clone()));
+                    }
+                } else {
+                    all_nodes.push((labels, properties, variable.clone()));
+                }
+
+                let mut current_source_var = start.variable.clone();
+
+                for segment in &path.segments {
+                    let node = &segment.node;
+                    let node_labels: Vec<Label> = node.labels.clone();
+                    let node_properties: HashMap<String, PropertyValue> =
+                        node.properties.clone().unwrap_or_default();
+                    let node_variable = node.variable.clone();
+
+                    if let Some(ref var) = node_variable {
+                        if !all_nodes
+                            .iter()
+                            .any(|(_, _, v)| v.as_deref() == Some(var.as_str()))
+                        {
+                            output_columns.push(var.clone());
+                            all_nodes.push((node_labels, node_properties, node_variable.clone()));
+                        }
+                    } else {
+                        all_nodes.push((node_labels, node_properties, node_variable.clone()));
+                    }
+
+                    let edge = &segment.edge;
+                    let edge_type = edge
+                        .types
+                        .first()
+                        .cloned()
+                        .unwrap_or_else(|| EdgeType::new("RELATED_TO"));
+                    let edge_properties: HashMap<String, PropertyValue> =
+                        edge.properties.clone().unwrap_or_default();
+                    let edge_variable = edge.variable.clone();
+
+                    if let (Some(source_var), Some(target_var)) =
+                        (&current_source_var, &node_variable)
+                    {
+                        all_edges.push((
+                            source_var.clone(),
+                            target_var.clone(),
+                            edge_type,
+                            edge_properties,
+                            edge_variable,
+                        ));
+                    }
+
+                    current_source_var = node_variable;
+                }
+            }
+        }
+
+        let mut operator: OperatorBox = Box::new(CreateNodeOperator::new(all_nodes));
+
+        // Chain edge creation operators on top of the node creation
+        for (source_var, target_var, edge_type, edge_properties, edge_variable) in all_edges {
+            operator = Box::new(CreateEdgeOperator::new(
+                Some(operator),
+                source_var,
+                target_var,
+                edge_type,
+                edge_properties,
+                edge_variable,
+            ));
+        }
+
+        Ok(ExecutionPlan {
+            root: operator,
+            output_columns,
+            is_write: true,
+        })
+    }
+
+    #[allow(dead_code)]
     fn plan_create_only(&self, create_clause: &CreateClause) -> ExecutionResult<ExecutionPlan> {
         let pattern = &create_clause.pattern;
 
@@ -2805,6 +2913,7 @@ mod tests {
             where_clause: None,
             return_clause: None,
             create_clause: None,
+            create_clauses: vec![],
             order_by: None,
             limit: None,
             skip: None,

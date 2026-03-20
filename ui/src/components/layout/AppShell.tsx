@@ -29,21 +29,16 @@ export function AppShell() {
         <ResizableHandle withHandle />
 
         <ResizablePanel minSize="300px">
-          {bottomPanelOpen ? (
-            <ResizablePanelGroup orientation="vertical">
-              <ResizablePanel defaultSize="60%" minSize="150px">
-                <ForceGraph onFullscreen={() => setFullscreen(true)} />
-              </ResizablePanel>
-
-              <ResizableHandle withHandle />
-
-              <ResizablePanel defaultSize="40%" minSize="100px">
+          <div className="relative flex flex-col h-full min-h-0">
+            <div className="flex-1 min-h-0">
+              <ForceGraph onFullscreen={() => setFullscreen(true)} />
+            </div>
+            {bottomPanelOpen && (
+              <div className="absolute bottom-0 left-0 right-0 z-10 max-h-[50%] border-t bg-background overflow-auto">
                 <BottomPanel />
-              </ResizablePanel>
-            </ResizablePanelGroup>
-          ) : (
-            <ForceGraph onFullscreen={() => setFullscreen(true)} />
-          )}
+              </div>
+            )}
+          </div>
         </ResizablePanel>
 
         {rightPanelOpen && (

@@ -16,7 +16,7 @@ const config: Config = {
   },
   themes: ['@docusaurus/theme-mermaid'],
 
-  url: 'https://graphmind-ai.github.io',
+  url: 'https://fab679.github.io',
   baseUrl: '/graphmind/',
 
   organizationName: 'fab679',
@@ -38,7 +38,7 @@ const config: Config = {
       {
         docs: {
           sidebarPath: './sidebars.ts',
-          editUrl: 'https://github.com/graphmind-ai/graphmind/tree/main/docs-site/',
+          editUrl: 'https://github.com/fab679/graphmind/tree/main/docs-site/',
           path: 'docs',
         },
         blog: false,
@@ -84,7 +84,7 @@ const config: Config = {
           position: 'left',
         },
         {
-          href: 'https://github.com/graphmind-ai/graphmind',
+          href: 'https://github.com/fab679/graphmind',
           label: 'GitHub',
           position: 'right',
         },
@@ -122,8 +122,8 @@ const config: Config = {
         {
           title: 'More',
           items: [
-            { label: 'GitHub', href: 'https://github.com/graphmind-ai/graphmind' },
-            { label: 'Roadmap', href: 'https://github.com/graphmind-ai/graphmind/blob/main/ROADMAP.md' },
+            { label: 'GitHub', href: 'https://github.com/fab679/graphmind' },
+            { label: 'Roadmap', href: 'https://github.com/fab679/graphmind/blob/main/ROADMAP.md' },
           ],
         },
       ],

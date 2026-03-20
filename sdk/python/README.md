@@ -25,6 +25,13 @@ db.query("""
     CREATE (a)-[:KNOWS {since: 2020}]->(b)
 """)
 
+# Or use shared variables (no semicolons needed)
+db.query("""
+    CREATE (a:Person {name: 'Charlie', age: 35})
+    CREATE (b:Person {name: 'Diana', age: 28})
+    CREATE (a)-[:KNOWS {since: 2023}]->(b)
+""")
+
 # Query
 result = db.query_readonly("MATCH (n:Person) RETURN n.name, n.age ORDER BY n.age")
 for row in result.rows:

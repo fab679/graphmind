@@ -73,8 +73,10 @@ pub struct Query {
     pub where_clause: Option<WhereClause>,
     /// RETURN clause (optional)
     pub return_clause: Option<ReturnClause>,
-    /// CREATE clause (optional)
+    /// CREATE clause (optional, first one for backward compat)
     pub create_clause: Option<CreateClause>,
+    /// All CREATE clauses (for multi-CREATE queries)
+    pub create_clauses: Vec<CreateClause>,
     /// ORDER BY clause (optional)
     pub order_by: Option<OrderByClause>,
     /// LIMIT clause (optional)
@@ -602,6 +604,7 @@ impl Query {
             where_clause: None,
             return_clause: None,
             create_clause: None,
+            create_clauses: Vec::new(),
             order_by: None,
             limit: None,
             skip: None,
@@ -632,7 +635,7 @@ impl Query {
 
     /// Check if this is a read-only query
     pub fn is_read_only(&self) -> bool {
-        self.create_clause.is_none()
+        self.create_clause.is_none() && self.create_clauses.is_empty()
     }
 }
 

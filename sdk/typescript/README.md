@@ -23,6 +23,13 @@ await client.query(`
   CREATE (a)-[:KNOWS]->(b)
 `);
 
+// Or use shared variables (no semicolons needed)
+await client.query(`
+  CREATE (a:Person {name: "Charlie", age: 35})
+  CREATE (b:Person {name: "Diana", age: 28})
+  CREATE (a)-[:KNOWS {since: 2023}]->(b)
+`);
+
 // Query
 const result = await client.query('MATCH (n:Person) RETURN n.name, n.age');
 console.log(result);

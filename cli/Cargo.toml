@@ -1,6 +1,6 @@
 [package]
 name = "graphmind-cli"
-version = "0.6.4"
+version = "0.6.5"
 edition = "2021"
 authors = ["Graphmind Team"]
 description = "CLI for Graphmind Graph Database"
@@ -12,7 +12,7 @@ name = "graphmind-cli"
 path = "src/main.rs"
 
 [dependencies]
-graphmind-sdk = { path = "../crates/graphmind-sdk", version = "0.6.4" }
+graphmind-sdk = { path = "../crates/graphmind-sdk", version = "0.6.5" }
 clap = { version = "4", features = ["derive"] }
 tokio = { version = "1.35", features = ["full"] }
 serde_json = "1.0"

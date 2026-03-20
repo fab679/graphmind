@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { Database, Plus, Trash2, ChevronDown } from "lucide-react";
 import { useUiStore } from "@/stores/uiStore";
-import { listGraphs, deleteGraph } from "@/api/client";
+import { useGraphStore } from "@/stores/graphStore";
+import { listGraphs, deleteGraph, getSchema } from "@/api/client";
 import { cn } from "@/lib/utils";
 
 export function GraphSelector() {
@@ -22,9 +23,21 @@ export function GraphSelector() {
     }
   };
 
-  const handleSelect = (graph: string) => {
+  const handleSelect = async (graph: string) => {
     setActiveGraph(graph);
     setOpen(false);
+
+    // Clear canvas for new tenant
+    useGraphStore.getState().setGraphData([], []);
+    useGraphStore.getState().selectNode(null);
+
+    // Refresh schema for new tenant
+    try {
+      const schema = await getSchema();
+      useUiStore.getState().setSchema(schema);
+    } catch {
+      /* ignore */
+    }
   };
 
   const handleCreate = () => {

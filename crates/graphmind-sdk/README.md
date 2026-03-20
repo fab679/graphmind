@@ -6,7 +6,7 @@ Rust SDK for [Graphmind](https://github.com/fab679/graphmind) — use as an embe
 
 ```toml
 [dependencies]
-graphmind-sdk = "0.6.3"
+graphmind-sdk = "0.6.5"
 ```
 
 ## Embedded Mode
@@ -22,6 +22,13 @@ client.query("default", "
     CREATE (b:Person {name: 'Bob', age: 25});
     MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'})
     CREATE (a)-[:KNOWS]->(b)
+")?;
+
+// Or use shared variables (no semicolons needed)
+client.query("default", "
+    CREATE (a:Person {name: 'Charlie', age: 35})
+    CREATE (b:Person {name: 'Diana', age: 28})
+    CREATE (a)-[:KNOWS {since: 2023}]->(b)
 ")?;
 
 // Query
@@ -65,10 +72,10 @@ The parent `graphmind` crate supports feature flags for minimal builds:
 
 ```toml
 # Minimal embedded engine (no server, no persistence)
-graphmind = { version = "0.6.3", default-features = false }
+graphmind = { version = "0.6.5", default-features = false }
 
 # With persistence and vector search
-graphmind = { version = "0.6.3", default-features = false, features = ["persistence", "vector"] }
+graphmind = { version = "0.6.5", default-features = false, features = ["persistence", "vector"] }
 ```
 
 ## License

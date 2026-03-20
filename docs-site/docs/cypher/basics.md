@@ -190,16 +190,26 @@ MATCH (p:Person) WHERE p.age IS NOT NULL RETURN p.name
 
 ## Multi-Statement Queries
 
-Separate multiple statements with semicolons. Each statement sees the results of previous ones:
+You can execute multiple statements in a single query. Use semicolons to separate independent statements:
 
 ```cypher
-CREATE (a:Person {name: 'Alice', age: 30});
-CREATE (b:Person {name: 'Bob', age: 25});
+CREATE (a:Person {name: 'Alice'});
+CREATE (b:Person {name: 'Bob'});
 MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'})
+CREATE (a)-[:KNOWS]->(b)
+```
+
+Or use consecutive CREATE statements that share variables (no semicolons needed):
+
+```cypher
+CREATE (a:Person {name: 'Alice', age: 30})
+CREATE (b:Person {name: 'Bob', age: 25})
 CREATE (a)-[:KNOWS {since: 2020}]->(b)
 ```
 
-This works everywhere — the UI editor, REST API, RESP protocol, and all SDKs. Semicolons inside quoted strings are handled correctly:
+The second form automatically inserts WITH clauses to carry variables between CREATE statements.
+
+This works everywhere -- the UI editor, REST API, RESP protocol, and all SDKs. Semicolons inside quoted strings are handled correctly:
 
 ```cypher
 CREATE (n:Note {text: 'Use semicolons; they work!'});

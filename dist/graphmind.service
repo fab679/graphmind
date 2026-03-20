@@ -1,6 +1,6 @@
 [Unit]
 Description=Graphmind Graph Database
-Documentation=https://github.com/graphmind-ai/graphmind
+Documentation=https://github.com/fab679/graphmind
 After=network-online.target
 Wants=network-online.target
 

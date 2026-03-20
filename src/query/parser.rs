@@ -108,6 +108,7 @@ pub fn parse_query(input: &str) -> ParseResult<Query> {
         if pair.as_rule() == Rule::query {
             let mut is_union_all = false;
             let mut first = true;
+            let mut pending_union = false;
             for inner in pair.into_inner() {
                 match inner.as_rule() {
                     Rule::explain_clause => {
@@ -119,20 +120,25 @@ pub fn parse_query(input: &str) -> ParseResult<Query> {
                         }
                     }
                     Rule::union_clause => {
-                        // Check if UNION ALL (inner has "ALL" text)
                         let text = inner.as_str().to_uppercase();
                         is_union_all = text.contains("ALL");
+                        pending_union = true;
                     }
                     Rule::statement => {
                         if first {
                             parse_statement(inner, &mut query)?;
                             first = false;
-                        } else {
+                        } else if pending_union {
                             // UNION query
                             let mut union_query = Query::new();
                             parse_statement(inner, &mut union_query)?;
                             query.union_queries.push((union_query, is_union_all));
                             is_union_all = false;
+                            pending_union = false;
+                        } else {
+                            // Additional statement (multi-statement query)
+                            // Accumulate into the same query's extra_creates
+                            parse_statement(inner, &mut query)?;
                         }
                     }
                     Rule::EOI => break,
@@ -530,10 +536,24 @@ fn parse_match_statement(pair: pest::iterators::Pair<Rule>, query: &mut Query) -
 
 fn parse_create_statement(pair: pest::iterators::Pair<Rule>, query: &mut Query) -> ParseResult<()> {
     for inner in pair.into_inner() {
-        if inner.as_rule() == Rule::pattern {
-            query.create_clause = Some(CreateClause {
-                pattern: parse_pattern(inner)?,
-            });
+        match inner.as_rule() {
+            Rule::pattern => {
+                let clause = CreateClause {
+                    pattern: parse_pattern(inner)?,
+                };
+                if query.create_clause.is_none() {
+                    query.create_clause = Some(clause.clone());
+                }
+                query.create_clauses.push(clause);
+            }
+            Rule::with_clause => {
+                // WITH clause between CREATEs — parse to carry variables
+                query.with_clause = Some(parse_with_clause(inner)?);
+            }
+            Rule::return_clause => {
+                query.return_clause = Some(parse_return_clause(inner)?);
+            }
+            _ => {}
         }
     }
     Ok(())
