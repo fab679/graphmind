@@ -12,6 +12,7 @@ jobs:
     name: Build (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
         include:
           - target: x86_64-unknown-linux-gnu
@@ -82,6 +83,7 @@ jobs:
 
   release:
     name: Create Release
+    if: always()
     needs: build
     runs-on: ubuntu-latest
     steps:
@@ -96,7 +98,6 @@ jobs:
 
   docker:
     name: Docker
-    needs: build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -116,7 +117,6 @@ jobs:
 
   publish-pypi:
     name: PyPI
-    needs: build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -130,7 +130,6 @@ jobs:
 
   publish-npm:
     name: npm
-    needs: build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -144,7 +143,6 @@ jobs:
 
   publish-crates:
     name: Crates.io
-    needs: build
     runs-on: ubuntu-latest
     env:
       CXXFLAGS: "-include cstdint"
