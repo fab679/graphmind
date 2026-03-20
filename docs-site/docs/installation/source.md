@@ -26,7 +26,7 @@ sudo dnf install clang clang-devel cmake
 ## Clone and Build
 
 ```bash
-git clone https://github.com/graphmind-ai/graphmind.git
+git clone https://github.com/fab679/graphmind.git
 cd graphmind
 ```
 

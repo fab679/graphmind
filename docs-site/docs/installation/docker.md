@@ -126,7 +126,7 @@ curl http://localhost:8080/api/status
 ## Building the Image Locally
 
 ```bash
-git clone https://github.com/graphmind-ai/graphmind.git
+git clone https://github.com/fab679/graphmind.git
 cd graphmind
 docker build -t graphmind .
 docker run -d -p 6379:6379 -p 8080:8080 graphmind

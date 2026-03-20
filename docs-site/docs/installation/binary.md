@@ -8,18 +8,26 @@ description: Install Graphmind from a pre-built binary or cargo install
 
 ## Download from GitHub Releases
 
-Download the latest release for your platform from [GitHub Releases](https://github.com/graphmind-ai/graphmind/releases).
+Download the latest release for your platform from [GitHub Releases](https://github.com/fab679/graphmind/releases).
 
 ```bash
 # Linux (x86_64)
-curl -LO https://github.com/graphmind-ai/graphmind/releases/latest/download/graphmind-linux-x86_64.tar.gz
-tar xzf graphmind-linux-x86_64.tar.gz
+curl -LO https://github.com/fab679/graphmind/releases/latest/download/graphmind-v0.6.4-x86_64-unknown-linux-gnu.tar.gz
+tar xzf graphmind-v0.6.4-x86_64-unknown-linux-gnu.tar.gz
 sudo mv graphmind /usr/local/bin/
 
 # macOS (Apple Silicon)
-curl -LO https://github.com/graphmind-ai/graphmind/releases/latest/download/graphmind-darwin-aarch64.tar.gz
-tar xzf graphmind-darwin-aarch64.tar.gz
+curl -LO https://github.com/fab679/graphmind/releases/latest/download/graphmind-v0.6.4-aarch64-apple-darwin.tar.gz
+tar xzf graphmind-v0.6.4-aarch64-apple-darwin.tar.gz
 sudo mv graphmind /usr/local/bin/
+
+# macOS (Intel)
+curl -LO https://github.com/fab679/graphmind/releases/latest/download/graphmind-v0.6.4-x86_64-apple-darwin.tar.gz
+tar xzf graphmind-v0.6.4-x86_64-apple-darwin.tar.gz
+sudo mv graphmind /usr/local/bin/
+
+# Windows (x86_64) — download and extract the zip
+# https://github.com/fab679/graphmind/releases/latest/download/graphmind-v0.6.4-x86_64-pc-windows-msvc.zip
 ```
 
 ## Install with Cargo
@@ -51,7 +59,7 @@ sudo dnf install clang clang-devel cmake
 
 ```bash
 graphmind --version
-# graphmind 0.6.1
+# graphmind 0.6.4
 ```
 
 ## Run the Server

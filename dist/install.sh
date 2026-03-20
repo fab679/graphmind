@@ -18,10 +18,10 @@ case "$OS" in
 esac
 
 if [ "$VERSION" = "latest" ]; then
-  URL="https://github.com/fab679/graphmind/releases/latest/download/graphmind-${TARGET}.tar.gz"
-else
-  URL="https://github.com/fab679/graphmind/releases/download/${VERSION}/graphmind-${VERSION}-${TARGET}.tar.gz"
+  VERSION=$(curl -sL "https://api.github.com/repos/fab679/graphmind/releases/latest" | grep '"tag_name"' | cut -d'"' -f4)
+  echo "Latest version: $VERSION"
 fi
+URL="https://github.com/fab679/graphmind/releases/download/${VERSION}/graphmind-${VERSION}-${TARGET}.tar.gz"
 
 echo "Downloading Graphmind for ${TARGET}..."
 TMPDIR=$(mktemp -d)
