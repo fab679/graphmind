@@ -14,15 +14,25 @@ This page covers the full lifecycle: creating data, reading it, updating propert
 
 ```cypher
 -- Node with one label and properties
-CREATE (p:Person {name: "Alice", age: 30, active: true})
+CREATE (p:Person {name: 'Alice', age: 30, active: true})
 
 -- Node with no properties
 CREATE (c:City)
 
--- Multiple nodes in one statement
-CREATE (a:Person {name: "Alice", age: 30})
-CREATE (b:Person {name: "Bob", age: 25})
+-- Multiple nodes using semicolons
+CREATE (a:Person {name: 'Alice', age: 30});
+CREATE (b:Person {name: 'Bob', age: 25})
 ```
+
+:::tip
+Use semicolons to separate multiple statements. Each statement sees the effects of previous ones, so you can create nodes first, then match and link them:
+```cypher
+CREATE (a:Person {name: 'Alice'});
+CREATE (b:Person {name: 'Bob'});
+MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'})
+CREATE (a)-[:KNOWS]->(b)
+```
+:::
 
 ### Create Relationships
 

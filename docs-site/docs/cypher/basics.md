@@ -188,6 +188,24 @@ MATCH (p:Person) WHERE p.age > 25 RETURN p.name
 MATCH (p:Person) WHERE p.age IS NOT NULL RETURN p.name
 ```
 
+## Multi-Statement Queries
+
+Separate multiple statements with semicolons. Each statement sees the results of previous ones:
+
+```cypher
+CREATE (a:Person {name: 'Alice', age: 30});
+CREATE (b:Person {name: 'Bob', age: 25});
+MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'})
+CREATE (a)-[:KNOWS {since: 2020}]->(b)
+```
+
+This works everywhere — the UI editor, REST API, RESP protocol, and all SDKs. Semicolons inside quoted strings are handled correctly:
+
+```cypher
+CREATE (n:Note {text: 'Use semicolons; they work!'});
+CREATE (m:Note {text: 'Another note'})
+```
+
 ## Type Coercion
 
 Graphmind automatically coerces types in comparisons:
