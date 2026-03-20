@@ -100,8 +100,8 @@ jobs:
           push: true
           platforms: linux/amd64
           tags: |
-            fab679/graphmind:${{ github.ref_name }}
-            fab679/graphmind:latest
+            fabischk/graphmind:${{ github.ref_name }}
+            fabischk/graphmind:latest
 
   publish-pypi:
     name: PyPI

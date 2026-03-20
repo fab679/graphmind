@@ -70,7 +70,7 @@ When Graphmind starts, it automatically recovers data from its data directory (d
 To ensure persistence across Docker container restarts, mount a volume:
 
 ```bash
-docker run -v graphmind_data:/data ghcr.io/fab679/graphmind:latest
+docker run -v graphmind_data:/data fabischk/graphmind:latest
 ```
 
 ### Snapshots

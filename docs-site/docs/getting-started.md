@@ -16,7 +16,7 @@ The fastest way is Docker:
 docker run -d --name graphmind \
   -p 6379:6379 \
   -p 8080:8080 \
-  ghcr.io/fab679/graphmind:latest
+  fabischk/graphmind:latest
 ```
 
 This starts two servers:

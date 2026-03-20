@@ -23,7 +23,7 @@ Or with Docker:
 ```bash
 docker run -d -p 6379:6379 -p 8080:8080 \
   -e GRAPHMIND_AUTH_TOKEN=my-secret-token \
-  ghcr.io/fab679/graphmind:latest
+  fabischk/graphmind:latest
 ```
 
 ### Via Config File

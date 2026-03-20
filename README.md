@@ -64,7 +64,7 @@ curl -sSL https://raw.githubusercontent.com/fab679/graphmind/main/dist/install.s
 docker run -d --name graphmind \
   -p 6379:6379 -p 8080:8080 \
   -v graphmind-data:/data \
-  graphmind/graphmind:latest
+  fabischk/graphmind:latest
 
 # Open the visualizer
 open http://localhost:8080

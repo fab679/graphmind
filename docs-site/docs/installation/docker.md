@@ -12,7 +12,7 @@ description: Run Graphmind with Docker or Docker Compose
 docker run -d --name graphmind \
   -p 6379:6379 \
   -p 8080:8080 \
-  ghcr.io/fab679/graphmind:latest
+  fabischk/graphmind:latest
 ```
 
 Ports:
@@ -28,7 +28,7 @@ docker run -d --name graphmind \
   -p 6379:6379 \
   -p 8080:8080 \
   -v graphmind_data:/data \
-  ghcr.io/fab679/graphmind:latest
+  fabischk/graphmind:latest
 ```
 
 Graphmind stores its RocksDB data in `/data` inside the container.
@@ -55,7 +55,7 @@ docker run -d --name graphmind \
   -v graphmind_data:/data \
   -e GRAPHMIND_AUTH_TOKEN=my-secret-token \
   -e OPENAI_API_KEY=sk-... \
-  ghcr.io/fab679/graphmind:latest
+  fabischk/graphmind:latest
 ```
 
 ## Docker Compose
@@ -65,7 +65,7 @@ Create a `docker-compose.yml`:
 ```yaml
 services:
   graphmind:
-    image: ghcr.io/fab679/graphmind:latest
+    image: fabischk/graphmind:latest
     ports:
       - "6379:6379"
       - "8080:8080"
@@ -101,7 +101,7 @@ Use the `--demo` flag to start with a pre-built social network:
 docker run -d --name graphmind \
   -p 6379:6379 \
   -p 8080:8080 \
-  ghcr.io/fab679/graphmind:latest \
+  fabischk/graphmind:latest \
   --host 0.0.0.0 --demo social
 ```
 

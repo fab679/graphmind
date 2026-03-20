@@ -17,7 +17,7 @@ Start the Graphmind server, then open [http://localhost:8080](http://localhost:8
 graphmind
 
 # Or with Docker
-docker run -d -p 6379:6379 -p 8080:8080 ghcr.io/fab679/graphmind:latest
+docker run -d -p 6379:6379 -p 8080:8080 fabischk/graphmind:latest
 ```
 
 The visualizer works in all modern browsers (Chrome, Firefox, Safari, Edge).
