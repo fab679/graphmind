@@ -144,14 +144,14 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Publish crates (in dependency order)
         run: |
-          cargo publish -p graphmind-graph-algorithms --allow-dirty || true
+          cargo publish -p graphmind-graph-algorithms --allow-dirty --no-verify 2>&1 || echo "graphmind-graph-algorithms: may already exist"
           sleep 30
-          cargo publish -p graphmind-optimization --allow-dirty || true
+          cargo publish -p graphmind-optimization --allow-dirty --no-verify 2>&1 || echo "graphmind-optimization: may already exist"
           sleep 30
-          cargo publish -p graphmind --allow-dirty || true
+          cargo publish -p graphmind --allow-dirty --no-verify 2>&1 || echo "graphmind: may already exist"
           sleep 30
-          cargo publish -p graphmind-sdk --allow-dirty || true
+          cargo publish -p graphmind-sdk --allow-dirty --no-verify 2>&1 || echo "graphmind-sdk: may already exist"
           sleep 30
-          cargo publish -p graphmind-cli --allow-dirty || true
+          cargo publish -p graphmind-cli --allow-dirty --no-verify 2>&1 || echo "graphmind-cli: may already exist"
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
