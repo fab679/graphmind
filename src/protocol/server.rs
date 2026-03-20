@@ -2,7 +2,7 @@
 //!
 //! Implements REQ-REDIS-001, REQ-REDIS-002 (RESP server, Redis clients)
 
-use crate::auth::{AuthConfig, SharedAuthConfig};
+use crate::auth::{AuthConfig, AuthManager, SharedAuthConfig};
 use crate::graph::GraphStore;
 use crate::persistence::PersistenceManager;
 use crate::protocol::command::CommandHandler;
@@ -156,7 +156,9 @@ impl RespServer {
         let listener = TcpListener::bind(&addr).await?;
 
         if self.auth.is_required() {
-            info!("RESP authentication enabled (GRAPHMIND_AUTH_TOKEN is set)");
+            info!(
+                "RESP authentication enabled (GRAPHMIND_AUTH_TOKEN or GRAPHMIND_ADMIN_USER is set)"
+            );
         }
         info!("RESP server listening on {}", addr);
 
@@ -195,23 +197,40 @@ fn extract_command_name(value: &RespValue) -> Option<String> {
     None
 }
 
-/// Handle the AUTH command: validate the token and return OK or error.
-fn handle_auth_command(value: &RespValue, auth: &AuthConfig) -> RespValue {
+/// Handle the AUTH command: supports both AUTH <token> and AUTH <username> <password>.
+fn handle_auth_command(value: &RespValue, auth: &AuthManager) -> RespValue {
     if let Ok(args) = value.as_array() {
-        if args.len() < 2 {
-            return RespValue::Error(
-                "ERR wrong number of arguments for 'AUTH' command".to_string(),
-            );
-        }
-        match args[1].as_string() {
-            Ok(Some(token)) => {
-                if auth.validate(&token) {
+        match args.len() {
+            // AUTH <token> (single arg — legacy token auth)
+            2 => match args[1].as_string() {
+                Ok(Some(token)) => {
+                    if auth.validate_bare_token(&token) {
+                        RespValue::SimpleString("OK".to_string())
+                    } else {
+                        RespValue::Error("ERR invalid password".to_string())
+                    }
+                }
+                _ => RespValue::Error("ERR invalid password".to_string()),
+            },
+            // AUTH <username> <password> (two args — username/password auth)
+            3 => {
+                let username = match args[1].as_string() {
+                    Ok(Some(u)) => u,
+                    _ => return RespValue::Error("ERR invalid username".to_string()),
+                };
+                let password = match args[2].as_string() {
+                    Ok(Some(p)) => p,
+                    _ => return RespValue::Error("ERR invalid password".to_string()),
+                };
+                if auth.validate_credentials(&username, &password).is_some() {
                     RespValue::SimpleString("OK".to_string())
                 } else {
-                    RespValue::Error("ERR invalid password".to_string())
+                    RespValue::Error(
+                        "ERR invalid username-password pair or user is disabled".to_string(),
+                    )
                 }
             }
-            _ => RespValue::Error("ERR invalid password".to_string()),
+            _ => RespValue::Error("ERR wrong number of arguments for 'AUTH' command".to_string()),
         }
     } else {
         RespValue::Error("ERR wrong number of arguments for 'AUTH' command".to_string())

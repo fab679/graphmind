@@ -8,10 +8,12 @@ import type {
 
 const API_BASE = import.meta.env.VITE_API_URL ?? "";
 const AUTH_STORAGE_KEY = "graphmind-auth-token";
+const BASIC_AUTH_STORAGE_KEY = "graphmind-basic-auth";
 
 // --- Auth token management ---
 
 let authToken: string | null = localStorage.getItem(AUTH_STORAGE_KEY);
+let basicAuthHeader: string | null = localStorage.getItem(BASIC_AUTH_STORAGE_KEY);
 
 export function getAuthToken(): string | null {
   return authToken;
@@ -26,8 +28,30 @@ export function setAuthToken(token: string | null) {
   }
 }
 
+/** Set Basic auth credentials. Pass empty username to clear. */
+export function setBasicAuth(username: string, password: string) {
+  if (username) {
+    basicAuthHeader = `Basic ${btoa(`${username}:${password}`)}`;
+    localStorage.setItem(BASIC_AUTH_STORAGE_KEY, basicAuthHeader);
+    // Clear any token auth when using basic auth
+    authToken = null;
+    localStorage.removeItem(AUTH_STORAGE_KEY);
+  } else {
+    basicAuthHeader = null;
+    localStorage.removeItem(BASIC_AUTH_STORAGE_KEY);
+  }
+}
+
+/** Clear all auth state */
+export function clearAuth() {
+  authToken = null;
+  basicAuthHeader = null;
+  localStorage.removeItem(AUTH_STORAGE_KEY);
+  localStorage.removeItem(BASIC_AUTH_STORAGE_KEY);
+}
+
 export function isAuthenticated(): boolean {
-  return authToken !== null;
+  return authToken !== null || basicAuthHeader !== null;
 }
 
 // --- Request helper ---
@@ -51,8 +75,10 @@ async function request<T>(
     ...(options.headers as Record<string, string>),
   };
 
-  // Add auth token if set
-  if (authToken) {
+  // Add auth header: prefer Basic auth, fall back to Bearer token
+  if (basicAuthHeader) {
+    headers["Authorization"] = basicAuthHeader;
+  } else if (authToken) {
     headers["Authorization"] = `Bearer ${authToken}`;
   }
 
@@ -67,6 +93,42 @@ async function request<T>(
   }
 
   return response.json() as Promise<T>;
+}
+
+// --- Auth API functions ---
+
+export interface LoginResponse {
+  authenticated: boolean;
+  role: string;
+  username: string;
+  auth_required?: boolean;
+  error?: string;
+}
+
+export async function login(
+  username: string,
+  password: string,
+): Promise<LoginResponse> {
+  // Temporarily set basic auth for this request
+  const prevBasic = basicAuthHeader;
+  const prevToken = authToken;
+  basicAuthHeader = null;
+  authToken = null;
+
+  try {
+    const result = await request<LoginResponse>("/api/auth/login", {
+      method: "POST",
+      body: JSON.stringify({ username, password }),
+    });
+    // Restore on success — caller will set proper auth
+    basicAuthHeader = prevBasic;
+    authToken = prevToken;
+    return result;
+  } catch (err) {
+    basicAuthHeader = prevBasic;
+    authToken = prevToken;
+    throw err;
+  }
 }
 
 // --- API functions ---

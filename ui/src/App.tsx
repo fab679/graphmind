@@ -2,8 +2,17 @@ import { useEffect, useCallback, useRef, useState } from 'react'
 import { ThemeProvider } from '@/components/theme-provider'
 import { AppShell } from '@/components/layout/AppShell'
 import { KeyboardShortcutsHelp } from '@/components/graph/KeyboardShortcutsHelp'
+import { LoginScreen } from '@/components/auth/LoginScreen'
 import { useKeyboardShortcuts } from '@/lib/shortcuts'
-import { getStatus, getSchema, listGraphs } from '@/api/client'
+import {
+  getStatus,
+  getSchema,
+  listGraphs,
+  login,
+  setBasicAuth,
+  clearAuth,
+  isAuthenticated,
+} from '@/api/client'
 import { useUiStore } from '@/stores/uiStore'
 import { useQueryStore } from '@/stores/queryStore'
 import { useGraphStore } from '@/stores/graphStore'
@@ -14,6 +23,8 @@ export default function App() {
   const setServerInfo = useUiStore((s) => s.setServerInfo)
   const setSchema = useUiStore((s) => s.setSchema)
   const [showShortcuts, setShowShortcuts] = useState(false)
+  const [authRequired, setAuthRequired] = useState<boolean | null>(null) // null = checking
+  const [loggedIn, setLoggedIn] = useState(isAuthenticated())
 
   const prevNodeCountRef = useRef<number | null>(null)
 
@@ -29,15 +40,29 @@ export default function App() {
         useGraphStore.getState().clearGraph()
       }
       prevNodeCountRef.current = status.storage.nodes
+
+      // If we got status successfully, auth is either not required or we're authenticated
+      if (authRequired === null) {
+        setAuthRequired(false)
+        setLoggedIn(true)
+      }
     } catch (err) {
-      if (err instanceof Error && err.message.includes('401')) {
+      if (err instanceof Error && (err.message.includes('401') || err.message.includes('Unauthorized'))) {
         setConnectionStatus('disconnected')
-        // Auth required but no token — status endpoint is exempt but query endpoints will fail
+        if (!isAuthenticated()) {
+          setAuthRequired(true)
+          setLoggedIn(false)
+        }
       } else {
         setConnectionStatus('disconnected')
+        // Server not reachable — not an auth issue, let them through
+        if (authRequired === null) {
+          setAuthRequired(false)
+          setLoggedIn(true)
+        }
       }
     }
-  }, [setConnectionStatus, setServerInfo])
+  }, [setConnectionStatus, setServerInfo, authRequired])
 
   const loadSchema = useCallback(async () => {
     try {
@@ -58,6 +83,30 @@ export default function App() {
     const interval = setInterval(checkStatus, 5000)
     return () => clearInterval(interval)
   }, [checkStatus, loadSchema])
+
+  const handleLogin = useCallback(async (username: string, password: string): Promise<boolean> => {
+    try {
+      const result = await login(username, password)
+      if (result.authenticated) {
+        setBasicAuth(username, password)
+        setLoggedIn(true)
+        setAuthRequired(false)
+        // Re-check status with new credentials
+        checkStatus()
+        loadSchema()
+        return true
+      }
+      return false
+    } catch {
+      return false
+    }
+  }, [checkStatus, loadSchema])
+
+  const handleSkipAuth = useCallback(() => {
+    clearAuth()
+    setLoggedIn(true)
+    setAuthRequired(false)
+  }, [])
 
   // Global keyboard shortcuts
   useKeyboardShortcuts([
@@ -97,6 +146,16 @@ export default function App() {
     },
   ])
 
+  // Show login screen if auth is required and user hasn't logged in
+  if (authRequired === true && !loggedIn) {
+    return (
+      <ThemeProvider defaultTheme="dark" storageKey="graphmind-theme">
+        <LoginScreen onLogin={handleLogin} onSkip={handleSkipAuth} />
+      </ThemeProvider>
+    )
+  }
+
+  // Still checking or ready — show the main app
   return (
     <ThemeProvider defaultTheme="dark" storageKey="graphmind-theme">
       <AppShell />

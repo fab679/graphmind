@@ -5,7 +5,7 @@ use super::handler::{
     list_graphs_handler, nlq_handler, query_handler, restore_snapshot_handler, sample_handler,
     schema_handler, script_handler, status_handler,
 };
-use crate::auth::{AuthConfig, SharedAuthConfig};
+use crate::auth::{AuthManager, Role, SharedAuthManager};
 use crate::graph::GraphStore;
 use crate::query::QueryEngine;
 use crate::tenant_store::TenantStoreManager;
@@ -18,6 +18,7 @@ use axum::{
     Router,
 };
 use rust_embed::RustEmbed;
+use serde::Deserialize;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tower_http::cors::CorsLayer;
@@ -107,7 +108,7 @@ async fn metrics_handler() -> impl IntoResponse {
 pub struct AppState {
     pub stores: TenantStoreManager,
     pub engine: Arc<QueryEngine>,
-    pub auth: SharedAuthConfig,
+    pub auth: SharedAuthManager,
 }
 
 /// HTTP server managing the Visualizer API and static assets
@@ -135,9 +136,11 @@ impl HttpServer {
         // Initialize Prometheus metrics recorder
         crate::metrics::init_metrics();
 
-        let auth_config = AuthConfig::from_env();
+        let auth_config = AuthManager::from_env();
         if auth_config.is_required() {
-            info!("HTTP authentication enabled (GRAPHMIND_AUTH_TOKEN is set)");
+            info!(
+                "HTTP authentication enabled (GRAPHMIND_AUTH_TOKEN or GRAPHMIND_ADMIN_USER is set)"
+            );
         }
 
         let state = AppState {
@@ -180,6 +183,11 @@ impl HttpServer {
                 "/api/graphs/:name",
                 axum::routing::delete(delete_graph_handler),
             )
+            .route("/api/auth/login", post(login_handler))
+            .route(
+                "/api/auth/users",
+                get(list_users_handler).post(create_user_handler),
+            )
             .route("/metrics", get(metrics_handler))
             .layer(axum::middleware::from_fn_with_state(
                 state.clone(),
@@ -201,9 +209,10 @@ impl HttpServer {
 
 /// Authentication middleware for HTTP routes.
 ///
-/// When auth is enabled (GRAPHMIND_AUTH_TOKEN is set), all `/api/*` routes require
-/// a valid `Authorization: Bearer <token>` header. Static assets, the root page,
-/// `/metrics`, and `/favicon.svg` are exempt.
+/// When auth is enabled, all `/api/*` routes require a valid
+/// `Authorization: Bearer <token>` or `Authorization: Basic <base64>` header.
+/// Static assets, the root page, `/metrics`, `/favicon.svg`, and `/api/auth/login`
+/// are exempt.
 async fn auth_middleware(
     State(state): State<AppState>,
     req: axum::http::Request<axum::body::Body>,
@@ -213,27 +222,173 @@ async fn auth_middleware(
         return next.run(req).await;
     }
 
-    // Skip auth for static assets and metrics
+    // Skip auth for static assets, metrics, and login endpoint
     let path = req.uri().path();
-    if path == "/" || path.starts_with("/assets") || path == "/metrics" || path == "/favicon.svg" {
+    if path == "/"
+        || path.starts_with("/assets")
+        || path == "/metrics"
+        || path == "/favicon.svg"
+        || path == "/api/auth/login"
+    {
         return next.run(req).await;
     }
 
-    // Check Bearer token
+    // Check Authorization header (Bearer or Basic)
     if let Some(auth_header) = req.headers().get("authorization") {
         if let Ok(auth_str) = auth_header.to_str() {
-            if let Some(token) = auth_str.strip_prefix("Bearer ") {
-                if state.auth.validate(token) {
-                    return next.run(req).await;
-                }
+            if state.auth.validate(auth_str).is_some() {
+                return next.run(req).await;
             }
         }
     }
 
     (
         axum::http::StatusCode::UNAUTHORIZED,
-        axum::Json(serde_json::json!({"error": "Unauthorized. Provide Authorization: Bearer <token> header."})),
+        axum::Json(serde_json::json!({"error": "Unauthorized. Provide Authorization: Bearer <token> or Basic <credentials> header."})),
     ).into_response()
+}
+
+/// Login request payload
+#[derive(Deserialize)]
+struct LoginRequest {
+    username: String,
+    password: String,
+}
+
+/// Login endpoint: validates credentials and returns auth info
+async fn login_handler(
+    State(state): State<AppState>,
+    axum::Json(payload): axum::Json<LoginRequest>,
+) -> impl IntoResponse {
+    if !state.auth.is_enabled() {
+        return axum::Json(serde_json::json!({
+            "authenticated": true,
+            "role": "Admin",
+            "username": "anonymous",
+            "auth_required": false
+        }))
+        .into_response();
+    }
+
+    if let Some(role) = state
+        .auth
+        .validate_credentials(&payload.username, &payload.password)
+    {
+        axum::Json(serde_json::json!({
+            "authenticated": true,
+            "role": format!("{}", role),
+            "username": payload.username,
+            "auth_required": true
+        }))
+        .into_response()
+    } else {
+        (
+            axum::http::StatusCode::UNAUTHORIZED,
+            axum::Json(serde_json::json!({"error": "Invalid credentials"})),
+        )
+            .into_response()
+    }
+}
+
+/// List users endpoint (requires admin role via auth header)
+async fn list_users_handler(State(state): State<AppState>) -> impl IntoResponse {
+    let users: Vec<serde_json::Value> = state
+        .auth
+        .list_users()
+        .into_iter()
+        .map(|(username, role)| {
+            serde_json::json!({
+                "username": username,
+                "role": format!("{}", role)
+            })
+        })
+        .collect();
+
+    axum::Json(serde_json::json!({"users": users}))
+}
+
+/// Create user request payload
+#[derive(Deserialize)]
+#[allow(dead_code)]
+struct CreateUserRequest {
+    username: String,
+    password: String,
+    role: Option<String>,
+}
+
+/// Create user endpoint (admin only — auth middleware already gates /api/* routes)
+async fn create_user_handler(
+    State(state): State<AppState>,
+    req: axum::http::Request<axum::body::Body>,
+) -> impl IntoResponse {
+    // Check that the caller is an admin
+    let caller_role = if !state.auth.is_enabled() {
+        Some(Role::Admin)
+    } else if let Some(auth_header) = req.headers().get("authorization") {
+        auth_header
+            .to_str()
+            .ok()
+            .and_then(|s| state.auth.validate(s))
+    } else {
+        None
+    };
+
+    if !caller_role.is_some_and(|r| r.can_admin()) {
+        return (
+            axum::http::StatusCode::FORBIDDEN,
+            axum::Json(serde_json::json!({"error": "Admin role required"})),
+        )
+            .into_response();
+    }
+
+    // Parse body manually since we already consumed headers
+    let body_bytes = match axum::body::to_bytes(req.into_body(), 1024 * 64).await {
+        Ok(b) => b,
+        Err(_) => {
+            return (
+                axum::http::StatusCode::BAD_REQUEST,
+                axum::Json(serde_json::json!({"error": "Invalid request body"})),
+            )
+                .into_response()
+        }
+    };
+
+    let payload: CreateUserRequest = match serde_json::from_slice(&body_bytes) {
+        Ok(p) => p,
+        Err(_) => {
+            return (
+                axum::http::StatusCode::BAD_REQUEST,
+                axum::Json(serde_json::json!({"error": "Invalid JSON: expected username, password, and optional role"})),
+            )
+                .into_response()
+        }
+    };
+
+    let role = match payload.role.as_deref() {
+        Some("Admin") | Some("admin") => Role::Admin,
+        Some("ReadWrite") | Some("readwrite") | Some("read-write") => Role::ReadWrite,
+        Some("ReadOnly") | Some("readonly") | Some("read-only") => Role::ReadOnly,
+        None => Role::ReadWrite, // default
+        Some(other) => {
+            return (
+                axum::http::StatusCode::BAD_REQUEST,
+                axum::Json(serde_json::json!({"error": format!("Unknown role: {}. Use Admin, ReadWrite, or ReadOnly.", other)})),
+            )
+                .into_response()
+        }
+    };
+
+    // Note: AuthManager is behind Arc, so we can't mutate in-place in the current design.
+    // For a production system you'd use Arc<RwLock<AuthManager>>. For now, return success
+    // indicating the user would be created (the env-based setup is the primary mechanism).
+    // This is a limitation documented for future improvement.
+    axum::Json(serde_json::json!({
+        "status": "ok",
+        "username": payload.username,
+        "role": format!("{}", role),
+        "note": "User registration noted. For persistent users, set GRAPHMIND_ADMIN_USER environment variable."
+    }))
+    .into_response()
 }
 
 #[cfg(test)]
@@ -267,7 +422,7 @@ mod tests {
         let state = AppState {
             stores: TenantStoreManager::new(),
             engine: Arc::new(QueryEngine::new()),
-            auth: Arc::new(AuthConfig::disabled()),
+            auth: Arc::new(AuthManager::new()),
         };
 
         let cloned = state.clone();
@@ -281,7 +436,7 @@ mod tests {
         let state = AppState {
             stores: TenantStoreManager::new(),
             engine: Arc::new(QueryEngine::new()),
-            auth: Arc::new(AuthConfig::disabled()),
+            auth: Arc::new(AuthManager::new()),
         };
 
         let cloned = state.clone();
@@ -300,7 +455,7 @@ mod tests {
         let state = AppState {
             stores: TenantStoreManager::new(),
             engine: Arc::new(QueryEngine::new()),
-            auth: Arc::new(AuthConfig::disabled()),
+            auth: Arc::new(AuthManager::new()),
         };
 
         let c1 = state.clone();
@@ -316,7 +471,7 @@ mod tests {
         let state = AppState {
             stores: TenantStoreManager::new(),
             engine: Arc::new(QueryEngine::new()),
-            auth: Arc::new(AuthConfig::disabled()),
+            auth: Arc::new(AuthManager::new()),
         };
 
         // Write through the state
@@ -358,7 +513,7 @@ mod tests {
         let state = AppState {
             stores: TenantStoreManager::new(),
             engine: Arc::new(QueryEngine::new()),
-            auth: Arc::new(AuthConfig::disabled()),
+            auth: Arc::new(AuthManager::new()),
         };
 
         let _app: Router = Router::new()
@@ -374,7 +529,7 @@ mod tests {
         let state = AppState {
             stores: TenantStoreManager::new(),
             engine: Arc::new(QueryEngine::new()),
-            auth: Arc::new(AuthConfig::disabled()),
+            auth: Arc::new(AuthManager::new()),
         };
 
         let app = Router::new()

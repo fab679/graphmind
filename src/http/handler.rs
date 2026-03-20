@@ -960,7 +960,7 @@ mod tests {
         let state = AppState {
             stores: TenantStoreManager::new(),
             engine: Arc::new(QueryEngine::new()),
-            auth: Arc::new(crate::auth::AuthConfig::disabled()),
+            auth: Arc::new(crate::auth::AuthManager::new()),
         };
         let app = Router::new()
             .route("/api/query", post(query_handler))
