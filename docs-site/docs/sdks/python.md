@@ -389,7 +389,7 @@ pd.DataFrame(result.records, columns=result.columns)
 ## Performance Tips
 
 - **Use embedded mode** for data pipelines and batch operations -- eliminates network roundtrips.
-- **Batch CREATEs** into single queries when possible rather than one CREATE per call.
+- **Use `execute_script`** to batch multiple CREATE statements in one call instead of separate `query()` calls.
 - **Use `query_readonly`** for read operations -- it allows concurrent readers.
 - **Use `execute_script`** to send multiple statements in one call to the remote server.
 - **Reuse the client** instance rather than creating a new one per operation.

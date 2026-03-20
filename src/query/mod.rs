@@ -191,39 +191,86 @@ impl QueryEngine {
         Ok(query)
     }
 
+    /// Split a query string on semicolons, respecting quoted strings.
+    /// Returns individual statement strings (trimmed, non-empty).
+    fn split_statements(input: &str) -> Vec<&str> {
+        let mut statements = Vec::new();
+        let mut start = 0;
+        let mut in_single_quote = false;
+        let mut in_double_quote = false;
+        let mut escape_next = false;
+        let bytes = input.as_bytes();
+
+        for i in 0..bytes.len() {
+            if escape_next {
+                escape_next = false;
+                continue;
+            }
+            match bytes[i] {
+                b'\\' => escape_next = true,
+                b'\'' if !in_double_quote => in_single_quote = !in_single_quote,
+                b'"' if !in_single_quote => in_double_quote = !in_double_quote,
+                b';' if !in_single_quote && !in_double_quote => {
+                    let stmt = input[start..i].trim();
+                    if !stmt.is_empty() {
+                        statements.push(stmt);
+                    }
+                    start = i + 1;
+                }
+                _ => {}
+            }
+        }
+        // Last segment (after final semicolon or no semicolons at all)
+        let last = input[start..].trim();
+        if !last.is_empty() {
+            statements.push(last);
+        }
+        statements
+    }
+
     /// Parse and execute a read-only Cypher query (MATCH, RETURN, etc.)
+    /// Supports multiple semicolon-separated statements.
     pub fn execute(
         &self,
         query_str: &str,
         store: &crate::graph::GraphStore,
     ) -> Result<RecordBatch, Box<dyn std::error::Error>> {
-        let query = self.cached_parse(query_str)?;
+        let statements = Self::split_statements(query_str);
+        let mut last_result = RecordBatch { records: Vec::new(), columns: Vec::new() };
 
-        let mut executor = QueryExecutor::new(store);
-        if self.query_timeout_secs > 0 {
-            executor = executor.with_deadline(
-                std::time::Instant::now() + std::time::Duration::from_secs(self.query_timeout_secs),
-            );
+        for stmt in &statements {
+            let query = self.cached_parse(stmt)?;
+            let mut executor = QueryExecutor::new(store);
+            if self.query_timeout_secs > 0 {
+                executor = executor.with_deadline(
+                    std::time::Instant::now() + std::time::Duration::from_secs(self.query_timeout_secs),
+                );
+            }
+            last_result = executor.execute(&query)?;
         }
-        let result = executor.execute(&query)?;
 
-        Ok(result)
+        Ok(last_result)
     }
 
     /// Parse and execute a write Cypher query (CREATE, DELETE, SET, etc.)
-    /// This method takes a mutable reference to the graph store
+    /// Supports multiple semicolon-separated statements. Each statement
+    /// sees the effects of previous statements (shared store).
     pub fn execute_mut(
         &self,
         query_str: &str,
         store: &mut crate::graph::GraphStore,
         tenant_id: &str,
     ) -> Result<RecordBatch, Box<dyn std::error::Error>> {
-        let query = self.cached_parse(query_str)?;
+        let statements = Self::split_statements(query_str);
+        let mut last_result = RecordBatch { records: Vec::new(), columns: Vec::new() };
 
-        let mut executor = MutQueryExecutor::new(store, tenant_id.to_string());
-        let result = executor.execute(&query)?;
+        for stmt in &statements {
+            let query = self.cached_parse(stmt)?;
+            let mut executor = MutQueryExecutor::new(store, tenant_id.to_string());
+            last_result = executor.execute(&query)?;
+        }
 
-        Ok(result)
+        Ok(last_result)
     }
 }
 
@@ -610,5 +657,94 @@ mod tests {
         // If evicted: miss count goes up; if still cached: hit count goes up
         // We had 3 misses so far, this should be a 4th miss
         assert_eq!(engine.cache_stats().misses(), 4);
+    }
+
+    // ==================== MULTI-STATEMENT TESTS ====================
+
+    #[test]
+    fn test_split_statements_basic() {
+        let stmts = QueryEngine::split_statements("CREATE (a:Person); CREATE (b:Person)");
+        assert_eq!(stmts, vec!["CREATE (a:Person)", "CREATE (b:Person)"]);
+    }
+
+    #[test]
+    fn test_split_statements_with_whitespace() {
+        let stmts = QueryEngine::split_statements("  CREATE (a:Person) ;  CREATE (b:Person) ;  ");
+        assert_eq!(stmts, vec!["CREATE (a:Person)", "CREATE (b:Person)"]);
+    }
+
+    #[test]
+    fn test_split_statements_no_semicolon() {
+        let stmts = QueryEngine::split_statements("MATCH (n) RETURN n");
+        assert_eq!(stmts, vec!["MATCH (n) RETURN n"]);
+    }
+
+    #[test]
+    fn test_split_statements_respects_single_quotes() {
+        let stmts = QueryEngine::split_statements("CREATE (n:P {x: 'a;b'}); MATCH (n) RETURN n");
+        assert_eq!(stmts, vec!["CREATE (n:P {x: 'a;b'})", "MATCH (n) RETURN n"]);
+    }
+
+    #[test]
+    fn test_split_statements_respects_double_quotes() {
+        let stmts = QueryEngine::split_statements(r#"CREATE (n:P {x: "a;b"}); MATCH (n) RETURN n"#);
+        assert_eq!(stmts, vec![r#"CREATE (n:P {x: "a;b"})"#, "MATCH (n) RETURN n"]);
+    }
+
+    #[test]
+    fn test_multi_create_with_semicolons() {
+        let mut store = GraphStore::new();
+        let engine = QueryEngine::new();
+
+        engine.execute_mut(
+            "CREATE (a:Person {name: 'Alice'}); CREATE (b:Person {name: 'Bob'})",
+            &mut store,
+            "default",
+        ).unwrap();
+
+        let result = engine.execute("MATCH (n:Person) RETURN count(n)", &store).unwrap();
+        let count = result.records[0].get("count(n)").unwrap()
+            .as_property().unwrap().as_integer().unwrap();
+        assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn test_multi_statement_create_then_match_relationship() {
+        let mut store = GraphStore::new();
+        let engine = QueryEngine::new();
+
+        // Create nodes and relationship in one multi-statement call
+        engine.execute_mut(
+            "CREATE (a:Person {name: 'Alice'}); \
+             CREATE (b:Person {name: 'Bob'}); \
+             MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'}) CREATE (a)-[:KNOWS]->(b)",
+            &mut store,
+            "default",
+        ).unwrap();
+
+        // Verify
+        let result = engine.execute(
+            "MATCH (a:Person)-[:KNOWS]->(b:Person) RETURN a.name, b.name",
+            &store,
+        ).unwrap();
+        assert_eq!(result.len(), 1);
+    }
+
+    #[test]
+    fn test_multi_statement_trailing_semicolon() {
+        let mut store = GraphStore::new();
+        let engine = QueryEngine::new();
+
+        // Trailing semicolons should be fine
+        engine.execute_mut(
+            "CREATE (n:Test {val: 1});",
+            &mut store,
+            "default",
+        ).unwrap();
+
+        let result = engine.execute("MATCH (n:Test) RETURN count(n)", &store).unwrap();
+        let count = result.records[0].get("count(n)").unwrap()
+            .as_property().unwrap().as_integer().unwrap();
+        assert_eq!(count, 1);
     }
 }
