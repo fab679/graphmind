@@ -15,9 +15,13 @@ import { GraphmindClient } from 'graphmind-sdk';
 
 const client = new GraphmindClient({ url: 'http://localhost:8080' });
 
-// Create data
-await client.query('CREATE (a:Person {name: "Alice", age: 30})');
-await client.query('CREATE (b:Person {name: "Bob", age: 25})');
+// Create data (semicolons separate multiple statements)
+await client.query(`
+  CREATE (a:Person {name: "Alice", age: 30});
+  CREATE (b:Person {name: "Bob", age: 25});
+  MATCH (a:Person {name: "Alice"}), (b:Person {name: "Bob"})
+  CREATE (a)-[:KNOWS]->(b)
+`);
 
 // Query
 const result = await client.query('MATCH (n:Person) RETURN n.name, n.age');

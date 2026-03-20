@@ -16,8 +16,13 @@ use graphmind_sdk::EmbeddedClient;
 
 let mut client = EmbeddedClient::new();
 
-// Create data
-client.query("default", "CREATE (n:Person {name: 'Alice', age: 30})")?;
+// Create data (semicolons separate multiple statements)
+client.query("default", "
+    CREATE (a:Person {name: 'Alice', age: 30});
+    CREATE (b:Person {name: 'Bob', age: 25});
+    MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'})
+    CREATE (a)-[:KNOWS]->(b)
+")?;
 
 // Query
 let result = client.query_readonly("default", "MATCH (n:Person) RETURN n.name, n.age")?;

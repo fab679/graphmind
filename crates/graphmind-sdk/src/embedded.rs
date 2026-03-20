@@ -269,6 +269,7 @@ fn is_write_query(cypher: &str) -> bool {
     let upper = cypher.trim().to_uppercase();
     upper.starts_with("CREATE")
         || upper.starts_with("DELETE")
+        || upper.starts_with("DETACH")
         || upper.starts_with("SET")
         || upper.starts_with("MERGE")
         || upper.starts_with("CALL")
@@ -277,6 +278,7 @@ fn is_write_query(cypher: &str) -> bool {
         || upper.contains(" SET ")
         || upper.contains(" MERGE ")
         || upper.contains(" CALL ")
+        || upper.contains(" REMOVE ")
 }
 
 #[async_trait]

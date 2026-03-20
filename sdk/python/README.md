@@ -17,10 +17,10 @@ from graphmind import GraphmindClient
 
 db = GraphmindClient.embedded()
 
-# Create data
-db.query("CREATE (a:Person {name: 'Alice', age: 30})")
-db.query("CREATE (b:Person {name: 'Bob', age: 25})")
+# Create data (semicolons separate multiple statements)
 db.query("""
+    CREATE (a:Person {name: 'Alice', age: 30});
+    CREATE (b:Person {name: 'Bob', age: 25});
     MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'})
     CREATE (a)-[:KNOWS {since: 2020}]->(b)
 """)

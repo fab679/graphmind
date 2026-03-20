@@ -37,12 +37,13 @@ from graphmind import GraphmindClient
 
 client = GraphmindClient.embedded()
 
-# Create data
-client.query('''
-    CREATE (a:Person {name: "Alice", age: 30})
-    CREATE (b:Person {name: "Bob", age: 25})
+# Create data (semicolons separate multiple statements)
+client.query("""
+    CREATE (a:Person {name: 'Alice', age: 30});
+    CREATE (b:Person {name: 'Bob', age: 25});
+    MATCH (a:Person {name: 'Alice'}), (b:Person {name: 'Bob'})
     CREATE (a)-[:KNOWS {since: 2020}]->(b)
-''')
+""")
 
 # Query data
 result = client.query_readonly("MATCH (p:Person) RETURN p.name, p.age ORDER BY p.age")

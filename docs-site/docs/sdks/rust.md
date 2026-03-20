@@ -14,7 +14,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-graphmind-sdk = "0.6.2"
+graphmind-sdk = "0.6.4"
 tokio = { version = "1", features = ["full"] }
 ```
 
@@ -29,10 +29,11 @@ use graphmind_sdk::{EmbeddedClient, GraphmindClient};
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = EmbeddedClient::new();
 
-    // Create nodes and edges
+    // Create nodes and edges (semicolons separate statements)
     client.query("default", r#"
-        CREATE (a:Person {name: "Alice", age: 30})
-        CREATE (b:Person {name: "Bob", age: 25})
+        CREATE (a:Person {name: "Alice", age: 30});
+        CREATE (b:Person {name: "Bob", age: 25});
+        MATCH (a:Person {name: "Alice"}), (b:Person {name: "Bob"})
         CREATE (a)-[:KNOWS {since: 2020}]->(b)
     "#).await?;
 

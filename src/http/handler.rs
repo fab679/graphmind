@@ -40,13 +40,17 @@ pub async fn query_handler(
     // Check if query is write or read
     let query_upper = payload.query.trim().to_uppercase();
     let is_write = query_upper.starts_with("CREATE")
+        || query_upper.starts_with("MERGE")
+        || query_upper.starts_with("DELETE")
+        || query_upper.starts_with("DETACH")
+        || query_upper.starts_with("CALL")
         || query_upper.contains(" CREATE ")
         || query_upper.contains(" DELETE ")
         || query_upper.contains(" SET ")
         || query_upper.contains(" MERGE ")
-        || query_upper.starts_with("MERGE")
-        || query_upper.starts_with("DELETE")
-        || query_upper.starts_with("DETACH");
+        || query_upper.contains(" REMOVE ")
+        || query_upper.contains(" CALL ")
+        || query_upper.contains(';');
 
     let start = std::time::Instant::now();
     let store = state.stores.get_store(&payload.graph).await;
