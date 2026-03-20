@@ -64,22 +64,22 @@ const config: Config = {
       items: [
         {
           type: 'docSidebar',
-          sidebarId: 'docsSidebar',
+          sidebarId: 'docs',
           position: 'left',
           label: 'Documentation',
         },
         {
-          to: '/docs/architecture',
-          label: 'Architecture',
+          to: '/docs/cypher/basics',
+          label: 'Cypher Guide',
           position: 'left',
         },
         {
-          to: '/docs/category/architecture-decision-records',
-          label: 'ADRs',
+          to: '/docs/sdks/index',
+          label: 'SDKs',
           position: 'left',
         },
         {
-          to: '/docs/api',
+          to: '/docs/sdks/rest-api',
           label: 'API',
           position: 'left',
         },
@@ -94,21 +94,29 @@ const config: Config = {
       style: 'dark',
       links: [
         {
-          title: 'Documentation',
+          title: 'Getting Started',
           items: [
-            { label: 'Getting Started', to: '/docs/getting-started' },
-            { label: 'Architecture', to: '/docs/architecture' },
-            { label: 'Cypher Support', to: '/docs/cypher-compatibility' },
-            { label: 'API Reference', to: '/docs/api' },
+            { label: 'Quick Start', to: '/docs/getting-started' },
+            { label: 'Docker', to: '/docs/installation/docker' },
+            { label: 'Configuration', to: '/docs/installation/configuration' },
           ],
         },
         {
-          title: 'Learn',
+          title: 'Guides',
           items: [
+            { label: 'Cypher Basics', to: '/docs/cypher/basics' },
+            { label: 'CRUD Operations', to: '/docs/cypher/crud' },
+            { label: 'SDKs', to: '/docs/sdks/index' },
+            { label: 'REST API', to: '/docs/sdks/rest-api' },
+          ],
+        },
+        {
+          title: 'Advanced',
+          items: [
+            { label: 'Architecture', to: '/docs/advanced/architecture' },
+            { label: 'Vector Search', to: '/docs/advanced/vector-search' },
+            { label: 'Graph Algorithms', to: '/docs/advanced/algorithms' },
             { label: 'ADRs', to: '/docs/category/architecture-decision-records' },
-            { label: 'Benchmarks', to: '/docs/category/performance' },
-            { label: 'LDBC', to: '/docs/category/ldbc-benchmarks' },
-            { label: 'Tech Stack', to: '/docs/tech-stack' },
           ],
         },
         {

@@ -10,18 +10,58 @@ Graphmind provides native SDKs for three languages plus compatibility with any R
 
 | SDK | Install | Mode | Status |
 |-----|---------|------|--------|
-| **Rust** | `graphmind-sdk = "0.6.2"` | Embedded + Remote | Stable |
-| **Python** | `pip install graphmind` | Embedded + Remote | Stable |
-| **TypeScript** | `npm install graphmind-sdk` | Remote only | Stable |
-| **Any language** | Any Redis client | Remote (RESP) | Stable |
-| **Any language** | HTTP client | Remote (REST) | Stable |
+| **[Rust](rust)** | `graphmind-sdk = "0.6.2"` | Embedded + Remote | Stable |
+| **[Python](python)** | `pip install graphmind` | Embedded + Remote | Stable |
+| **[TypeScript](typescript)** | `npm install graphmind-sdk` | Remote only | Stable |
+| **[REST API](rest-api)** | Any HTTP client | Remote | Stable |
+| **[RESP Protocol](resp-protocol)** | Any Redis client | Remote | Stable |
 
-## Choosing an SDK
+## Choosing a Connection Method
 
-- **Embedded mode** (Rust, Python): The database runs inside your application process. No server needed. Best for: CLI tools, data pipelines, testing, single-process apps.
-- **Remote mode** (all SDKs): Connects to a running Graphmind server via HTTP or RESP. Best for: web apps, microservices, multi-client scenarios.
-- **RESP protocol**: Any Redis client library works. Best for: languages without a native SDK, existing Redis infrastructure.
-- **REST API**: Plain HTTP. Best for: serverless functions, shell scripts, any HTTP client.
+### Embedded Mode (Rust, Python)
+
+The database runs inside your application process. No server needed.
+
+```python
+from graphmind import GraphmindClient
+client = GraphmindClient.embedded()
+client.query('CREATE (n:Person {name: "Alice"})')
+```
+
+Best for: CLI tools, data pipelines, testing, single-process applications.
+
+### Remote Mode (all SDKs)
+
+Connect to a running Graphmind server over HTTP.
+
+```python
+client = GraphmindClient.connect("http://localhost:8080")
+```
+
+Best for: web applications, microservices, multi-client scenarios.
+
+### RESP Protocol (any language)
+
+Use any Redis client library. No Graphmind-specific SDK needed.
+
+```bash
+redis-cli -p 6379
+127.0.0.1:6379> GRAPH.QUERY default "MATCH (n) RETURN count(n)"
+```
+
+Best for: languages without a native SDK, existing Redis infrastructure.
+
+### REST API (any language)
+
+Plain HTTP with JSON. Works from curl, Postman, or any HTTP client.
+
+```bash
+curl -X POST http://localhost:8080/api/query \
+  -H 'Content-Type: application/json' \
+  -d '{"query": "MATCH (n) RETURN count(n)"}'
+```
+
+Best for: serverless functions, shell scripts, quick testing.
 
 ## Common API Surface
 
