@@ -135,6 +135,7 @@ function Hero() {
   return (
     <header className={styles.hero}>
       <div className="container">
+        <img src="/graphmind/img/logo.svg" alt="Graphmind" style={{width: 64, height: 64, marginBottom: 16}} />
         <h1 className={styles.heroTitle}>Graphmind</h1>
         <p className={styles.heroTagline}>
           High-performance distributed graph database built in Rust with OpenCypher support, vector search, and real-time visualization.

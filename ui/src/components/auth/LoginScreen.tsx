@@ -24,9 +24,7 @@ export function LoginScreen({ onLogin, onSkip }: LoginScreenProps) {
     <div className="flex min-h-screen items-center justify-center bg-background">
       <div className="w-full max-w-sm rounded-lg border bg-card p-6 shadow-lg">
         <div className="mb-6 text-center">
-          <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-xl bg-primary text-xl font-bold text-primary-foreground">
-            G
-          </div>
+          <img src="/favicon.svg" alt="Graphmind" className="mx-auto mb-3 h-12 w-12" />
           <h1 className="text-xl font-bold">Graphmind</h1>
           <p className="text-sm text-muted-foreground">
             Connect to your graph database

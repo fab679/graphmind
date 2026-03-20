@@ -112,9 +112,7 @@ export function Navbar() {
   return (
     <header className="flex h-12 shrink-0 items-center justify-between border-b border-border bg-background px-4">
       <div className="flex items-center gap-3">
-        <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-indigo-500 to-purple-600 text-sm font-bold text-white shadow-sm">
-          G
-        </div>
+        <img src="/favicon.svg" alt="Graphmind" className="h-8 w-8" />
         <span className="text-sm font-semibold text-foreground">
           Graphmind
         </span>
