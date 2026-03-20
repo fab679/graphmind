@@ -49,8 +49,8 @@ pub fn bfs(view: &GraphView, source: NodeId, target: NodeId) -> Option<PathResul
         }
 
         for &next_idx in view.successors(current_idx) {
-            if !visited.contains_key(&next_idx) {
-                visited.insert(next_idx, Some(current_idx));
+            if let std::collections::hash_map::Entry::Vacant(e) = visited.entry(next_idx) {
+                e.insert(Some(current_idx));
                 queue.push_back(next_idx);
             }
         }

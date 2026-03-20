@@ -14,10 +14,11 @@ use ndarray::{Array1, Array2, Axis};
 use rand::Rng;
 
 /// Solver strategy for PCA.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub enum PcaSolver {
     /// Automatically select solver based on data size:
     /// Randomized if n > 500 and k < 0.8 * min(n, d), else PowerIteration.
+    #[default]
     Auto,
     /// Randomized SVD (Halko-Martinsson-Tropp).
     Randomized {
@@ -28,12 +29,6 @@ pub enum PcaSolver {
     },
     /// Legacy power iteration with deflation.
     PowerIteration,
-}
-
-impl Default for PcaSolver {
-    fn default() -> Self {
-        PcaSolver::Auto
-    }
 }
 
 /// PCA configuration
@@ -193,6 +188,7 @@ pub fn pca(data: &[Vec<f64>], config: PcaConfig) -> PcaResult {
     // Compute column std devs and scale
     let mut std_dev = vec![1.0; d];
     if config.scale {
+        #[allow(clippy::needless_range_loop)]
         for j in 0..d {
             let col = mat.column(j);
             let ss: f64 = col.iter().map(|x| x * x).sum();
@@ -404,6 +400,7 @@ fn randomized_svd(
     let mut components = Vec::with_capacity(k);
     let mut singular_values = Vec::with_capacity(k);
 
+    #[allow(clippy::needless_range_loop)]
     for i in 0..k.min(l_actual) {
         let sigma_sq = eigvals[i];
         if sigma_sq < 1e-30 {

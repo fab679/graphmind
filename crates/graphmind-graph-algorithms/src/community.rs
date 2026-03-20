@@ -108,6 +108,7 @@ pub fn strongly_connected_components(view: &GraphView) -> SccResult {
     let mut node_component = HashMap::new();
     let mut components = HashMap::new();
 
+    #[allow(clippy::too_many_arguments)]
     fn dfs(
         u: usize,
         id_counter: &mut i32,
@@ -153,10 +154,7 @@ pub fn strongly_connected_components(view: &GraphView) -> SccResult {
 
                 let node_id = view.index_to_node[node_idx];
                 node_component.insert(node_id, *scc_count);
-                components
-                    .entry(*scc_count)
-                    .or_insert_with(Vec::new)
-                    .push(node_id);
+                components.entry(*scc_count).or_default().push(node_id);
 
                 if node_idx == u {
                     break;
