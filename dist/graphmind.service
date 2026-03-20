@@ -1,0 +1,30 @@
+[Unit]
+Description=Graphmind Graph Database
+Documentation=https://github.com/graphmind-ai/graphmind
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=graphmind
+Group=graphmind
+ExecStart=/usr/local/bin/graphmind --config /etc/graphmind/config.toml
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65536
+LimitMEMLOCK=infinity
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/graphmind
+PrivateTmp=true
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=graphmind
+
+[Install]
+WantedBy=multi-user.target

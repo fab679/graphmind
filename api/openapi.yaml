@@ -1,0 +1,732 @@
+openapi: 3.1.0
+info:
+  title: Graphmind Graph Database API
+  version: 0.6.1
+  description: |
+    HTTP API for the Graphmind high-performance distributed graph database.
+    Supports OpenCypher queries, graph status, and CRUD operations.
+  license:
+    name: Apache-2.0
+    url: https://www.apache.org/licenses/LICENSE-2.0
+
+servers:
+  - url: http://localhost:8080
+    description: Local development server
+
+paths:
+  /api/query:
+    post:
+      operationId: executeQuery
+      summary: Execute a Cypher query
+      description: |
+        Execute an OpenCypher query against the graph database.
+        Supports both read (MATCH) and write (CREATE, SET, DELETE, MERGE) queries.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QueryRequest'
+            examples:
+              matchAll:
+                summary: Match all Person nodes
+                value:
+                  query: "MATCH (n:Person) RETURN n"
+              matchWithFilter:
+                summary: Match with WHERE filter
+                value:
+                  query: "MATCH (n:Person) WHERE n.age > 25 RETURN n.name, n.age"
+              createNode:
+                summary: Create a new node
+                value:
+                  query: 'CREATE (n:Person {name: "Alice", age: 30})'
+              traversal:
+                summary: Traverse relationships
+                value:
+                  query: "MATCH (a:Person)-[:KNOWS]->(b:Person) RETURN a.name, b.name"
+      responses:
+        '200':
+          description: Query executed successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QueryResponse'
+        '400':
+          description: Query error (parse error, execution error)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/script:
+    post:
+      operationId: executeScript
+      summary: Execute multi-statement Cypher script
+      description: |
+        Splits input on newlines, skips comments (// and --) and blank lines,
+        strips trailing semicolons, and executes each statement sequentially.
+        Continues on errors and reports all failures.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QueryRequest'
+      responses:
+        '200':
+          description: Script execution result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: [ok, partial]
+                  executed:
+                    type: integer
+                  errors:
+                    type: array
+                    items:
+                      type: string
+                  storage:
+                    type: object
+                    properties:
+                      nodes:
+                        type: integer
+                      edges:
+                        type: integer
+
+  /api/nlq:
+    post:
+      operationId: translateNlq
+      summary: Translate natural language to Cypher
+      description: |
+        Uses the NLQ pipeline to convert plain English questions to OpenCypher queries.
+        Requires an LLM provider configured via environment variables:
+        OPENAI_API_KEY, GEMINI_API_KEY, or CLAUDE_CODE_NLQ=1.
+        Automatically builds a schema summary from the current graph.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QueryRequest'
+      responses:
+        '200':
+          description: Generated Cypher query
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  cypher:
+                    type: string
+                    nullable: true
+                  schema_summary:
+                    type: string
+                  provider:
+                    type: string
+                  model:
+                    type: string
+                  error:
+                    type: string
+
+  /api/schema:
+    get:
+      operationId: getSchema
+      summary: Get graph schema
+      description: |
+        Returns the full schema of the graph database including node types with
+        property keys/types, edge types with source/target labels, indexes,
+        constraints, and basic statistics.
+      responses:
+        '200':
+          description: Graph schema
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SchemaResponse'
+
+  /api/import/csv:
+    post:
+      operationId: importCsv
+      summary: Import nodes from CSV
+      description: |
+        Upload a CSV file to create nodes. The first row is treated as column headers
+        (property names). Each subsequent row creates one node with the specified label.
+        Property types are auto-detected (integer → float → boolean → string).
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - file
+                - label
+              properties:
+                file:
+                  type: string
+                  description: CSV file content
+                label:
+                  type: string
+                  description: Node label to assign to all created nodes
+                id_column:
+                  type: string
+                  description: Column to use as node ID mapping (optional)
+                delimiter:
+                  type: string
+                  description: "CSV delimiter character (default: ',')"
+                graph:
+                  type: string
+                  description: "Target graph/tenant name (default: 'default')"
+      responses:
+        '200':
+          description: Import successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CsvImportResponse'
+        '400':
+          description: Import error (missing fields, parse error)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/import/json:
+    post:
+      operationId: importJson
+      summary: Import nodes from JSON
+      description: |
+        Create nodes from an array of JSON objects. Each object becomes one node
+        with the specified label. Object keys become property names; values must be
+        string, number, or boolean (other types are silently skipped).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/JsonImportRequest'
+            example:
+              label: Person
+              nodes:
+                - name: Alice
+                  age: 30
+                - name: Bob
+                  age: 25
+      responses:
+        '200':
+          description: Import successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JsonImportResponse'
+        '400':
+          description: Import error (missing label, invalid data)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/status:
+    get:
+      operationId: getStatus
+      summary: Get server status
+      description: Returns the health status, version, and storage statistics of the database.
+      responses:
+        '200':
+          description: Server status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusResponse'
+              example:
+                status: healthy
+                version: 0.6.1
+                storage:
+                  nodes: 2000
+                  edges: 11000
+
+  /api/tenants:
+    get:
+      operationId: listTenants
+      summary: List all tenants
+      description: Returns all configured tenants with their settings and quotas.
+      responses:
+        '200':
+          description: List of tenants
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tenants:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Tenant'
+    post:
+      operationId: createTenant
+      summary: Create a new tenant
+      description: Create a new tenant with optional resource quotas.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateTenantRequest'
+            example:
+              id: analytics
+              name: Analytics Team
+      responses:
+        '201':
+          description: Tenant created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Tenant'
+        '409':
+          description: Tenant already exists
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/tenants/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Tenant ID
+    get:
+      operationId: getTenant
+      summary: Get a tenant
+      description: Returns a single tenant by ID.
+      responses:
+        '200':
+          description: Tenant details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Tenant'
+        '404':
+          description: Tenant not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    delete:
+      operationId: deleteTenant
+      summary: Delete a tenant
+      description: Delete a tenant by ID. The "default" tenant cannot be deleted.
+      responses:
+        '200':
+          description: Tenant deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                  id:
+                    type: string
+        '403':
+          description: Cannot delete default tenant
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Tenant not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    patch:
+      operationId: updateTenant
+      summary: Update tenant settings
+      description: |
+        Update a tenant's enabled status, resource quotas, or configuration.
+        Only provided fields are updated; omitted fields remain unchanged.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateTenantRequest'
+      responses:
+        '200':
+          description: Updated tenant
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Tenant'
+        '404':
+          description: Tenant not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/tenants/{id}/usage:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema:
+          type: string
+        description: Tenant ID
+    get:
+      operationId: getTenantUsage
+      summary: Get tenant resource usage
+      description: Returns current resource usage for a tenant (nodes, edges, memory, storage, connections).
+      responses:
+        '200':
+          description: Resource usage
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UsageResponse'
+        '404':
+          description: Tenant not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  schemas:
+    QueryRequest:
+      type: object
+      required:
+        - query
+      properties:
+        query:
+          type: string
+          description: An OpenCypher query string
+          examples:
+            - "MATCH (n:Person) RETURN n"
+        graph:
+          type: string
+          description: "Target graph/tenant name (default: 'default')"
+          default: default
+
+    QueryResponse:
+      type: object
+      properties:
+        nodes:
+          type: array
+          description: Graph nodes referenced in the result (for visualization)
+          items:
+            $ref: '#/components/schemas/GraphNode'
+        edges:
+          type: array
+          description: Graph edges referenced in the result (for visualization)
+          items:
+            $ref: '#/components/schemas/GraphEdge'
+        columns:
+          type: array
+          description: Column names for the tabular result
+          items:
+            type: string
+        records:
+          type: array
+          description: Tabular result rows, one array per record
+          items:
+            type: array
+            items: {}
+
+    GraphNode:
+      type: object
+      properties:
+        id:
+          type: string
+          description: Node ID
+        labels:
+          type: array
+          items:
+            type: string
+          description: Node labels
+        properties:
+          type: object
+          additionalProperties: true
+          description: Node properties
+
+    GraphEdge:
+      type: object
+      properties:
+        id:
+          type: string
+          description: Edge ID
+        source:
+          type: string
+          description: Source node ID
+        target:
+          type: string
+          description: Target node ID
+        type:
+          type: string
+          description: Relationship type
+        properties:
+          type: object
+          additionalProperties: true
+          description: Edge properties
+
+    StatusResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          description: Server health status
+          examples:
+            - healthy
+        version:
+          type: string
+          description: Server version
+          examples:
+            - 0.6.1
+        storage:
+          type: object
+          properties:
+            nodes:
+              type: integer
+              description: Number of nodes in the graph
+            edges:
+              type: integer
+              description: Number of edges in the graph
+
+    SchemaResponse:
+      type: object
+      properties:
+        node_types:
+          type: array
+          items:
+            type: object
+            properties:
+              label:
+                type: string
+              count:
+                type: integer
+              properties:
+                type: object
+                additionalProperties:
+                  type: string
+                  description: "Property type: String, Integer, Float, Boolean, Vector, Unknown"
+        edge_types:
+          type: array
+          items:
+            type: object
+            properties:
+              type:
+                type: string
+              count:
+                type: integer
+              source_labels:
+                type: array
+                items:
+                  type: string
+              target_labels:
+                type: array
+                items:
+                  type: string
+              properties:
+                type: object
+                additionalProperties:
+                  type: string
+        indexes:
+          type: array
+          items:
+            type: object
+            properties:
+              label:
+                type: string
+              property:
+                type: string
+              type:
+                type: string
+        constraints:
+          type: array
+          items:
+            type: object
+            properties:
+              label:
+                type: string
+              property:
+                type: string
+              type:
+                type: string
+        statistics:
+          type: object
+          properties:
+            total_nodes:
+              type: integer
+            total_edges:
+              type: integer
+            avg_out_degree:
+              type: number
+
+    JsonImportRequest:
+      type: object
+      required:
+        - label
+        - nodes
+      properties:
+        label:
+          type: string
+          description: Node label to assign to all created nodes
+        nodes:
+          type: array
+          description: Array of JSON objects, each becoming a node
+          items:
+            type: object
+            additionalProperties: true
+        graph:
+          type: string
+          description: "Target graph/tenant name (default: 'default')"
+          default: default
+
+    CsvImportResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          examples:
+            - ok
+        nodes_created:
+          type: integer
+        label:
+          type: string
+        columns:
+          type: array
+          items:
+            type: string
+
+    JsonImportResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          examples:
+            - ok
+        nodes_created:
+          type: integer
+        label:
+          type: string
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+          description: Error message
+
+    Tenant:
+      type: object
+      properties:
+        id:
+          type: string
+          description: Tenant ID (unique identifier)
+        name:
+          type: string
+          description: Display name
+        enabled:
+          type: boolean
+          description: Whether the tenant is enabled
+        created_at:
+          type: integer
+          description: Creation timestamp (Unix seconds)
+        quotas:
+          $ref: '#/components/schemas/ResourceQuotas'
+        nlq_config:
+          type: object
+          nullable: true
+          description: NLQ configuration
+        agent_config:
+          type: object
+          nullable: true
+          description: Agent configuration
+        embed_config:
+          type: object
+          nullable: true
+          description: Auto-embed configuration
+
+    ResourceQuotas:
+      type: object
+      properties:
+        max_nodes:
+          type: integer
+          nullable: true
+          description: Maximum number of nodes
+        max_edges:
+          type: integer
+          nullable: true
+          description: Maximum number of edges
+        max_memory_bytes:
+          type: integer
+          nullable: true
+          description: Maximum memory in bytes
+        max_storage_bytes:
+          type: integer
+          nullable: true
+          description: Maximum storage in bytes
+        max_connections:
+          type: integer
+          nullable: true
+          description: Maximum concurrent connections
+        max_query_time_ms:
+          type: integer
+          nullable: true
+          description: Maximum query execution time in milliseconds
+
+    CreateTenantRequest:
+      type: object
+      required:
+        - id
+        - name
+      properties:
+        id:
+          type: string
+          description: Tenant ID (unique)
+        name:
+          type: string
+          description: Display name
+        quotas:
+          $ref: '#/components/schemas/ResourceQuotas'
+
+    UpdateTenantRequest:
+      type: object
+      properties:
+        enabled:
+          type: boolean
+          description: Enable or disable the tenant
+        quotas:
+          $ref: '#/components/schemas/ResourceQuotas'
+        nlq_config:
+          type: object
+          description: NLQ configuration
+        agent_config:
+          type: object
+          description: Agent configuration
+        embed_config:
+          type: object
+          description: Auto-embed configuration
+
+    UsageResponse:
+      type: object
+      properties:
+        tenant_id:
+          type: string
+        node_count:
+          type: integer
+        edge_count:
+          type: integer
+        memory_bytes:
+          type: integer
+        storage_bytes:
+          type: integer
+        active_connections:
+          type: integer

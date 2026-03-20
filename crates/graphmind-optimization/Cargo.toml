@@ -1,0 +1,22 @@
+[package]
+name = "graphmind-optimization"
+version = "0.6.2"
+edition = "2021"
+authors = ["Sandeep Kunkunuru <team@graphmind.dev>"]
+description = "High-performance metaheuristic optimization algorithms (Jaya, Rao, TLBO, BMR, BWR, QOJaya, ITLBO) in Rust."
+license = "Apache-2.0"
+repository = "https://github.com/fab679/graphmind"
+keywords = ["optimization", "metaheuristic", "genetic-algorithm", "operations-research", "solver"]
+categories = ["algorithms", "science", "mathematics"]
+readme = "README.md"
+
+[dependencies]
+rand = "0.8"
+rayon = "1.8"
+ndarray = { version = "0.15", features = ["serde"] }
+serde = { version = "1.0", features = ["derive"] }
+tracing = "0.1"
+rand_distr = "0.4"
+
+[dev-dependencies]
+criterion = "0.5"

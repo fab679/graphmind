@@ -1,0 +1,19 @@
+[package]
+name = "graphmind-cli"
+version = "0.6.2"
+edition = "2021"
+authors = ["Graphmind Team"]
+description = "CLI for Graphmind Graph Database"
+license = "Apache-2.0"
+repository = "https://github.com/fab679/graphmind"
+
+[[bin]]
+name = "graphmind-cli"
+path = "src/main.rs"
+
+[dependencies]
+graphmind-sdk = { path = "../crates/graphmind-sdk", version = "0.6.2" }
+clap = { version = "4", features = ["derive"] }
+tokio = { version = "1.35", features = ["full"] }
+serde_json = "1.0"
+comfy-table = ">=7, <7.2"

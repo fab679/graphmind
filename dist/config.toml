@@ -1,0 +1,39 @@
+# Graphmind Configuration
+# See https://github.com/graphmind-ai/graphmind for documentation
+
+[server]
+# RESP (Redis protocol) server
+host = "0.0.0.0"
+resp_port = 6379
+
+# HTTP server (API + visualizer)
+http_port = 8080
+
+# Data directory for persistence
+data_dir = "/var/lib/graphmind/data"
+
+# Maximum concurrent connections
+max_connections = 10000
+
+[logging]
+# Log level: trace, debug, info, warn, error
+level = "info"
+
+[auth]
+# Enable token-based authentication
+enabled = false
+# Tokens for API access (comma-separated or list)
+# tokens = ["your-secret-token"]
+
+[tls]
+# Enable TLS for RESP and HTTP servers
+enabled = false
+# cert_file = "/etc/graphmind/cert.pem"
+# key_file = "/etc/graphmind/key.pem"
+
+[nlq]
+# Natural Language Query configuration
+# Requires an LLM provider API key
+# provider = "openai"  # openai, gemini, ollama, claude-code
+# model = "gpt-4o-mini"
+# api_key = "sk-..."

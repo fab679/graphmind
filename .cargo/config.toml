@@ -1,0 +1,6 @@
+# Workaround for GCC 13+ requiring explicit <cstdint> includes.
+# The bundled librocksdb-sys 0.16 headers lack this include.
+# Remove this once rocksdb is upgraded to a version with the fix
+# and libclang-dev is available for bindgen.
+[env]
+CXXFLAGS = "-include cstdint"

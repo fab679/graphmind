@@ -1,0 +1,40 @@
+[package]
+name = "graphmind-sdk"
+version = "0.6.2"
+edition = "2021"
+authors = ["Graphmind Team"]
+description = "Client SDK for Graphmind Graph Database — embedded and remote modes"
+license = "Apache-2.0"
+repository = "https://github.com/fab679/graphmind"
+keywords = ["graph", "database", "sdk", "cypher", "client"]
+categories = ["database", "api-bindings"]
+
+[dependencies]
+# Async runtime
+tokio = { version = "1.35", features = ["net", "io-util", "rt"] }
+async-trait = "0.1"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# HTTP client (for RemoteClient)
+reqwest = { version = "0.13.1", features = ["json"] }
+
+# Error handling
+thiserror = "1.0"
+
+# Core graph database (for EmbeddedClient)
+graphmind = { path = "../..", version = "0.6.2" }
+
+# Graph algorithms (for AlgorithmClient)
+graphmind-graph-algorithms = { path = "../graphmind-graph-algorithms", version = "0.6.2" }
+
+# Optimization engine (re-exported for examples)
+graphmind-optimization = { path = "../graphmind-optimization", version = "0.6.2" }
+
+# Numeric arrays (re-exported for optimization problems)
+ndarray = "0.15"
+
+[dev-dependencies]
+tokio = { version = "1.35", features = ["full"] }

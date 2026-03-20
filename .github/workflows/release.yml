@@ -1,0 +1,163 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            archive: tar.gz
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            archive: tar.gz
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            archive: tar.gz
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            archive: tar.gz
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            archive: zip
+    env:
+      CXXFLAGS: "-include cstdint"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install cross-compilation tools
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+
+      - name: Build UI
+        run: |
+          cd ui && npm ci && npm run build
+
+      - name: Build release binary
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Package (Unix)
+        if: matrix.archive == 'tar.gz'
+        run: |
+          mkdir -p dist
+          cp target/${{ matrix.target }}/release/graphmind dist/ 2>/dev/null || true
+          cp target/${{ matrix.target }}/release/graphmind-cli dist/ 2>/dev/null || true
+          cp README.md LICENSE dist/
+          cp dist/graphmind.conf.example dist/ 2>/dev/null || true
+          tar -czf graphmind-${{ github.ref_name }}-${{ matrix.target }}.tar.gz -C dist .
+
+      - name: Package (Windows)
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist
+          Copy-Item target/${{ matrix.target }}/release/graphmind.exe dist/ -ErrorAction SilentlyContinue
+          Copy-Item target/${{ matrix.target }}/release/graphmind-cli.exe dist/ -ErrorAction SilentlyContinue
+          Copy-Item README.md,LICENSE dist/
+          Compress-Archive -Path dist/* -DestinationPath graphmind-${{ github.ref_name }}-${{ matrix.target }}.zip
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: graphmind-${{ matrix.target }}
+          path: graphmind-${{ github.ref_name }}-${{ matrix.target }}.*
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: graphmind-*
+          generate_release_notes: true
+
+  docker:
+    name: Docker
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: |
+            graphmind/graphmind:${{ github.ref_name }}
+            graphmind/graphmind:latest
+
+  publish-pypi:
+    name: PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: PyO3/maturin-action@v1
+        with:
+          working-directory: sdk/python
+          command: publish
+          args: --skip-existing
+        env:
+          MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
+
+  publish-npm:
+    name: npm
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org
+      - run: cd sdk/typescript && npm ci && npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  publish-crates:
+    name: Crates.io
+    needs: build
+    runs-on: ubuntu-latest
+    env:
+      CXXFLAGS: "-include cstdint"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Publish crates (in dependency order)
+        run: |
+          cargo publish -p graphmind-graph-algorithms --allow-dirty || true
+          sleep 30
+          cargo publish -p graphmind-optimization --allow-dirty || true
+          sleep 30
+          cargo publish -p graphmind --allow-dirty || true
+          sleep 30
+          cargo publish -p graphmind-sdk --allow-dirty || true
+          sleep 30
+          cargo publish -p graphmind-cli --allow-dirty || true
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}

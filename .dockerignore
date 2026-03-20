@@ -1,0 +1,13 @@
+target/
+.git/
+.gitignore
+*.md
+docs/
+tests/
+.claude/
+*_data/
+vectors/
+wal/
+data/
+visualization.svg
+vis.png
