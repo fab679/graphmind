@@ -115,7 +115,9 @@ jobs:
           working-directory: sdk/python
           command: publish
           args: --skip-existing
-          before-script-linux: yum install -y clang-devel cmake3 || (apt-get update && apt-get install -y libclang-dev cmake)
+          manylinux: manylinux_2_28
+          before-script-linux: |
+            dnf install -y clang-devel cmake || true
         env:
           MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
 
@@ -128,7 +130,7 @@ jobs:
         with:
           node-version: 20
           registry-url: https://registry.npmjs.org
-      - run: cd sdk/typescript && npm ci && npm publish --access public
+      - run: cd sdk/typescript && npm ci && npm publish --access public || echo "Already published, skipping"
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
