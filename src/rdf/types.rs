@@ -11,6 +11,7 @@ use thiserror::Error;
 
 /// RDF errors
 #[derive(Error, Debug)]
+#[allow(clippy::enum_variant_names)]
 pub enum RdfError {
     /// Invalid IRI
     #[error("Invalid IRI: {0}")]
@@ -79,6 +80,7 @@ impl BlankNode {
     }
 
     /// Create a blank node from a string identifier
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> RdfResult<Self> {
         OxBlankNode::new(s)
             .map(Self)

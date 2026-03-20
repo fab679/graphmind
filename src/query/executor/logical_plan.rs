@@ -174,7 +174,7 @@ impl PatternGraph {
             // Process the start node
             let start_var = path_pattern.start.variable.clone().unwrap_or_default();
             if !start_var.is_empty() {
-                let labels: Vec<Label> = path_pattern.start.labels.iter().cloned().collect();
+                let labels: Vec<Label> = path_pattern.start.labels.to_vec();
                 nodes
                     .entry(start_var.clone())
                     .or_insert_with(|| PatternNode {
@@ -188,7 +188,7 @@ impl PatternGraph {
             for segment in &path_pattern.segments {
                 let next_var = segment.node.variable.clone().unwrap_or_default();
                 if !next_var.is_empty() {
-                    let labels: Vec<Label> = segment.node.labels.iter().cloned().collect();
+                    let labels: Vec<Label> = segment.node.labels.to_vec();
                     nodes
                         .entry(next_var.clone())
                         .or_insert_with(|| PatternNode {
@@ -197,7 +197,7 @@ impl PatternGraph {
                         });
                 }
 
-                let edge_types: Vec<EdgeType> = segment.edge.types.iter().cloned().collect();
+                let edge_types: Vec<EdgeType> = segment.edge.types.to_vec();
 
                 let ast_dir = match segment.edge.direction {
                     crate::query::ast::Direction::Outgoing => AstDirection::Outgoing,

@@ -21,7 +21,7 @@ pub struct LogEntry {
 }
 
 /// Raft persistent state
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct RaftState {
     /// Current term
     pub current_term: u64,
@@ -31,17 +31,6 @@ pub struct RaftState {
     pub commit_index: u64,
     /// Last applied index
     pub last_applied: u64,
-}
-
-impl Default for RaftState {
-    fn default() -> Self {
-        Self {
-            current_term: 0,
-            voted_for: None,
-            commit_index: 0,
-            last_applied: 0,
-        }
-    }
 }
 
 /// Raft storage manager

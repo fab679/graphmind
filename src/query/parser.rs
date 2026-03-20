@@ -81,6 +81,7 @@ static PRATT_PARSER: LazyLock<PrattParser<Rule>> = LazyLock::new(|| {
 
 /// Parser errors
 #[derive(Error, Debug)]
+#[allow(clippy::large_enum_variant)]
 pub enum ParseError {
     /// Pest parsing error
     #[error("Parse error: {0}")]
@@ -104,43 +105,40 @@ pub fn parse_query(input: &str) -> ParseResult<Query> {
     let mut query = Query::new();
 
     for pair in pairs {
-        match pair.as_rule() {
-            Rule::query => {
-                let mut is_union_all = false;
-                let mut first = true;
-                for inner in pair.into_inner() {
-                    match inner.as_rule() {
-                        Rule::explain_clause => {
-                            let text = inner.as_str().to_uppercase();
-                            if text.starts_with("PROFILE") {
-                                query.profile = true;
-                            } else {
-                                query.explain = true;
-                            }
+        if pair.as_rule() == Rule::query {
+            let mut is_union_all = false;
+            let mut first = true;
+            for inner in pair.into_inner() {
+                match inner.as_rule() {
+                    Rule::explain_clause => {
+                        let text = inner.as_str().to_uppercase();
+                        if text.starts_with("PROFILE") {
+                            query.profile = true;
+                        } else {
+                            query.explain = true;
                         }
-                        Rule::union_clause => {
-                            // Check if UNION ALL (inner has "ALL" text)
-                            let text = inner.as_str().to_uppercase();
-                            is_union_all = text.contains("ALL");
-                        }
-                        Rule::statement => {
-                            if first {
-                                parse_statement(inner, &mut query)?;
-                                first = false;
-                            } else {
-                                // UNION query
-                                let mut union_query = Query::new();
-                                parse_statement(inner, &mut union_query)?;
-                                query.union_queries.push((union_query, is_union_all));
-                                is_union_all = false;
-                            }
-                        }
-                        Rule::EOI => break,
-                        _ => {}
                     }
+                    Rule::union_clause => {
+                        // Check if UNION ALL (inner has "ALL" text)
+                        let text = inner.as_str().to_uppercase();
+                        is_union_all = text.contains("ALL");
+                    }
+                    Rule::statement => {
+                        if first {
+                            parse_statement(inner, &mut query)?;
+                            first = false;
+                        } else {
+                            // UNION query
+                            let mut union_query = Query::new();
+                            parse_statement(inner, &mut union_query)?;
+                            query.union_queries.push((union_query, is_union_all));
+                            is_union_all = false;
+                        }
+                    }
+                    Rule::EOI => break,
+                    _ => {}
                 }
             }
-            _ => {}
         }
     }
 
@@ -413,7 +411,7 @@ fn parse_yield_item(pair: pest::iterators::Pair<Rule>) -> ParseResult<YieldItem>
     let mut alias = None;
 
     let inner: Vec<_> = pair.into_inner().collect();
-    if inner.len() >= 1 {
+    if !inner.is_empty() {
         name = inner[0].as_str().to_string();
     }
     if inner.len() >= 2 {

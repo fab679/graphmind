@@ -37,10 +37,7 @@ impl EmbeddingClient {
             }
         });
 
-        if (config.provider == LLMProvider::AzureOpenAI || config.provider == LLMProvider::Ollama)
-            && config.api_base_url.is_none()
-            && config.provider == LLMProvider::AzureOpenAI
-        {
+        if config.provider == LLMProvider::AzureOpenAI && config.api_base_url.is_none() {
             return Err(EmbedError::ConfigError(
                 "AzureOpenAI requires api_base_url".to_string(),
             ));

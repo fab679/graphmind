@@ -132,7 +132,7 @@ impl CommandHandler {
 
             let res = self
                 .query_engine
-                .execute_mut(&query_str, &mut *store_guard, &graph_name);
+                .execute_mut(&query_str, &mut store_guard, &graph_name);
 
             // If write succeeded and persistence is enabled, persist the changes
             if let (Ok(ref batch), Some(ref persist_mgr)) = (&res, &self.persistence) {
@@ -161,7 +161,7 @@ impl CommandHandler {
             res
         } else {
             let store_guard = store.read().await;
-            let res = self.query_engine.execute(&query_str, &*store_guard);
+            let res = self.query_engine.execute(&query_str, &store_guard);
             drop(store_guard);
             res
         };

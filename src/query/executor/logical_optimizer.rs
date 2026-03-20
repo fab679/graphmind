@@ -11,8 +11,7 @@ use std::collections::HashSet;
 /// Apply all logical optimization rules to a plan
 pub fn optimize(plan: LogicalPlanNode) -> LogicalPlanNode {
     let plan = push_filters_down(plan);
-    let plan = insert_expand_into(plan);
-    plan
+    insert_expand_into(plan)
 }
 
 /// Push Filter nodes closer to their data source when possible.

@@ -54,10 +54,10 @@ pub async fn query_handler(
         let mut store_guard = store.write().await;
         state
             .engine
-            .execute_mut(&payload.query, &mut *store_guard, &payload.graph)
+            .execute_mut(&payload.query, &mut store_guard, &payload.graph)
     } else {
         let store_guard = store.read().await;
-        state.engine.execute(&payload.query, &*store_guard)
+        state.engine.execute(&payload.query, &store_guard)
     };
     let duration = start.elapsed().as_secs_f64() * 1000.0;
     crate::metrics::record_query(duration, is_write);
@@ -187,7 +187,7 @@ pub async fn script_handler(
 
         match state
             .engine
-            .execute_mut(stmt, &mut *store_guard, &payload.graph)
+            .execute_mut(stmt, &mut store_guard, &payload.graph)
         {
             Ok(_) => {
                 executed += 1;
@@ -366,7 +366,7 @@ pub async fn schema_handler(State(state): State<AppState>) -> impl IntoResponse 
     for label in store_guard.all_labels() {
         let count = store_guard.label_node_count(label);
         let mut properties = BTreeMap::new();
-        for ((l, prop), _pstats) in &stats.property_stats {
+        for (l, prop) in stats.property_stats.keys() {
             if l == label {
                 let nodes = store_guard.get_nodes_by_label(label);
                 let mut prop_type = "Unknown".to_string();

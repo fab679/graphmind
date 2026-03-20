@@ -125,7 +125,7 @@ impl RdfStore {
         if let Some(graph) = quad.graph {
             self.graphs
                 .entry(graph.as_str().to_string())
-                .or_insert_with(HashSet::new)
+                .or_default()
                 .insert(triple);
         }
 
@@ -270,25 +270,25 @@ impl RdfStore {
         // Update SPO index
         self.spo_index
             .entry(s_key.clone())
-            .or_insert_with(HashMap::new)
+            .or_default()
             .entry(p_key.clone())
-            .or_insert_with(HashSet::new)
+            .or_default()
             .insert(o_key.clone());
 
         // Update POS index
         self.pos_index
             .entry(p_key.clone())
-            .or_insert_with(HashMap::new)
+            .or_default()
             .entry(o_key.clone())
-            .or_insert_with(HashSet::new)
+            .or_default()
             .insert(s_key.clone());
 
         // Update OSP index
         self.osp_index
             .entry(o_key)
-            .or_insert_with(HashMap::new)
+            .or_default()
             .entry(s_key)
-            .or_insert_with(HashSet::new)
+            .or_default()
             .insert(p_key);
     }
 

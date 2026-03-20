@@ -211,7 +211,7 @@ impl PersistentStorage {
                     labels: stored
                         .labels
                         .into_iter()
-                        .map(|s| crate::graph::Label::new(s))
+                        .map(crate::graph::Label::new)
                         .collect(),
                     properties,
                     created_at: stored.created_at,
@@ -353,7 +353,7 @@ impl PersistentStorage {
                 labels: stored
                     .labels
                     .into_iter()
-                    .map(|s| crate::graph::Label::new(s))
+                    .map(crate::graph::Label::new)
                     .collect(),
                 properties,
                 created_at: stored.created_at,

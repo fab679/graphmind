@@ -408,13 +408,12 @@ fn build_social_network(store: &mut GraphStore) {
         let degree = 5 + i % 4;
         for d in 0..degree {
             let j = (i + 1 + d * 7 + i * 3) % num_persons;
-            if i != j {
-                if store
+            if i != j
+                && store
                     .create_edge(person_ids[i], person_ids[j], "KNOWS")
                     .is_ok()
-                {
-                    knows_count += 1;
-                }
+            {
+                knows_count += 1;
             }
         }
     }
@@ -565,7 +564,7 @@ fn load_graphalytics_dataset(
     let mut vid_to_node: HashMap<u64, NodeId> = HashMap::new();
     if let Ok(file) = File::open(&v_path) {
         let reader = BufReader::new(file);
-        for line in reader.lines().filter_map(|l| l.ok()) {
+        for line in reader.lines().map_while(Result::ok) {
             if let Some(cap) = max_vertices {
                 if vid_to_node.len() >= cap {
                     break;
@@ -591,7 +590,7 @@ fn load_graphalytics_dataset(
     let mut edge_count: usize = 0;
     if let Ok(file) = File::open(&e_path) {
         let reader = BufReader::new(file);
-        for line in reader.lines().filter_map(|l| l.ok()) {
+        for line in reader.lines().map_while(Result::ok) {
             let trimmed = line.trim();
             if trimmed.is_empty() || trimmed.starts_with('#') {
                 continue;
@@ -690,9 +689,11 @@ async fn start_server() {
 
     let (mut graph, rx) = GraphStore::with_async_indexing();
 
-    let mut config = ServerConfig::default();
-    config.address = toml_config.server.host.clone();
-    config.port = toml_config.server.resp_port;
+    let config = ServerConfig {
+        address: toml_config.server.host.clone(),
+        port: toml_config.server.resp_port,
+        ..ServerConfig::default()
+    };
 
     let demo_mode: Option<String> = args.demo;
 

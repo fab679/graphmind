@@ -219,17 +219,17 @@ impl GraphStatistics {
     /// Format statistics as human-readable text
     pub fn format(&self) -> String {
         let mut result = String::new();
-        result.push_str(&format!("Graph Statistics:\n"));
+        result.push_str("Graph Statistics:\n");
         result.push_str(&format!("  Total nodes: {}\n", self.total_nodes));
         result.push_str(&format!("  Total edges: {}\n", self.total_edges));
         result.push_str(&format!("  Avg out-degree: {:.2}\n", self.avg_out_degree));
-        result.push_str(&format!("  Labels:\n"));
+        result.push_str("  Labels:\n");
         let mut labels: Vec<_> = self.label_counts.iter().collect();
         labels.sort_by(|a, b| b.1.cmp(a.1));
         for (label, count) in labels {
             result.push_str(&format!("    :{} = {} nodes\n", label.as_str(), count));
         }
-        result.push_str(&format!("  Edge types:\n"));
+        result.push_str("  Edge types:\n");
         let mut types: Vec<_> = self.edge_type_counts.iter().collect();
         types.sort_by(|a, b| b.1.cmp(a.1));
         for (etype, count) in types {
@@ -658,7 +658,7 @@ impl GraphStore {
         // Add to label index
         self.label_index
             .entry(label.clone())
-            .or_insert_with(HashSet::new)
+            .or_default()
             .insert(node_id);
 
         // Update catalog label count
@@ -717,7 +717,7 @@ impl GraphStore {
         for label in &labels {
             self.label_index
                 .entry(label.clone())
-                .or_insert_with(HashSet::new)
+                .or_default()
                 .insert(node_id);
             // Update catalog label count
             self.catalog.on_label_added(label);
@@ -915,7 +915,7 @@ impl GraphStore {
         // Update the label index so queries can find this node by the new label
         self.label_index
             .entry(label.clone())
-            .or_insert_with(HashSet::new)
+            .or_default()
             .insert(node_id);
 
         // Update catalog label count
@@ -990,7 +990,7 @@ impl GraphStore {
         // Update edge type index
         self.edge_type_index
             .entry(edge_type.clone())
-            .or_insert_with(HashSet::new)
+            .or_default()
             .insert(edge_id);
 
         // Update catalog triple stats
@@ -1069,7 +1069,7 @@ impl GraphStore {
         // Update edge type index
         self.edge_type_index
             .entry(edge_type.clone())
-            .or_insert_with(HashSet::new)
+            .or_default()
             .insert(edge_id);
 
         // Update catalog triple stats
@@ -1283,8 +1283,7 @@ impl GraphStore {
         };
 
         // Scan forward through entries with the matching key
-        for i in start..entries.len() {
-            let (nid, eid) = entries[i];
+        for &(nid, eid) in entries.iter().skip(start) {
             if nid != search_key {
                 break;
             }
@@ -1343,8 +1342,7 @@ impl GraphStore {
         };
 
         let mut result = Vec::new();
-        for i in start..entries.len() {
-            let (nid, eid) = entries[i];
+        for &(nid, eid) in entries.iter().skip(start) {
             if nid != search_key {
                 break;
             }
@@ -1665,7 +1663,7 @@ impl GraphStore {
         for label in &node.labels {
             self.label_index
                 .entry(label.clone())
-                .or_insert_with(HashSet::new)
+                .or_default()
                 .insert(node_id);
         }
 
@@ -1719,7 +1717,7 @@ impl GraphStore {
         // Update edge type index
         self.edge_type_index
             .entry(edge.edge_type.clone())
-            .or_insert_with(HashSet::new)
+            .or_default()
             .insert(edge_id);
 
         // Insert the edge

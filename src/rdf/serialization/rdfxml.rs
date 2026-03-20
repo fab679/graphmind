@@ -46,7 +46,7 @@ impl RdfXmlSerializerWrapper {
     /// Serialize Triples to RDF/XML string
     pub fn serialize(triples: &[Triple]) -> SerializeResult<String> {
         let mut output = Vec::new();
-        let mut formatter = RdfXmlFormatter::new(&mut output).map_err(|e| SerializeError::Io(e))?;
+        let mut formatter = RdfXmlFormatter::new(&mut output).map_err(SerializeError::Io)?;
 
         for triple in triples {
             let s_node;
@@ -139,7 +139,7 @@ fn convert_subject(s: rio_api::model::Subject) -> Result<RdfSubject, ParseError>
 }
 
 fn convert_predicate(p: rio_api::model::NamedNode) -> Result<RdfPredicate, ParseError> {
-    Ok(RdfPredicate::new(p.iri).map_err(|e| ParseError::Parse(e.to_string()))?)
+    RdfPredicate::new(p.iri).map_err(|e| ParseError::Parse(e.to_string()))
 }
 
 fn convert_object(o: rio_api::model::Term) -> Result<RdfObject, ParseError> {

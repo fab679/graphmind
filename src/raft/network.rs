@@ -3,6 +3,7 @@
 use crate::raft::{RaftError, RaftNodeId, RaftResult};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fmt;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, error, info};
@@ -86,10 +87,11 @@ impl NodeAddress {
     pub fn new(host: String, port: u16) -> Self {
         Self { host, port }
     }
+}
 
-    /// Convert to host:port string format
-    pub fn to_string(&self) -> String {
-        format!("{}:{}", self.host, self.port)
+impl fmt::Display for NodeAddress {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}:{}", self.host, self.port)
     }
 }
 

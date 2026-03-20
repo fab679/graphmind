@@ -114,6 +114,13 @@
 
 #![allow(missing_docs)]
 #![warn(clippy::all)]
+#![allow(
+    clippy::result_large_err,
+    clippy::type_complexity,
+    clippy::too_many_arguments,
+    clippy::new_without_default,
+    clippy::needless_range_loop
+)]
 
 pub mod auth;
 pub mod graph;

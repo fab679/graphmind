@@ -7,7 +7,6 @@
 /// - Filter pushdown
 /// - Index selection
 /// - Cardinality estimation
-
 #[allow(dead_code)]
 pub struct SparqlOptimizer;
 

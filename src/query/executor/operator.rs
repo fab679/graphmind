@@ -662,9 +662,7 @@ fn eval_exists_subquery(
 
             // Check properties
             if let Some(ref props) = path.start.properties {
-                let props_match = props
-                    .iter()
-                    .all(|(k, v)| node.properties.get(k).map_or(false, |pv| pv == v));
+                let props_match = props.iter().all(|(k, v)| node.properties.get(k) == Some(v));
                 if !props_match {
                     continue;
                 }
@@ -1660,7 +1658,7 @@ fn parse_iso_duration(s: &str) -> ExecutionResult<Value> {
     let mut nanos: i32 = 0;
     let _ = nanos; // suppress warning
 
-    let (date_part, time_part) = if let Some(idx) = rest.find(|c: char| c == 'T' || c == 't') {
+    let (date_part, time_part) = if let Some(idx) = rest.find(['T', 't']) {
         (&rest[..idx], &rest[idx + 1..])
     } else {
         (rest, "")
@@ -3756,7 +3754,7 @@ impl AggregateOperator {
         let mut batch_count = 0u64;
         while let Some(batch) = self.input.next_batch(store, batch_size)? {
             batch_count += 1;
-            if batch_count % 10 == 0 {
+            if batch_count.is_multiple_of(10) {
                 check_deadline()?;
             }
             for record in batch.records {
@@ -4372,7 +4370,7 @@ impl CartesianProductOperator {
         while let Some(record) = self.left.next(store)? {
             self.left_records.push(record);
             count += 1;
-            if count % 10000 == 0 {
+            if count.is_multiple_of(10000) {
                 check_deadline()?;
             }
         }
@@ -4517,7 +4515,7 @@ impl JoinOperator {
                     .push(record);
             }
             count += 1;
-            if count % 10000 == 0 {
+            if count.is_multiple_of(10000) {
                 check_deadline()?;
             }
         }
@@ -4527,7 +4525,7 @@ impl JoinOperator {
         while let Some(record) = self.right.next(store)? {
             self.right_records.push(record);
             count += 1;
-            if count % 10000 == 0 {
+            if count.is_multiple_of(10000) {
                 check_deadline()?;
             }
         }
@@ -4684,7 +4682,7 @@ impl LeftOuterJoinOperator {
         while let Some(record) = self.left.next(store)? {
             self.left_records.push(record);
             count += 1;
-            if count % 10000 == 0 {
+            if count.is_multiple_of(10000) {
                 check_deadline()?;
             }
         }
@@ -4696,7 +4694,7 @@ impl LeftOuterJoinOperator {
                 self.right_hash.entry(val.clone()).or_default().push(record);
             }
             count += 1;
-            if count % 10000 == 0 {
+            if count.is_multiple_of(10000) {
                 check_deadline()?;
             }
         }
@@ -4838,10 +4836,7 @@ impl PhysicalOperator for CreateNodeOperator {
         if !self.executed {
             for (labels, properties, variable) in &self.nodes_to_create {
                 // Use first label as primary, or empty string if none
-                let primary_label = labels
-                    .first()
-                    .map(|l| l.clone())
-                    .unwrap_or_else(|| Label::new(""));
+                let primary_label = labels.first().cloned().unwrap_or_else(|| Label::new(""));
 
                 let node_id = store.create_node(primary_label);
 
@@ -5476,7 +5471,7 @@ impl PhysicalOperator for ShowPropertyKeysOperator {
         if self.results.is_none() {
             let mut keys = std::collections::BTreeSet::new();
             let stats = store.compute_statistics();
-            for ((_, prop), _) in &stats.property_stats {
+            for (_, prop) in stats.property_stats.keys() {
                 keys.insert(prop.clone());
             }
             for edge_type in store.all_edge_types() {
@@ -6009,7 +6004,7 @@ impl AlgorithmOperator {
         let mut edge_type = None;
         let mut config = crate::algo::PageRankConfig::default();
 
-        if self.args.len() > 0 {
+        if !self.args.is_empty() {
             if let Expression::Literal(PropertyValue::String(s)) = &self.args[0] {
                 label = Some(s.clone());
             }
@@ -6147,7 +6142,7 @@ impl AlgorithmOperator {
         let mut label = None;
         let mut edge_type = None;
 
-        if self.args.len() > 0 {
+        if !self.args.is_empty() {
             if let Expression::Literal(PropertyValue::String(s)) = &self.args[0] {
                 label = Some(s.clone());
             }
@@ -6546,7 +6541,7 @@ impl AlgorithmOperator {
 
     fn execute_mst(&mut self, store: &GraphStore) -> ExecutionResult<()> {
         // Arguments: (weight_property?)
-        let weight_prop = if self.args.len() > 0 {
+        let weight_prop = if !self.args.is_empty() {
             match &self.args[0] {
                 Expression::Literal(PropertyValue::String(s)) => Some(s.clone()),
                 _ => None,
@@ -6770,7 +6765,7 @@ impl PhysicalOperator for SkipOperator {
                     self.skipped += 1;
                     if self.skipped >= self.skip {
                         // We may have extra records in this batch — collect remaining
-                        let _remaining = vec![record];
+                        let _remaining = [record];
                         // Continue pulling from current batch not possible since we consumed it,
                         // but we've finished skipping
                         break;
@@ -7219,7 +7214,7 @@ impl PhysicalOperator for MergeOperator {
                 if let Some(required_props) = props {
                     let props_match = required_props
                         .iter()
-                        .all(|(k, v)| node.properties.get(k).map_or(false, |pv| pv == v));
+                        .all(|(k, v)| node.properties.get(k) == Some(v));
                     if !props_match {
                         continue;
                     }
@@ -8006,11 +8001,11 @@ impl PhysicalOperator for WithBarrierOperator {
         if !self.sort_items.is_empty() {
             details.push_str(", ORDER BY");
         }
-        if self.skip.is_some() {
-            details.push_str(&format!(", SKIP {}", self.skip.unwrap()));
+        if let Some(s) = self.skip {
+            details.push_str(&format!(", SKIP {}", s));
         }
-        if self.limit.is_some() {
-            details.push_str(&format!(", LIMIT {}", self.limit.unwrap()));
+        if let Some(l) = self.limit {
+            details.push_str(&format!(", LIMIT {}", l));
         }
         OperatorDescription {
             name: "WithBarrier".to_string(),

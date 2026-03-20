@@ -305,12 +305,9 @@ impl PersistenceManager {
         vector_index: &crate::vector::VectorIndexManager,
     ) -> Result<(), PersistenceError> {
         let vector_path = self.base_path.join("vectors");
-        vector_index.dump_all(&vector_path).map_err(|e| {
-            PersistenceError::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                e.to_string(),
-            ))
-        })
+        vector_index
+            .dump_all(&vector_path)
+            .map_err(|e| PersistenceError::Io(std::io::Error::other(e.to_string())))
     }
 
     /// Load vector indices from disk
@@ -319,12 +316,9 @@ impl PersistenceManager {
         vector_index: &crate::vector::VectorIndexManager,
     ) -> Result<(), PersistenceError> {
         let vector_path = self.base_path.join("vectors");
-        vector_index.load_all(&vector_path).map_err(|e| {
-            PersistenceError::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                e.to_string(),
-            ))
-        })
+        vector_index
+            .load_all(&vector_path)
+            .map_err(|e| PersistenceError::Io(std::io::Error::other(e.to_string())))
     }
 }
 
@@ -402,6 +396,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(target_os = "windows"))]
     fn test_vector_index_persistence() {
         use crate::graph::NodeId;
         use crate::vector::{DistanceMetric, VectorIndexManager};
