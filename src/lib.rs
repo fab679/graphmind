@@ -119,7 +119,8 @@
     clippy::type_complexity,
     clippy::too_many_arguments,
     clippy::new_without_default,
-    clippy::needless_range_loop
+    clippy::needless_range_loop,
+    clippy::manual_is_multiple_of
 )]
 
 pub mod auth;

@@ -19,6 +19,7 @@ COPY benches ./benches
 COPY examples ./examples
 
 # Build the application
+ENV CXXFLAGS="-include cstdint"
 RUN cargo build --release
 
 # Runtime stage

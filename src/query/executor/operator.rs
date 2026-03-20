@@ -3754,7 +3754,7 @@ impl AggregateOperator {
         let mut batch_count = 0u64;
         while let Some(batch) = self.input.next_batch(store, batch_size)? {
             batch_count += 1;
-            if batch_count.is_multiple_of(10) {
+            if batch_count % 10 == 0 {
                 check_deadline()?;
             }
             for record in batch.records {
@@ -4370,7 +4370,7 @@ impl CartesianProductOperator {
         while let Some(record) = self.left.next(store)? {
             self.left_records.push(record);
             count += 1;
-            if count.is_multiple_of(10000) {
+            if count % 10000 == 0 {
                 check_deadline()?;
             }
         }
@@ -4515,7 +4515,7 @@ impl JoinOperator {
                     .push(record);
             }
             count += 1;
-            if count.is_multiple_of(10000) {
+            if count % 10000 == 0 {
                 check_deadline()?;
             }
         }
@@ -4525,7 +4525,7 @@ impl JoinOperator {
         while let Some(record) = self.right.next(store)? {
             self.right_records.push(record);
             count += 1;
-            if count.is_multiple_of(10000) {
+            if count % 10000 == 0 {
                 check_deadline()?;
             }
         }
@@ -4682,7 +4682,7 @@ impl LeftOuterJoinOperator {
         while let Some(record) = self.left.next(store)? {
             self.left_records.push(record);
             count += 1;
-            if count.is_multiple_of(10000) {
+            if count % 10000 == 0 {
                 check_deadline()?;
             }
         }
@@ -4694,7 +4694,7 @@ impl LeftOuterJoinOperator {
                 self.right_hash.entry(val.clone()).or_default().push(record);
             }
             count += 1;
-            if count.is_multiple_of(10000) {
+            if count % 10000 == 0 {
                 check_deadline()?;
             }
         }
