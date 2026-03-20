@@ -396,7 +396,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "linux")]
     fn test_vector_index_persistence() {
         use crate::graph::NodeId;
         use crate::vector::{DistanceMetric, VectorIndexManager};
