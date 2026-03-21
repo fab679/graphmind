@@ -102,6 +102,10 @@ pub type ParseResult<T> = Result<T, ParseError>;
 
 /// Parse an integer literal supporting decimal, hex (0x...), and octal (0o...) formats
 fn parse_integer_literal(s: &str) -> i64 {
+    parse_integer_literal_checked(s).unwrap_or(0)
+}
+
+fn parse_integer_literal_checked(s: &str) -> Result<i64, String> {
     let s = s.trim();
     let (negative, digits) = if let Some(rest) = s.strip_prefix('-') {
         (true, rest.trim())
@@ -112,20 +116,18 @@ fn parse_integer_literal(s: &str) -> i64 {
         .strip_prefix("0x")
         .or_else(|| digits.strip_prefix("0X"))
     {
-        i64::from_str_radix(hex, 16).unwrap_or(0)
+        i64::from_str_radix(hex, 16).map_err(|e| format!("Integer overflow: {}", e))?
     } else if let Some(oct) = digits
         .strip_prefix("0o")
         .or_else(|| digits.strip_prefix("0O"))
     {
-        i64::from_str_radix(oct, 8).unwrap_or(0)
+        i64::from_str_radix(oct, 8).map_err(|e| format!("Integer overflow: {}", e))?
     } else {
-        digits.parse::<i64>().unwrap_or(0)
+        digits
+            .parse::<i64>()
+            .map_err(|e| format!("Integer overflow: {}", e))?
     };
-    if negative {
-        -value
-    } else {
-        value
-    }
+    Ok(if negative { -value } else { value })
 }
 
 /// Parse a Cypher query string into an AST
@@ -1499,7 +1501,8 @@ fn parse_value(pair: pest::iterators::Pair<Rule>) -> ParseResult<PropertyValue> 
                 return Ok(PropertyValue::Boolean(val));
             }
             Rule::integer => {
-                let val = parse_integer_literal(inner.as_str());
+                let val = parse_integer_literal_checked(inner.as_str())
+                    .map_err(|e| ParseError::SemanticError(e))?;
                 return Ok(PropertyValue::Integer(val));
             }
             Rule::float => {

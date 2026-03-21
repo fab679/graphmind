@@ -67,12 +67,11 @@ use crate::query::executor::{
         CreateEdgeOperator, CreateIndexOperator, CreateNodeOperator, CreateNodesAndEdgesOperator,
         CreateVectorIndexOperator, DeleteOperator, DropIndexOperator, ExpandOperator,
         FilterOperator, ForeachOperator, IndexScanOperator, JoinOperator, LeftOuterJoinOperator,
-        LimitOperator, MergeOperator, MockProcedureOperator, NodeScanOperator, ProjectOperator,
-        RemovePropertyOperator, SchemaVisualizationOperator, SetPropertyOperator,
-        ShortestPathOperator, ShowConstraintsOperator, ShowIndexesOperator, ShowLabelsOperator,
-        ShowPropertyKeysOperator, ShowRelationshipTypesOperator, SingleRowOperator, SkipOperator,
-        SortOperator, UnwindOperator, VarLengthExpandOperator, VectorSearchOperator,
-        WithBarrierOperator,
+        LimitOperator, MergeOperator, NodeScanOperator, ProjectOperator, RemovePropertyOperator,
+        SchemaVisualizationOperator, SetPropertyOperator, ShortestPathOperator,
+        ShowConstraintsOperator, ShowIndexesOperator, ShowLabelsOperator, ShowPropertyKeysOperator,
+        ShowRelationshipTypesOperator, SingleRowOperator, SkipOperator, SortOperator,
+        UnwindOperator, VarLengthExpandOperator, VectorSearchOperator, WithBarrierOperator,
     },
     ExecutionError,
     ExecutionResult,
@@ -301,6 +300,69 @@ impl QueryPlanner {
                         "Column name '{}' appears more than once in RETURN",
                         alias
                     )));
+                }
+            }
+        }
+
+        // Validate CREATE patterns
+        if let Some(cc) = &query.create_clause {
+            for path in &cc.pattern.paths {
+                for seg in &path.segments {
+                    // CREATE relationship must have exactly one type
+                    if seg.edge.types.is_empty() {
+                        return Err(ExecutionError::PlanningError(
+                            "Relationships must have exactly one type when created".to_string(),
+                        ));
+                    }
+                    if seg.edge.types.len() > 1 {
+                        return Err(ExecutionError::PlanningError(
+                            "A single relationship type must be specified for CREATE".to_string(),
+                        ));
+                    }
+                    // CREATE relationship cannot have variable-length pattern
+                    if seg.edge.length.is_some() {
+                        return Err(ExecutionError::PlanningError(
+                            "Variable length relationships cannot be used in CREATE".to_string(),
+                        ));
+                    }
+                }
+            }
+        }
+        for cc in &query.create_clauses {
+            for path in &cc.pattern.paths {
+                for seg in &path.segments {
+                    if seg.edge.types.is_empty() {
+                        return Err(ExecutionError::PlanningError(
+                            "Relationships must have exactly one type when created".to_string(),
+                        ));
+                    }
+                    if seg.edge.types.len() > 1 {
+                        return Err(ExecutionError::PlanningError(
+                            "A single relationship type must be specified for CREATE".to_string(),
+                        ));
+                    }
+                    if seg.edge.length.is_some() {
+                        return Err(ExecutionError::PlanningError(
+                            "Variable length relationships cannot be used in CREATE".to_string(),
+                        ));
+                    }
+                }
+            }
+        }
+
+        // Validate MATCH: duplicate edge variables in same pattern
+        for mc in &query.match_clauses {
+            let mut edge_vars = HashSet::new();
+            for path in &mc.pattern.paths {
+                for seg in &path.segments {
+                    if let Some(v) = &seg.edge.variable {
+                        if !edge_vars.insert(v.clone()) {
+                            return Err(ExecutionError::PlanningError(format!(
+                                "Cannot use the same relationship variable '{}' for multiple patterns",
+                                v
+                            )));
+                        }
+                    }
                 }
             }
         }
