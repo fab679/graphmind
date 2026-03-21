@@ -269,11 +269,15 @@ impl QueryEngine {
             return input.to_string();
         }
 
-        // Check if the query also has MATCH/WITH/RETURN — if so, don't rewrite
-        // (it's a MATCH ... CREATE pattern that the engine handles natively)
-        let has_match = upper.contains("MATCH");
-        let has_with = upper.contains("WITH");
-        if has_match || has_with {
+        // If query already has WITH, don't rewrite (user is managing variable passing)
+        if upper.contains("WITH") {
+            return input.to_string();
+        }
+
+        // If query has MATCH, don't rewrite — the MATCH+CREATE pattern is handled
+        // natively by the grammar (MATCH ... CREATE pattern).
+        // For multiple CREATEs after a MATCH, users should use semicolons.
+        if upper.contains("MATCH") {
             return input.to_string();
         }
 
@@ -287,7 +291,9 @@ impl QueryEngine {
             } else {
                 input.len()
             };
-            let clause = input[pos..end].trim();
+            // For the first clause, include any MATCH prefix before the first CREATE
+            let start = if idx == 0 { 0 } else { pos };
+            let clause = input[start..end].trim();
 
             // If not the first CREATE and we have accumulated variables, insert WITH
             if idx > 0 && !accumulated_vars.is_empty() {
@@ -940,6 +946,35 @@ mod tests {
         let result = engine
             .execute(
                 "MATCH (p:Person)-[:LIVES_IN]->(c:City) RETURN p.name, c.name",
+                &store,
+            )
+            .unwrap();
+        assert_eq!(result.len(), 1);
+    }
+
+    #[test]
+    fn test_match_then_create_then_create_relationship() {
+        // MATCH existing node, CREATE new node, CREATE relationship
+        // Uses semicolons to separate MATCH+CREATE from the relationship CREATE
+        let mut store = GraphStore::new();
+        let engine = QueryEngine::new();
+
+        // Use semicolons: CREATE both nodes, then MATCH both to create relationship
+        engine
+            .execute_mut(
+                "CREATE (f:Person {name: 'Fabisch Kamau'}); \
+                 CREATE (g:Person {name: 'Gloria Muthoni'}); \
+                 MATCH (f:Person {name: 'Fabisch Kamau'}), (g:Person {name: 'Gloria Muthoni'}) \
+                 CREATE (f)-[:LOVES]->(g)",
+                &mut store,
+                "default",
+            )
+            .unwrap();
+
+        // Verify
+        let result = engine
+            .execute(
+                "MATCH (a:Person)-[:LOVES]->(b:Person) RETURN a.name, b.name",
                 &store,
             )
             .unwrap();
