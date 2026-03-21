@@ -442,6 +442,14 @@ impl QueryPlanner {
                 let mut operator: OperatorBox = Box::new(SingleRowOperator::new());
 
                 // Handle standalone UNWIND before RETURN: UNWIND [1,2] AS x RETURN x
+                // Handle all UNWIND clauses (additional first, then primary)
+                for unwind in &query.additional_unwinds {
+                    operator = Box::new(UnwindOperator::new(
+                        operator,
+                        unwind.expression.clone(),
+                        unwind.variable.clone(),
+                    ));
+                }
                 if let Some(unwind) = &query.unwind_clause {
                     operator = Box::new(UnwindOperator::new(
                         operator,
@@ -3234,6 +3242,7 @@ mod tests {
             params: std::collections::HashMap::new(),
             foreach_clause: None,
             unwind_clause: None,
+            additional_unwinds: Vec::new(),
             merge_clause: None,
             union_queries: vec![],
             explain: false,

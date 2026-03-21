@@ -754,6 +754,10 @@ fn parse_unwind_statement(pair: pest::iterators::Pair<Rule>, query: &mut Query) 
     for inner in pair.into_inner() {
         match inner.as_rule() {
             Rule::unwind_clause => {
+                // If there's already an UNWIND, push it to additional_unwinds
+                if let Some(prev) = query.unwind_clause.take() {
+                    query.additional_unwinds.push(prev);
+                }
                 query.unwind_clause = Some(parse_unwind_clause(inner)?);
             }
             Rule::with_clause => {

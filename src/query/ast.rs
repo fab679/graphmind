@@ -115,6 +115,8 @@ pub struct Query {
     pub foreach_clause: Option<ForeachClause>,
     /// UNWIND clause (optional)
     pub unwind_clause: Option<UnwindClause>,
+    /// Additional UNWIND clauses (for consecutive UNWINDs)
+    pub additional_unwinds: Vec<UnwindClause>,
     /// MERGE clause (optional)
     pub merge_clause: Option<MergeClause>,
     /// UNION queries (chained via UNION/UNION ALL)
@@ -628,6 +630,7 @@ impl Query {
             params: HashMap::new(),
             foreach_clause: None,
             unwind_clause: None,
+            additional_unwinds: Vec::new(),
             merge_clause: None,
             union_queries: Vec::new(),
             explain: false,

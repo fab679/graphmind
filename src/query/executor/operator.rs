@@ -3034,6 +3034,7 @@ impl FilterOperator {
             (PropertyValue::String(l), PropertyValue::String(r)) => {
                 Ok(PropertyValue::Boolean(l.starts_with(r.as_str())))
             }
+            (PropertyValue::Null, _) | (_, PropertyValue::Null) => Ok(PropertyValue::Null),
             _ => Err(ExecutionError::TypeError(
                 "STARTS WITH requires string operands".to_string(),
             )),
@@ -3049,6 +3050,7 @@ impl FilterOperator {
             (PropertyValue::String(l), PropertyValue::String(r)) => {
                 Ok(PropertyValue::Boolean(l.ends_with(r.as_str())))
             }
+            (PropertyValue::Null, _) | (_, PropertyValue::Null) => Ok(PropertyValue::Null),
             _ => Err(ExecutionError::TypeError(
                 "ENDS WITH requires string operands".to_string(),
             )),
@@ -3064,6 +3066,7 @@ impl FilterOperator {
             (PropertyValue::String(l), PropertyValue::String(r)) => {
                 Ok(PropertyValue::Boolean(l.contains(r.as_str())))
             }
+            (PropertyValue::Null, _) | (_, PropertyValue::Null) => Ok(PropertyValue::Null),
             _ => Err(ExecutionError::TypeError(
                 "CONTAINS requires string operands".to_string(),
             )),
