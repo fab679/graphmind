@@ -766,19 +766,65 @@ export const ForceGraph = forwardRef<ForceGraphHandle, ForceGraphProps>(function
           ctx.globalAlpha = nodeAlpha;
         }
 
-        // Selection ring (primary selected or multi-selected)
+        // Selection ring with rotating animation
         const isMultiSelected = multiSelectedIds.size > 1 && multiSelectedIds.has(node.id);
         if (isSelected || isMultiSelected) {
           ctx.globalAlpha = 1;
-          ctx.beginPath();
-          ctx.arc(node.x, node.y, node.radius + SELECTED_RING_WIDTH, 0, Math.PI * 2);
-          ctx.fillStyle = isSelected
-            ? "rgba(96, 165, 250, 0.35)"
-            : "rgba(96, 165, 250, 0.2)";
-          ctx.fill();
-          ctx.strokeStyle = "#60a5fa";
-          ctx.lineWidth = isSelected ? 2 : 1.5;
-          ctx.stroke();
+
+          if (isSelected) {
+            const now = performance.now();
+            const angle = (now * 0.003) % (Math.PI * 2); // ~2 sec full rotation
+            const ringRadius = node.radius + SELECTED_RING_WIDTH + 2;
+
+            // Soft glow background
+            ctx.beginPath();
+            ctx.arc(node.x, node.y, ringRadius + 1, 0, Math.PI * 2);
+            ctx.fillStyle = "rgba(96, 165, 250, 0.12)";
+            ctx.fill();
+
+            // Rotating dashed arc (primary arc ~240°)
+            ctx.save();
+            ctx.translate(node.x, node.y);
+            ctx.rotate(angle);
+            ctx.beginPath();
+            ctx.arc(0, 0, ringRadius, 0, Math.PI * 1.33);
+            ctx.strokeStyle = "#60a5fa";
+            ctx.lineWidth = 2.5;
+            ctx.lineCap = "round";
+            ctx.stroke();
+
+            // Secondary arc (opposite side, ~120°, slightly dimmer)
+            ctx.beginPath();
+            ctx.arc(0, 0, ringRadius, Math.PI * 1.5, Math.PI * 2.17);
+            ctx.strokeStyle = "rgba(96, 165, 250, 0.5)";
+            ctx.lineWidth = 2;
+            ctx.stroke();
+
+            // Small dot markers at arc ends
+            const dotAngle1 = 0;
+            const dotAngle2 = Math.PI * 1.33;
+            for (const da of [dotAngle1, dotAngle2]) {
+              ctx.beginPath();
+              ctx.arc(
+                Math.cos(da) * ringRadius,
+                Math.sin(da) * ringRadius,
+                2, 0, Math.PI * 2,
+              );
+              ctx.fillStyle = "#60a5fa";
+              ctx.fill();
+            }
+
+            ctx.restore();
+          } else {
+            // Static ring for multi-selected
+            ctx.beginPath();
+            ctx.arc(node.x, node.y, node.radius + SELECTED_RING_WIDTH, 0, Math.PI * 2);
+            ctx.fillStyle = "rgba(96, 165, 250, 0.2)";
+            ctx.fill();
+            ctx.strokeStyle = "#60a5fa";
+            ctx.lineWidth = 1.5;
+            ctx.stroke();
+          }
         }
 
         // Node circle
@@ -918,9 +964,20 @@ export const ForceGraph = forwardRef<ForceGraphHandle, ForceGraphProps>(function
 
   // ============================================================
   // REDRAW on selection/state changes (no simulation restart!)
+  // Animate pulse when a node is selected
   // ============================================================
   useEffect(() => {
     drawRef.current();
+
+    // Run continuous animation loop for selection pulse
+    if (!selectedNode) return;
+    let animFrame = 0;
+    const animate = () => {
+      drawRef.current();
+      animFrame = requestAnimationFrame(animate);
+    };
+    animFrame = requestAnimationFrame(animate);
+    return () => cancelAnimationFrame(animFrame);
   }, [selectedNode, selectedEdge, selectedNodes, highlightMode, highlightedPath]);
 
   // ============================================================
