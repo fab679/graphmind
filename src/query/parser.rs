@@ -1386,6 +1386,38 @@ fn parse_properties(
                             Rule::value => {
                                 value = parse_value(part)?;
                             }
+                            Rule::expression => {
+                                // Expression in property — try to evaluate as literal
+                                let expr = parse_expression(part)?;
+                                match &expr {
+                                    Expression::Literal(pv) => {
+                                        value = pv.clone();
+                                    }
+                                    Expression::Unary {
+                                        op: UnaryOp::Minus,
+                                        expr: operand,
+                                    } => {
+                                        if let Expression::Literal(PropertyValue::Integer(i)) =
+                                            operand.as_ref()
+                                        {
+                                            value = PropertyValue::Integer(-i);
+                                        } else if let Expression::Literal(PropertyValue::Float(f)) =
+                                            operand.as_ref()
+                                        {
+                                            value = PropertyValue::Float(-f);
+                                        } else {
+                                            // Non-literal expression — store as string for now
+                                            value = PropertyValue::Null;
+                                        }
+                                    }
+                                    _ => {
+                                        // Non-literal expression (variable ref, function call, etc.)
+                                        // Store as Null — the planner/executor will handle this via
+                                        // expression evaluation during CREATE/MERGE
+                                        value = PropertyValue::Null;
+                                    }
+                                }
+                            }
                             _ => {}
                         }
                     }
@@ -1397,6 +1429,24 @@ fn parse_properties(
     }
 
     Ok(props)
+}
+
+/// Convert an Expression to a PropertyValue (for literal values in lists/maps/properties).
+/// Non-literal expressions are stored as Null — the executor handles them dynamically.
+fn expression_to_property_value(expr: &Expression) -> PropertyValue {
+    match expr {
+        Expression::Literal(pv) => pv.clone(),
+        Expression::Unary {
+            op: UnaryOp::Minus,
+            expr: inner,
+        } => match inner.as_ref() {
+            Expression::Literal(PropertyValue::Integer(i)) => PropertyValue::Integer(-i),
+            Expression::Literal(PropertyValue::Float(f)) => PropertyValue::Float(-f),
+            _ => PropertyValue::Null,
+        },
+        Expression::Literal(PropertyValue::Array(items)) => PropertyValue::Array(items.clone()),
+        _ => PropertyValue::Null, // Variable refs, function calls, etc. — handled at runtime
+    }
 }
 
 fn parse_value(pair: pest::iterators::Pair<Rule>) -> ParseResult<PropertyValue> {
@@ -1427,8 +1477,14 @@ fn parse_value(pair: pest::iterators::Pair<Rule>) -> ParseResult<PropertyValue> 
                 let mut float_vals = Vec::new();
 
                 for item in inner.into_inner() {
-                    if item.as_rule() == Rule::value {
-                        let val = parse_value(item)?;
+                    let val = if item.as_rule() == Rule::value {
+                        parse_value(item)?
+                    } else if item.as_rule() == Rule::expression {
+                        expression_to_property_value(&parse_expression(item)?)
+                    } else {
+                        continue;
+                    };
+                    {
                         if let PropertyValue::Float(f) = val {
                             float_vals.push(f as f32);
                         } else if let PropertyValue::Integer(i) = val {
@@ -1460,6 +1516,9 @@ fn parse_value(pair: pest::iterators::Pair<Rule>) -> ParseResult<PropertyValue> 
                                     key = s[1..s.len() - 1].to_string();
                                 }
                                 Rule::value => val = parse_value(part)?,
+                                Rule::expression => {
+                                    val = expression_to_property_value(&parse_expression(part)?)
+                                }
                                 _ => {}
                             }
                         }

@@ -1819,6 +1819,9 @@ fn eval_function(name: &str, args: &[Value], store: Option<&GraphStore>) -> Exec
 fn extract_string(val: &Value) -> ExecutionResult<String> {
     match val {
         Value::Property(PropertyValue::String(s)) => Ok(s.clone()),
+        Value::Property(PropertyValue::Integer(i)) => Ok(i.to_string()),
+        Value::Property(PropertyValue::Float(f)) => Ok(f.to_string()),
+        Value::Property(PropertyValue::Boolean(b)) => Ok(b.to_string()),
         _ => Err(ExecutionError::TypeError(
             "Expected string argument".to_string(),
         )),
@@ -3095,6 +3098,20 @@ impl PhysicalOperator for FilterOperator {
         }
     }
 
+    fn next_mut(
+        &mut self,
+        store: &mut GraphStore,
+        tenant_id: &str,
+    ) -> ExecutionResult<Option<Record>> {
+        while let Some(record) = self.input.next_mut(store, tenant_id)? {
+            let store_ref: &GraphStore = store;
+            if self.evaluate_predicate(&record, store_ref)? {
+                return Ok(Some(record));
+            }
+        }
+        Ok(None)
+    }
+
     fn reset(&mut self) {
         self.input.reset();
     }
@@ -3614,6 +3631,24 @@ impl PhysicalOperator for ProjectOperator {
         }
     }
 
+    fn next_mut(
+        &mut self,
+        store: &mut GraphStore,
+        tenant_id: &str,
+    ) -> ExecutionResult<Option<Record>> {
+        if let Some(record) = self.input.next_mut(store, tenant_id)? {
+            let mut new_record = Record::new();
+            let store_ref: &GraphStore = store;
+            for (expr, alias) in &self.projections {
+                let value = self.evaluate_expression(expr, &record, store_ref)?;
+                new_record.bind(alias.clone(), value);
+            }
+            Ok(Some(new_record))
+        } else {
+            Ok(None)
+        }
+    }
+
     fn reset(&mut self) {
         self.input.reset();
     }
@@ -4104,6 +4139,22 @@ impl PhysicalOperator for LimitOperator {
             }
             self.count += batch.records.len();
             Ok(Some(batch))
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn next_mut(
+        &mut self,
+        store: &mut GraphStore,
+        tenant_id: &str,
+    ) -> ExecutionResult<Option<Record>> {
+        if self.count >= self.limit {
+            return Ok(None);
+        }
+        if let Some(record) = self.input.next_mut(store, tenant_id)? {
+            self.count += 1;
+            Ok(Some(record))
         } else {
             Ok(None)
         }
@@ -7041,6 +7092,21 @@ impl PhysicalOperator for SkipOperator {
             }
         }
         self.input.next_batch(store, batch_size)
+    }
+
+    fn next_mut(
+        &mut self,
+        store: &mut GraphStore,
+        tenant_id: &str,
+    ) -> ExecutionResult<Option<Record>> {
+        while self.skipped < self.skip {
+            if self.input.next_mut(store, tenant_id)?.is_some() {
+                self.skipped += 1;
+            } else {
+                return Ok(None);
+            }
+        }
+        self.input.next_mut(store, tenant_id)
     }
 
     fn reset(&mut self) {

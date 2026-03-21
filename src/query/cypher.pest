@@ -106,7 +106,7 @@ range_pattern = { integer? ~ ".." ~ integer? }
 // Properties: {name: "Alice", age: 30}
 properties = { "{" ~ property_list? ~ "}" }
 property_list = { property ~ ("," ~ property)* }
-property = { property_key ~ ":" ~ value }
+property = { property_key ~ ":" ~ expression }
 property_key = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
 
 // RETURN items
@@ -205,9 +205,9 @@ boolean = { ^"TRUE" | ^"FALSE" }
 integer = @{ "-"? ~ ("0x" ~ ASCII_HEX_DIGIT+ | "0o" ~ ('0'..'7')+ | ASCII_DIGIT+) }
 float = @{ "-"? ~ (ASCII_DIGIT+ ~ "." ~ !("." | ASCII_ALPHA) ~ ASCII_DIGIT* | "." ~ ASCII_DIGIT+) ~ (^"e" ~ ("-" | "+")? ~ ASCII_DIGIT+)? | "-"? ~ ASCII_DIGIT+ ~ ^"e" ~ ("-" | "+")? ~ ASCII_DIGIT+ }
 string = @{ "\"" ~ ("\\\\" | "\\\"" | "\\'" | "\\n" | "\\t" | "\\r" | "\\/" | !"\"" ~ ANY)* ~ "\"" | "'" ~ ("\\\\" | "\\'" | "\\\"" | "\\n" | "\\t" | "\\r" | "\\/" | !"'" ~ ANY)* ~ "'" }
-list = { "[" ~ (value ~ ("," ~ value)*)? ~ "]" }
+list = { "[" ~ (expression ~ ("," ~ expression)*)? ~ "]" }
 map = { "{" ~ (map_entry ~ ("," ~ map_entry)*)? ~ "}" }
-map_entry = { (string | property_key) ~ ":" ~ value }
+map_entry = { (string | property_key) ~ ":" ~ expression }
 
 // Variable names
 variable = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
