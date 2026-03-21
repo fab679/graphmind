@@ -367,6 +367,115 @@ impl QueryPlanner {
             }
         }
 
+        // Validate CREATE: re-binding already-bound node variables
+        if !query.match_clauses.is_empty() {
+            let mut match_node_vars = HashSet::new();
+            let mut match_edge_vars = HashSet::new();
+            for mc in &query.match_clauses {
+                for path in &mc.pattern.paths {
+                    if let Some(v) = &path.start.variable {
+                        match_node_vars.insert(v.clone());
+                    }
+                    for seg in &path.segments {
+                        if let Some(v) = &seg.node.variable {
+                            match_node_vars.insert(v.clone());
+                        }
+                        if let Some(v) = &seg.edge.variable {
+                            match_edge_vars.insert(v.clone());
+                        }
+                    }
+                }
+            }
+
+            // Check CREATE patterns for re-bound MATCH variables
+            let check_create = |cc: &crate::query::ast::CreateClause| -> ExecutionResult<()> {
+                for path in &cc.pattern.paths {
+                    if let Some(v) = &path.start.variable {
+                        if match_node_vars.contains(v)
+                            && (!path.start.labels.is_empty() || path.start.properties.is_some())
+                        {
+                            return Err(ExecutionError::PlanningError(format!(
+                                "Variable '{}' already declared in MATCH",
+                                v
+                            )));
+                        }
+                    }
+                    for seg in &path.segments {
+                        if let Some(v) = &seg.edge.variable {
+                            if match_edge_vars.contains(v) {
+                                return Err(ExecutionError::PlanningError(format!(
+                                    "Variable '{}' already declared as a relationship",
+                                    v
+                                )));
+                            }
+                        }
+                    }
+                }
+                Ok(())
+            };
+
+            if let Some(cc) = &query.create_clause {
+                check_create(cc)?;
+            }
+            for cc in &query.create_clauses {
+                check_create(cc)?;
+            }
+        }
+
+        // Validate CREATE: re-binding within same CREATE pattern
+        let validate_create_rebind = |cc: &crate::query::ast::CreateClause| -> ExecutionResult<()> {
+            let mut seen_vars: HashMap<String, (Vec<Label>, bool)> = HashMap::new(); // var -> (labels, has_properties)
+            for path in &cc.pattern.paths {
+                if let Some(v) = &path.start.variable {
+                    let entry = seen_vars.entry(v.clone()).or_insert((Vec::new(), false));
+                    if !path.start.labels.is_empty() {
+                        if !entry.0.is_empty() && entry.0 != path.start.labels {
+                            return Err(ExecutionError::PlanningError(format!(
+                                "Can't create node '{}' with labels or properties here — already declared in this CREATE", v
+                            )));
+                        }
+                        entry.0 = path.start.labels.clone();
+                    }
+                }
+            }
+            Ok(())
+        };
+        if let Some(cc) = &query.create_clause {
+            validate_create_rebind(cc)?;
+        }
+        for cc in &query.create_clauses {
+            validate_create_rebind(cc)?;
+        }
+
+        // Validate MERGE: relationship constraints
+        if let Some(mc) = &query.merge_clause {
+            for path in &mc.pattern.paths {
+                for seg in &path.segments {
+                    if seg.edge.types.is_empty() {
+                        return Err(ExecutionError::PlanningError(
+                            "Relationships must have exactly one type when used in MERGE"
+                                .to_string(),
+                        ));
+                    }
+                    if seg.edge.types.len() > 1 {
+                        return Err(ExecutionError::PlanningError(
+                            "A single relationship type must be specified for MERGE".to_string(),
+                        ));
+                    }
+                    if seg.edge.length.is_some() {
+                        return Err(ExecutionError::PlanningError(
+                            "Variable length relationships cannot be used in MERGE".to_string(),
+                        ));
+                    }
+                    if matches!(seg.edge.direction, Direction::Both) {
+                        return Err(ExecutionError::PlanningError(
+                            "MERGE requires directed relationships".to_string(),
+                        ));
+                    }
+                }
+            }
+        }
+
         // Handle SHOW INDEXES
         if query.show_indexes {
             return Ok(ExecutionPlan {
