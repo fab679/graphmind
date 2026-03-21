@@ -32,6 +32,7 @@ export function QueryTab() {
 
   const nodes = useGraphStore((s) => s.nodes);
   const selectedNode = useGraphStore((s) => s.selectedNode);
+  const selectedEdge = useGraphStore((s) => s.selectedEdge);
 
   const [editorHeight, setEditorHeight] = useState(200);
   const [showHistory, setShowHistory] = useState(false);
@@ -248,11 +249,14 @@ export function QueryTab() {
             </div>
           )}
 
-          {/* Floating property inspector when node selected */}
-          {selectedNode && hasGraphResult && !isExecuting && (
+          {/* Floating property inspector when node or edge selected */}
+          {(selectedNode || selectedEdge) && hasGraphResult && !isExecuting && (
             <div className="absolute right-2 top-2 z-[5] w-72 max-h-[calc(100%-16px)] overflow-auto rounded-lg border bg-card shadow-lg">
               <button
-                onClick={() => useGraphStore.getState().selectNode(null)}
+                onClick={() => {
+                  useGraphStore.getState().selectNode(null);
+                  useGraphStore.getState().selectEdge(null);
+                }}
                 className="absolute right-2 top-2 text-muted-foreground hover:text-foreground z-10"
               >
                 <X className="h-3.5 w-3.5" />

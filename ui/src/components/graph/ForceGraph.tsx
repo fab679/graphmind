@@ -457,11 +457,13 @@ export const ForceGraph = forwardRef<ForceGraphHandle, ForceGraphProps>(function
   const selectedEdge = useGraphStore((s) => s.selectedEdge);
   const selectNode = useGraphStore((s) => s.selectNode);
   const selectEdge = useGraphStore((s) => s.selectEdge);
+  const selectedNodesFromStore = useGraphStore((s) => s.selectedNodes);
 
   const highlightMode = useGraphSettingsStore((s) => s.highlightMode);
-  const labelColors = useGraphSettingsStore((s) => s.labelColors);
-  const edgeColors = useGraphSettingsStore((s) => s.edgeColors);
-  const labelIcons = useGraphSettingsStore((s) => s.labelIcons);
+  // Subscribe to trigger re-renders when these change (used in draw via getState)
+  useGraphSettingsStore((s) => s.labelColors);
+  useGraphSettingsStore((s) => s.edgeColors);
+  useGraphSettingsStore((s) => s.labelIcons);
 
   const nodes = propNodes ?? storeNodes;
   const edges = propEdges ?? storeEdges;
@@ -481,7 +483,17 @@ export const ForceGraph = forwardRef<ForceGraphHandle, ForceGraphProps>(function
   const highlightModeRef = useRef(highlightMode);
   const layoutRef = useRef<LayoutType>("force");
   const searchQueryRef = useRef("");
-  const prevNodesLenRef = useRef(0);
+
+  // Fix #3: Cache getBoundingClientRect — store in a ref, update on resize
+  const canvasRectRef = useRef<DOMRect | null>(null);
+
+  // Fix #1: Memoize search matches — store in refs, compute in useEffect
+  const searchMatchNodesRef = useRef<Set<string> | null>(null);
+  const searchMatchEdgesRef = useRef<Set<string> | null>(null);
+
+  // Fix #2: Memoize connected nodes — store in refs, compute in useEffect
+  const connectedNodeIdsRef = useRef<Set<string> | null>(null);
+  const connectedEdgeIdsRef = useRef<Set<string> | null>(null);
 
   // Context menu state
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
@@ -496,24 +508,95 @@ export const ForceGraph = forwardRef<ForceGraphHandle, ForceGraphProps>(function
   const pathStartNodeRef = useRef<string | null>(null);
   const highlightedPathRef = useRef<HighlightedPath | null>(null);
 
-  // Keep refs in sync
-  selectedNodeIdRef.current = selectedNode?.id ?? null;
-  selectedEdgeIdRef.current = selectedEdge?.id ?? null;
-  const selectedNodesFromStore = useGraphStore((s) => s.selectedNodes);
-  selectedNodeIdsRef.current = new Set(selectedNodesFromStore.map((n) => n.id));
-  highlightModeRef.current = highlightMode;
-  shortestPathModeRef.current = shortestPathMode;
-  pathStartNodeRef.current = pathStartNode;
-  highlightedPathRef.current = highlightedPath;
-
   // Forward reference to draw (declared later but only called at runtime)
   const drawRef = useRef<() => void>(() => {});
 
-  // Sync search query prop to ref
+  // Fix #10: Move ref syncs into useEffect instead of render body
   useEffect(() => {
-    searchQueryRef.current = searchQueryProp ?? "";
+    selectedNodeIdRef.current = selectedNode?.id ?? null;
+  }, [selectedNode]);
+
+  useEffect(() => {
+    selectedEdgeIdRef.current = selectedEdge?.id ?? null;
+  }, [selectedEdge]);
+
+  useEffect(() => {
+    selectedNodeIdsRef.current = new Set(selectedNodesFromStore.map((n) => n.id));
+  }, [selectedNodesFromStore]);
+
+  useEffect(() => {
+    highlightModeRef.current = highlightMode;
+  }, [highlightMode]);
+
+  useEffect(() => {
+    shortestPathModeRef.current = shortestPathMode;
+  }, [shortestPathMode]);
+
+  useEffect(() => {
+    pathStartNodeRef.current = pathStartNode;
+  }, [pathStartNode]);
+
+  useEffect(() => {
+    highlightedPathRef.current = highlightedPath;
+  }, [highlightedPath]);
+
+  // Fix #1: Memoize search matches — compute when searchQueryProp changes
+  useEffect(() => {
+    const q = searchQueryProp ?? "";
+    searchQueryRef.current = q;
+
+    if (q) {
+      const simNodes = simNodesRef.current;
+      const simLinks = simLinksRef.current;
+      const matchNodes = new Set<string>();
+      for (const node of simNodes) {
+        if (nodeMatchesSearch(node, q)) {
+          matchNodes.add(node.id);
+        }
+      }
+      const matchEdges = new Set<string>();
+      for (const link of simLinks) {
+        const srcId = typeof link.source === "string" ? link.source : (link.source as SimNode).id;
+        const tgtId = typeof link.target === "string" ? link.target : (link.target as SimNode).id;
+        if (matchNodes.has(srcId) && matchNodes.has(tgtId)) {
+          matchEdges.add(link.id);
+        }
+      }
+      searchMatchNodesRef.current = matchNodes;
+      searchMatchEdgesRef.current = matchEdges;
+    } else {
+      searchMatchNodesRef.current = null;
+      searchMatchEdgesRef.current = null;
+    }
+
     drawRef.current();
-  }, [searchQueryProp]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [searchQueryProp]);
+
+  // Fix #2: Memoize connected nodes — compute when selectedNode/highlightMode changes
+  useEffect(() => {
+    const selId = selectedNode?.id ?? null;
+    if (highlightMode && selId) {
+      const simLinks = simLinksRef.current;
+      const connNodes = new Set<string>();
+      const connEdges = new Set<string>();
+      for (const link of simLinks) {
+        const srcId = typeof link.source === "string" ? link.source : (link.source as SimNode).id;
+        const tgtId = typeof link.target === "string" ? link.target : (link.target as SimNode).id;
+        if (srcId === selId || tgtId === selId) {
+          connNodes.add(srcId);
+          connNodes.add(tgtId);
+          connEdges.add(link.id);
+        }
+      }
+      connectedNodeIdsRef.current = connNodes;
+      connectedEdgeIdsRef.current = connEdges;
+    } else {
+      connectedNodeIdsRef.current = null;
+      connectedEdgeIdsRef.current = null;
+    }
+
+    drawRef.current();
+  }, [selectedNode, highlightMode]);
 
   // Close context menu on Escape or scroll
   useEffect(() => {
@@ -605,7 +688,7 @@ export const ForceGraph = forwardRef<ForceGraphHandle, ForceGraphProps>(function
 
       drawRef.current();
     },
-    [getCanvasDimensions], // eslint-disable-line react-hooks/exhaustive-deps
+    [getCanvasDimensions],
   );
 
   // --------------------------------------------------
@@ -667,7 +750,7 @@ export const ForceGraph = forwardRef<ForceGraphHandle, ForceGraphProps>(function
         drawRef.current();
       }
     },
-    [], // eslint-disable-line react-hooks/exhaustive-deps
+    [],
   );
 
   const clearShortestPath = useCallback(() => {
@@ -679,7 +762,7 @@ export const ForceGraph = forwardRef<ForceGraphHandle, ForceGraphProps>(function
       setPathBanner(null);
     }
     drawRef.current();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, []);
 
   // --------------------------------------------------
   // Context menu actions
@@ -755,6 +838,61 @@ export const ForceGraph = forwardRef<ForceGraphHandle, ForceGraphProps>(function
   }, []);
 
   // --------------------------------------------------
+  // Fit-to-screen helper (shared by imperative handle, toolbar, and auto-fit)
+  // --------------------------------------------------
+
+  const fitToScreen = useCallback(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const simNodes = simNodesRef.current;
+    const dpr = window.devicePixelRatio || 1;
+    const cw = canvas.width / dpr;
+    const ch = canvas.height / dpr;
+
+    if (simNodes.length === 0 || cw === 0 || ch === 0) {
+      if (zoomRef.current) {
+        select<HTMLCanvasElement, unknown>(canvas).call(zoomRef.current.transform, zoomIdentity);
+      }
+      transformRef.current = { x: 0, y: 0, k: 1 };
+      drawRef.current();
+      return;
+    }
+
+    // Compute bounding box of all nodes
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const n of simNodes) {
+      if (n.x != null && n.y != null) {
+        minX = Math.min(minX, n.x - n.radius);
+        minY = Math.min(minY, n.y - n.radius);
+        maxX = Math.max(maxX, n.x + n.radius);
+        maxY = Math.max(maxY, n.y + n.radius);
+      }
+    }
+    if (!isFinite(minX)) {
+      transformRef.current = { x: 0, y: 0, k: 1 };
+      drawRef.current();
+      return;
+    }
+
+    const graphW = maxX - minX || 1;
+    const graphH = maxY - minY || 1;
+    const padding = 40;
+    const scale = Math.min((cw - padding * 2) / graphW, (ch - padding * 2) / graphH, 2);
+    const tx = (cw - graphW * scale) / 2 - minX * scale;
+    const ty = (ch - graphH * scale) / 2 - minY * scale;
+
+    // Update transform and sync with d3-zoom
+    transformRef.current = { x: tx, y: ty, k: scale };
+    if (zoomRef.current) {
+      select<HTMLCanvasElement, unknown>(canvas).call(
+        zoomRef.current.transform,
+        zoomIdentity.translate(tx, ty).scale(scale),
+      );
+    }
+    drawRef.current();
+  }, []);
+
+  // --------------------------------------------------
   // Draw
   // --------------------------------------------------
 
@@ -778,45 +916,17 @@ export const ForceGraph = forwardRef<ForceGraphHandle, ForceGraphProps>(function
     const currentPath = highlightedPathRef.current;
     const spStartNode = pathStartNodeRef.current;
     const spMode = shortestPathModeRef.current;
-    const searchQ = searchQueryRef.current;
 
-    // Build connected-node set for highlight mode
-    let connectedNodeIds: Set<string> | null = null;
-    let connectedEdgeIds: Set<string> | null = null;
-    if (hlMode && selNodeId) {
-      connectedNodeIds = new Set<string>();
-      connectedEdgeIds = new Set<string>();
-      for (const link of simLinks) {
-        const srcId = typeof link.source === "string" ? link.source : (link.source as SimNode).id;
-        const tgtId = typeof link.target === "string" ? link.target : (link.target as SimNode).id;
-        if (srcId === selNodeId || tgtId === selNodeId) {
-          connectedNodeIds.add(srcId);
-          connectedNodeIds.add(tgtId);
-          connectedEdgeIds.add(link.id);
-        }
-      }
-    }
+    // Fix #2: Read memoized connected nodes from refs (computed in useEffect)
+    const connectedNodeIds = connectedNodeIdsRef.current;
+    const connectedEdgeIds = connectedEdgeIdsRef.current;
 
-    // Build search match sets
-    let searchMatchNodes: Set<string> | null = null;
-    let searchMatchEdges: Set<string> | null = null;
-    if (searchQ) {
-      searchMatchNodes = new Set<string>();
-      for (const node of simNodes) {
-        if (nodeMatchesSearch(node, searchQ)) {
-          searchMatchNodes.add(node.id);
-        }
-      }
-      // Edges between matching nodes
-      searchMatchEdges = new Set<string>();
-      for (const link of simLinks) {
-        const srcId = typeof link.source === "string" ? link.source : (link.source as SimNode).id;
-        const tgtId = typeof link.target === "string" ? link.target : (link.target as SimNode).id;
-        if (searchMatchNodes.has(srcId) && searchMatchNodes.has(tgtId)) {
-          searchMatchEdges.add(link.id);
-        }
-      }
-    }
+    // Fix #1: Read memoized search matches from refs (computed in useEffect)
+    const searchMatchNodes = searchMatchNodesRef.current;
+    const searchMatchEdges = searchMatchEdgesRef.current;
+
+    // Fix #4: Get store state once before draw loop
+    const settingsState = useGraphSettingsStore.getState();
 
     ctx.clearRect(0, 0, width, height);
     ctx.save();
@@ -825,6 +935,9 @@ export const ForceGraph = forwardRef<ForceGraphHandle, ForceGraphProps>(function
     ctx.scale(t.k, t.k);
 
     // --- Edges ---
+    // Fix #9: Batch edge text rendering — set font once before edge loop
+    ctx.font = EDGE_FONT;
+
     for (const link of simLinks) {
       const src = sourceNode(link);
       const tgt = targetNode(link);
@@ -991,7 +1104,7 @@ export const ForceGraph = forwardRef<ForceGraphHandle, ForceGraphProps>(function
       ctx.stroke();
 
       // --- Icon / image overlay ---
-      const settingsState = useGraphSettingsStore.getState();
+      // Fix #4: Use settingsState captured once above instead of per-node getState()
       const iconName = settingsState.labelIcons[label];
       const imagePropName = settingsState.imageProperty[label];
 
@@ -1083,55 +1196,7 @@ export const ForceGraph = forwardRef<ForceGraphHandle, ForceGraphProps>(function
         select<HTMLCanvasElement, unknown>(canvasRef.current).call(zoomRef.current.scaleBy, 0.7);
       }
     },
-    fitToScreen: () => {
-      if (!canvasRef.current) return;
-      const simNodes = simNodesRef.current;
-      const dpr = window.devicePixelRatio || 1;
-      const cw = canvasRef.current.width / dpr;
-      const ch = canvasRef.current.height / dpr;
-
-      if (simNodes.length === 0 || cw === 0 || ch === 0) {
-        if (zoomRef.current) {
-          select<HTMLCanvasElement, unknown>(canvasRef.current).call(zoomRef.current.transform, zoomIdentity);
-        }
-        transformRef.current = { x: 0, y: 0, k: 1 };
-        draw();
-        return;
-      }
-
-      // Compute bounding box of all nodes
-      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-      for (const n of simNodes) {
-        if (n.x != null && n.y != null) {
-          minX = Math.min(minX, n.x - n.radius);
-          minY = Math.min(minY, n.y - n.radius);
-          maxX = Math.max(maxX, n.x + n.radius);
-          maxY = Math.max(maxY, n.y + n.radius);
-        }
-      }
-      if (!isFinite(minX)) {
-        transformRef.current = { x: 0, y: 0, k: 1 };
-        draw();
-        return;
-      }
-
-      const graphW = maxX - minX || 1;
-      const graphH = maxY - minY || 1;
-      const padding = 40;
-      const scale = Math.min((cw - padding * 2) / graphW, (ch - padding * 2) / graphH, 2);
-      const tx = (cw - graphW * scale) / 2 - minX * scale;
-      const ty = (ch - graphH * scale) / 2 - minY * scale;
-
-      // Update transform and sync with d3-zoom
-      transformRef.current = { x: tx, y: ty, k: scale };
-      if (zoomRef.current) {
-        select<HTMLCanvasElement, unknown>(canvasRef.current).call(
-          zoomRef.current.transform,
-          zoomIdentity.translate(tx, ty).scale(scale),
-        );
-      }
-      draw();
-    },
+    fitToScreen,
     exportPNG: () => {
       const canvas = canvasRef.current;
       if (!canvas) return;
@@ -1162,7 +1227,8 @@ export const ForceGraph = forwardRef<ForceGraphHandle, ForceGraphProps>(function
         setPathBanner(null);
       }
     },
-  }), [applyLayout, draw]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), []);
 
   // --------------------------------------------------
   // Build / rebuild simulation when data changes
@@ -1210,14 +1276,25 @@ export const ForceGraph = forwardRef<ForceGraphHandle, ForceGraphProps>(function
       simRef.current.stop();
     }
 
+    // Fix #5: Adaptive force parameters based on node count
+    const nodeCount = simNodes.length;
+    const linkDistance = nodeCount > 200 ? 120 : nodeCount > 50 ? 100 : 80;
+    const chargeStrength = nodeCount > 200 ? -100 : nodeCount > 50 ? -150 : -200;
+    const distanceMax = nodeCount > 200 ? 300 : nodeCount > 50 ? 500 : Infinity;
+
     const sim = forceSimulation<SimNode>(simNodes)
       .force(
         "link",
         forceLink<SimNode, SimLink>(simLinks)
           .id((d) => d.id)
-          .distance(80),
+          .distance(linkDistance),
       )
-      .force("charge", forceManyBody().strength(-200))
+      .force(
+        "charge",
+        forceManyBody()
+          .strength(chargeStrength)
+          .distanceMax(distanceMax),
+      )
       .force(
         "center",
         forceCenter(
@@ -1229,10 +1306,13 @@ export const ForceGraph = forwardRef<ForceGraphHandle, ForceGraphProps>(function
         "collide",
         forceCollide<SimNode>().radius((d) => d.radius + 4),
       )
-      .alphaDecay(0.02)
+      // Fix #5: Faster alphaDecay and higher velocityDecay for quicker settling
+      .alphaDecay(0.03)
+      .velocityDecay(0.4)
       .on("tick", () => {
         cancelAnimationFrame(rafRef.current);
-        rafRef.current = requestAnimationFrame(draw);
+        // Fix #8: Use drawRef.current() instead of draw directly
+        rafRef.current = requestAnimationFrame(() => drawRef.current());
       });
 
     simRef.current = sim;
@@ -1253,65 +1333,27 @@ export const ForceGraph = forwardRef<ForceGraphHandle, ForceGraphProps>(function
       transformRef.current = { x: 0, y: 0, k: 1 };
     }
 
+    // Fix #6: Single auto-fit — use sim.on("end") + one safety timeout
+    const autoFitDone = { current: false };
+
+    const doFit = () => {
+      if (autoFitDone.current) return;
+      autoFitDone.current = true;
+      fitToScreen();
+    };
+
+    sim.on("end", doFit);
+
+    // Safety timeout in case simulation settles before "end" fires or takes too long
+    const safetyTimeout = setTimeout(doFit, 1500);
+
     return () => {
       sim.stop();
       cancelAnimationFrame(rafRef.current);
+      clearTimeout(safetyTimeout);
     };
-  }, [nodes, edges, draw, applyLayout]);
-
-  // Auto-fit when data changes: fit after short delays to catch both initial load and simulation settling
-  useEffect(() => {
-    const prevLen = prevNodesLenRef.current;
-    prevNodesLenRef.current = nodes.length;
-    if (nodes.length === 0) return;
-
-    const doFit = () => {
-      const canvas = canvasRef.current;
-      if (!canvas) return;
-      const simNodes = simNodesRef.current;
-      const dpr = window.devicePixelRatio || 1;
-      const cw = canvas.width / dpr;
-      const ch = canvas.height / dpr;
-      if (simNodes.length === 0 || cw === 0 || ch === 0) return;
-
-      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-      for (const n of simNodes) {
-        if (n.x != null && n.y != null) {
-          minX = Math.min(minX, n.x - n.radius);
-          minY = Math.min(minY, n.y - n.radius);
-          maxX = Math.max(maxX, n.x + n.radius);
-          maxY = Math.max(maxY, n.y + n.radius);
-        }
-      }
-      if (!isFinite(minX)) return;
-
-      const graphW = maxX - minX || 1;
-      const graphH = maxY - minY || 1;
-      const padding = 60;
-      const scale = Math.min((cw - padding * 2) / graphW, (ch - padding * 2) / graphH, 2);
-      const tx = (cw - graphW * scale) / 2 - minX * scale;
-      const ty = (ch - graphH * scale) / 2 - minY * scale;
-
-      transformRef.current = { x: tx, y: ty, k: scale };
-      if (zoomRef.current) {
-        select<HTMLCanvasElement, unknown>(canvas).call(
-          zoomRef.current.transform,
-          zoomIdentity.translate(tx, ty).scale(scale),
-        );
-      }
-      draw();
-    };
-
-    // Fit at multiple points: immediately (for re-renders), and after simulation settles
-    const t1 = setTimeout(doFit, 50);
-    const t2 = setTimeout(doFit, 300);
-    const t3 = prevLen === 0 ? setTimeout(doFit, 800) : null;
-    return () => {
-      clearTimeout(t1);
-      clearTimeout(t2);
-      if (t3) clearTimeout(t3);
-    };
-  }, [nodes, draw]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nodes, edges]);
 
   // --------------------------------------------------
   // Canvas setup: zoom, resize, interaction
@@ -1324,14 +1366,30 @@ export const ForceGraph = forwardRef<ForceGraphHandle, ForceGraphProps>(function
 
     const dpr = window.devicePixelRatio || 1;
 
+    // Fix #7: Track last dimensions to guard canvas resize
+    let lastWidth = 0;
+    let lastHeight = 0;
+
     function resize() {
       if (!canvas || !container) return;
       const rect = container.getBoundingClientRect();
-      canvas.width = rect.width * dpr;
-      canvas.height = rect.height * dpr;
-      canvas.style.width = `${rect.width}px`;
-      canvas.style.height = `${rect.height}px`;
-      draw();
+      const newWidth = rect.width;
+      const newHeight = rect.height;
+
+      // Fix #7: Skip if dimensions unchanged
+      if (newWidth === lastWidth && newHeight === lastHeight) return;
+      lastWidth = newWidth;
+      lastHeight = newHeight;
+
+      canvas.width = newWidth * dpr;
+      canvas.height = newHeight * dpr;
+      canvas.style.width = `${newWidth}px`;
+      canvas.style.height = `${newHeight}px`;
+
+      // Fix #3: Update cached rect on resize
+      canvasRectRef.current = rect;
+
+      drawRef.current();
     }
 
     const observer = new ResizeObserver(resize);
@@ -1356,16 +1414,17 @@ export const ForceGraph = forwardRef<ForceGraphHandle, ForceGraphProps>(function
           y: event.transform.y,
           k: event.transform.k,
         };
-        draw();
+        drawRef.current();
       });
 
     zoomRef.current = zoomBehavior;
     const sel = select<HTMLCanvasElement, unknown>(canvas).call(zoomBehavior);
 
     // --- Mouse helpers ---
+    // Fix #3: Use cached rect in mouse handlers
     function mouseToWorld(event: MouseEvent): [number, number] {
       if (!canvas) return [0, 0];
-      const rect = canvas.getBoundingClientRect();
+      const rect = canvasRectRef.current ?? canvas.getBoundingClientRect();
       const t = transformRef.current;
       const cx = event.clientX - rect.left;
       const cy = event.clientY - rect.top;
@@ -1514,7 +1573,7 @@ export const ForceGraph = forwardRef<ForceGraphHandle, ForceGraphProps>(function
         } else {
           selectNode(graphNode);
         }
-        draw();
+        drawRef.current();
         return;
       }
       const edge = findEdgeAt(wx, wy);
@@ -1526,12 +1585,12 @@ export const ForceGraph = forwardRef<ForceGraphHandle, ForceGraphProps>(function
           type: edge.type,
           properties: edge.properties,
         });
-        draw();
+        drawRef.current();
         return;
       }
       // Clicked on empty space -- clear selection
       selectNode(null);
-      draw();
+      drawRef.current();
     }
 
     function onDblClick(event: MouseEvent) {
@@ -1578,12 +1637,13 @@ export const ForceGraph = forwardRef<ForceGraphHandle, ForceGraphProps>(function
       canvas.removeEventListener("dblclick", onDblClick);
       canvas.removeEventListener("contextmenu", onContextMenu);
     };
-  }, [draw, selectNode, selectEdge, onNodeDoubleClick, handleShortestPathClick, clearShortestPath]);
+    // Fix #8: Removed `draw` from deps — uses drawRef.current() throughout
+  }, [selectNode, selectEdge, onNodeDoubleClick, handleShortestPathClick, clearShortestPath]);
 
   // Re-draw when selection or highlight mode changes (without restarting simulation)
   useEffect(() => {
-    draw();
-  }, [selectedNode, selectedEdge, selectedNodesFromStore, highlightMode, highlightedPath, labelColors, edgeColors, labelIcons, draw]);
+    drawRef.current();
+  }, [selectedNode, selectedEdge, selectedNodesFromStore, highlightMode, highlightedPath]);
 
   return (
     <div ref={containerRef} style={{ width: "100%", height: "100%", position: "relative" }}>
@@ -1602,55 +1662,7 @@ export const ForceGraph = forwardRef<ForceGraphHandle, ForceGraphProps>(function
           onLayoutChange={(layout) => {
             applyLayout(layout as LayoutType);
           }}
-          onFitToScreen={() => {
-            // Use the proper fitToScreen that computes bounding box
-            const canvas = canvasRef.current;
-            if (!canvas) return;
-            const simNodes = simNodesRef.current;
-            const dpr = window.devicePixelRatio || 1;
-            const cw = canvas.width / dpr;
-            const ch = canvas.height / dpr;
-
-            if (simNodes.length === 0 || cw === 0 || ch === 0) {
-              if (zoomRef.current) {
-                select<HTMLCanvasElement, unknown>(canvas).call(zoomRef.current.transform, zoomIdentity);
-              }
-              transformRef.current = { x: 0, y: 0, k: 1 };
-              draw();
-              return;
-            }
-
-            let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-            for (const n of simNodes) {
-              if (n.x != null && n.y != null) {
-                minX = Math.min(minX, n.x - n.radius);
-                minY = Math.min(minY, n.y - n.radius);
-                maxX = Math.max(maxX, n.x + n.radius);
-                maxY = Math.max(maxY, n.y + n.radius);
-              }
-            }
-            if (!isFinite(minX)) {
-              transformRef.current = { x: 0, y: 0, k: 1 };
-              draw();
-              return;
-            }
-
-            const graphW = maxX - minX || 1;
-            const graphH = maxY - minY || 1;
-            const padding = 40;
-            const scale = Math.min((cw - padding * 2) / graphW, (ch - padding * 2) / graphH, 2);
-            const tx = (cw - graphW * scale) / 2 - minX * scale;
-            const ty = (ch - graphH * scale) / 2 - minY * scale;
-
-            transformRef.current = { x: tx, y: ty, k: scale };
-            if (zoomRef.current) {
-              select<HTMLCanvasElement, unknown>(canvas).call(
-                zoomRef.current.transform,
-                zoomIdentity.translate(tx, ty).scale(scale),
-              );
-            }
-            draw();
-          }}
+          onFitToScreen={fitToScreen}
           onZoomIn={() => {
             if (zoomRef.current && canvasRef.current) {
               select<HTMLCanvasElement, unknown>(canvasRef.current).call(
@@ -1788,7 +1800,7 @@ function drawEdgeLabel(
   zoomScale: number,
 ) {
   if (zoomScale < 0.5) return;
-  ctx.font = EDGE_FONT;
+  // Fix #9: Font is already set once before the edge loop; just set alignment
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   ctx.fillStyle = "rgba(148, 163, 184, 0.8)";

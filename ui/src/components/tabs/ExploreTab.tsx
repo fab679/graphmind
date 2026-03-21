@@ -84,6 +84,7 @@ function FloatingLegend() {
 export function ExploreTab() {
   const nodes = useGraphStore((s) => s.nodes);
   const selectedNode = useGraphStore((s) => s.selectedNode);
+  const selectedEdge = useGraphStore((s) => s.selectedEdge);
   const [searchQuery, setSearchQuery] = useState("");
 
   return (
@@ -130,11 +131,14 @@ export function ExploreTab() {
           {/* Graph stats (bottom-left) */}
           <GraphStats />
 
-          {/* Property inspector (floating right, on selection) */}
-          {selectedNode && (
+          {/* Property inspector (floating right, on node OR edge selection) */}
+          {(selectedNode || selectedEdge) && (
             <div className="absolute right-2 top-2 z-[5] w-72 max-h-[calc(100%-16px)] overflow-auto rounded-lg border bg-card shadow-lg">
               <button
-                onClick={() => useGraphStore.getState().selectNode(null)}
+                onClick={() => {
+                  useGraphStore.getState().selectNode(null);
+                  useGraphStore.getState().selectEdge(null);
+                }}
                 className="absolute right-2 top-2 text-muted-foreground hover:text-foreground z-10"
               >
                 <X className="h-3.5 w-3.5" />

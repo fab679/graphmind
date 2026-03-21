@@ -2,7 +2,7 @@ import { useState } from "react";
 import { ChevronDown, ChevronRight, Circle, ArrowRight } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { useGraphStore } from "@/stores/graphStore";
-import { getCustomColorForLabel } from "@/lib/colors";
+import { getCustomColorForLabel, getCustomEdgeColor, getNodeCaption } from "@/lib/colors";
 import { cn } from "@/lib/utils";
 
 function ExpandableJson({ data }: { data: unknown }) {
@@ -89,6 +89,7 @@ function PropertyList({ properties }: { properties: Record<string, unknown> }) {
 export function PropertyInspector() {
   const selectedNode = useGraphStore((s) => s.selectedNode);
   const selectedEdge = useGraphStore((s) => s.selectedEdge);
+  const nodes = useGraphStore((s) => s.nodes);
 
   if (!selectedNode && !selectedEdge) {
     return (
@@ -139,29 +140,51 @@ export function PropertyInspector() {
   }
 
   if (selectedEdge) {
+    const edgeColor = getCustomEdgeColor(selectedEdge.type);
+    const sourceNode = nodes.find((n) => n.id === selectedEdge.source);
+    const targetNode = nodes.find((n) => n.id === selectedEdge.target);
+    const sourceName = sourceNode
+      ? getNodeCaption(sourceNode.labels?.[0] ?? "", sourceNode.properties)
+      : String(selectedEdge.source);
+    const targetName = targetNode
+      ? getNodeCaption(targetNode.labels?.[0] ?? "", targetNode.properties)
+      : String(selectedEdge.target);
+
     return (
       <div className="flex flex-col gap-3 overflow-y-auto p-3">
         <div>
           <h3 className="mb-1.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-            Edge
+            Relationship
           </h3>
-          <Badge variant="secondary">{selectedEdge.type}</Badge>
-        </div>
-
-        <div className="flex items-center gap-2 text-xs text-muted-foreground">
-          <span className="font-mono">{selectedEdge.source}</span>
-          <ArrowRight className="h-3 w-3" />
-          <span className="font-mono">{selectedEdge.target}</span>
+          <Badge className="border-none text-white" style={{ backgroundColor: edgeColor }}>
+            {selectedEdge.type}
+          </Badge>
         </div>
 
         <div>
-          <h3 className="mb-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-            Properties
-          </h3>
-          <div className="rounded border border-border">
-            <PropertyList properties={selectedEdge.properties} />
+          <span className="text-[10px] text-muted-foreground">Direction</span>
+          <div className="mt-0.5 flex items-center gap-2 rounded bg-muted px-2 py-1.5 text-xs">
+            <span className="font-medium text-foreground">{sourceName}</span>
+            <ArrowRight className="h-3 w-3 text-muted-foreground" />
+            <span className="font-medium text-foreground">{targetName}</span>
           </div>
         </div>
+
+        <div>
+          <span className="text-[10px] text-muted-foreground">ID</span>
+          <p className="font-mono text-xs text-foreground">{selectedEdge.id}</p>
+        </div>
+
+        {selectedEdge.properties && Object.keys(selectedEdge.properties).length > 0 && (
+          <div>
+            <h3 className="mb-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              Properties
+            </h3>
+            <div className="rounded border border-border">
+              <PropertyList properties={selectedEdge.properties} />
+            </div>
+          </div>
+        )}
       </div>
     );
   }
