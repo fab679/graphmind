@@ -212,7 +212,28 @@ impl<'a> QueryExecutor<'a> {
         }
 
         // Execute the plan
-        self.execute_plan(plan)
+        let mut result = self.execute_plan(plan)?;
+
+        // Handle UNION queries
+        if !query.union_queries.is_empty() {
+            for (union_query, is_all) in &query.union_queries {
+                let union_plan = self.planner.plan(union_query, self.store)?;
+                let union_result = self.execute_plan(union_plan)?;
+                result.records.extend(union_result.records);
+            }
+
+            // For UNION (not ALL), deduplicate by row content
+            let has_union_not_all = query.union_queries.iter().any(|(_, is_all)| !is_all);
+            if has_union_not_all {
+                let mut seen = std::collections::HashSet::new();
+                result.records.retain(|r| {
+                    let key = format!("{:?}", r);
+                    seen.insert(key)
+                });
+            }
+        }
+
+        Ok(result)
     }
 
     /// Generate EXPLAIN output from an execution plan, optionally with graph statistics

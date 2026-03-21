@@ -281,6 +281,29 @@ impl QueryPlanner {
 
     /// Plan a query
     pub fn plan(&self, query: &Query, store: &GraphStore) -> ExecutionResult<ExecutionPlan> {
+        // Validate duplicate column names in RETURN
+        if let Some(rc) = &query.return_clause {
+            let mut seen = std::collections::HashSet::new();
+            for item in &rc.items {
+                let alias = item
+                    .alias
+                    .clone()
+                    .unwrap_or_else(|| match &item.expression {
+                        Expression::Variable(v) => v.clone(),
+                        Expression::Property { variable, property } => {
+                            format!("{}.{}", variable, property)
+                        }
+                        _ => String::new(),
+                    });
+                if !alias.is_empty() && !seen.insert(alias.clone()) {
+                    return Err(ExecutionError::PlanningError(format!(
+                        "Column name '{}' appears more than once in RETURN",
+                        alias
+                    )));
+                }
+            }
+        }
+
         // Handle SHOW INDEXES
         if query.show_indexes {
             return Ok(ExecutionPlan {
@@ -673,6 +696,9 @@ impl QueryPlanner {
                         if let Some(v) = &seg.edge.variable {
                             vars.insert(v.clone());
                         }
+                    }
+                    if let Some(v) = &path.path_variable {
+                        vars.insert(v.clone());
                     }
                 }
                 vars
@@ -1918,6 +1944,9 @@ impl QueryPlanner {
                 if let Some(v) = &seg.edge.variable {
                     vars.insert(v.clone());
                 }
+            }
+            if let Some(v) = &path.path_variable {
+                vars.insert(v.clone());
             }
             path_vars.push(vars);
 

@@ -19,7 +19,7 @@ with_stmt = { with_clause ~ (unwind_clause ~ (with_clause ~ unwind_clause?)*)? ~
 // Standalone UNWIND (without MATCH): e.g. UNWIND [1,2,3] AS x RETURN x
 // Also supports UNWIND ... CREATE ..., UNWIND ... SET/DELETE etc.
 // Supports consecutive UNWINDs: UNWIND ... UNWIND ... RETURN ...
-unwind_stmt = { unwind_clause ~ ((with_clause | unwind_clause) ~ unwind_clause?)* ~ create_clause? ~ merge_inline? ~ set_clause* ~ delete_clause? ~ return_clause? ~ order_by_clause? ~ skip_clause? ~ limit_clause? }
+unwind_stmt = { unwind_clause ~ ((with_clause | unwind_clause) ~ unwind_clause?)* ~ create_clause? ~ merge_inline? ~ set_clause* ~ delete_clause? ~ (with_clause ~ where_clause? ~ (create_clause | merge_inline | set_clause | delete_clause)*)* ~ return_clause? ~ order_by_clause? ~ skip_clause? ~ limit_clause? }
 
 // CREATE VECTOR INDEX statement
 create_vector_index_stmt = { ^"CREATE" ~ ^"VECTOR" ~ ^"INDEX" ~ variable? ~ ^"FOR" ~ "(" ~ variable ~ ":" ~ label ~ ")" ~ ^"ON" ~ "(" ~ variable ~ "." ~ property_key ~ ")" ~ options? }
@@ -61,7 +61,9 @@ with_clause = { ^"WITH" ~ distinct? ~ return_items ~ order_by_clause? ~ skip_cla
 create_clause = { ^"CREATE" ~ pattern }
 delete_clause = { ^"DETACH"? ~ ^"DELETE" ~ expression ~ ("," ~ expression)* }
 set_clause = { ^"SET" ~ set_item ~ ("," ~ set_item)* }
-set_item = { property_access ~ "=" ~ expression }
+set_item = { set_label | set_map_merge | property_access ~ "=" ~ expression }
+set_label = { variable ~ labels }
+set_map_merge = { variable ~ "+=" ~ expression }
 remove_clause = { ^"REMOVE" ~ remove_item ~ ("," ~ remove_item)* }
 remove_item = { property_access | variable ~ ":" ~ label }
 return_clause = { ^"RETURN" ~ distinct? ~ return_items }

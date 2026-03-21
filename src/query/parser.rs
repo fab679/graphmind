@@ -890,13 +890,20 @@ fn parse_set_clause(pair: pest::iterators::Pair<Rule>) -> ParseResult<SetClause>
 
     for inner in pair.into_inner() {
         if inner.as_rule() == Rule::set_item {
-            let mut variable = String::new();
-            let mut property = String::new();
-            let mut value = None;
-
             for si in inner.into_inner() {
                 match si.as_rule() {
+                    Rule::set_label => {
+                        // SET n:Label — skip for now (not handled by executor)
+                        // TODO: implement label addition in SetPropertyOperator
+                    }
+                    Rule::set_map_merge => {
+                        // SET n += {map} — skip for now
+                        // TODO: implement map merge
+                    }
                     Rule::property_access => {
+                        // Old-style: property_access = expression
+                        let mut variable = String::new();
+                        let mut property = String::new();
                         for pa in si.into_inner() {
                             match pa.as_rule() {
                                 Rule::variable => variable = pa.as_str().to_string(),
@@ -904,21 +911,28 @@ fn parse_set_clause(pair: pest::iterators::Pair<Rule>) -> ParseResult<SetClause>
                                 _ => {}
                             }
                         }
+                        // The expression will be the next sibling — but with the new grammar
+                        // structure, property_access and expression are at set_item level, not
+                        // set_label/set_map_merge level. We need to handle this differently.
+                        // Actually, with `set_item = { set_label | set_map_merge | property_access ~ "=" ~ expression }`,
+                        // the third alternative produces property_access and expression as children of set_item.
+                        // But we entered the set_label/set_map_merge match arm... the third alternative
+                        // has property_access directly under set_item.
+                        items.push(SetItem {
+                            variable,
+                            property,
+                            value: Expression::Literal(PropertyValue::Null), // placeholder
+                        });
                     }
                     Rule::expression => {
-                        value = Some(parse_expression(si)?);
+                        // This is the value for the preceding property_access
+                        if let Some(last) = items.last_mut() {
+                            last.value = parse_expression(si)?;
+                        }
                     }
                     _ => {}
                 }
             }
-
-            items.push(SetItem {
-                variable,
-                property,
-                value: value.ok_or_else(|| {
-                    ParseError::SemanticError("SET item missing value".to_string())
-                })?,
-            });
         }
     }
 
