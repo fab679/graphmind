@@ -16,23 +16,7 @@ interface NodeDegree {
 // Helpers
 // ---------------------------------------------------------------------------
 
-function isDark(): boolean {
-  return document.documentElement.classList.contains("dark");
-}
-
-function glassStyle(): React.CSSProperties {
-  return isDark()
-    ? {
-        background: "rgba(20, 20, 30, 0.8)",
-        backdropFilter: "blur(12px)",
-        border: "1px solid rgba(255, 255, 255, 0.1)",
-      }
-    : {
-        background: "rgba(255, 255, 255, 0.8)",
-        backdropFilter: "blur(12px)",
-        border: "1px solid rgba(0, 0, 0, 0.1)",
-      };
-}
+const GLASS_CLASS = "backdrop-blur-xl border bg-card/80 dark:bg-card/80 border-border shadow-lg";
 
 // ---------------------------------------------------------------------------
 // Component
@@ -112,8 +96,7 @@ export function GraphStats() {
       <button
         type="button"
         onClick={() => setExpanded((prev) => !prev)}
-        className="flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-medium text-foreground/80 shadow-lg hover:text-foreground transition-colors"
-        style={glassStyle()}
+        className={`flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-medium text-foreground/80 hover:text-foreground transition-colors ${GLASS_CLASS}`}
         title="Toggle graph statistics"
       >
         <BarChart3 className="h-3.5 w-3.5" />
@@ -132,8 +115,7 @@ export function GraphStats() {
         }}
       >
         <div
-          className="mt-1.5 rounded-xl shadow-lg max-h-[360px] overflow-y-auto"
-          style={glassStyle()}
+          className={`mt-1.5 rounded-xl max-h-[360px] overflow-y-auto ${GLASS_CLASS}`}
         >
           {/* Header */}
           <div className="flex items-center justify-between px-3 pt-2.5 pb-1.5">

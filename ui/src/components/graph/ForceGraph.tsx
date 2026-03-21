@@ -524,10 +524,17 @@ export const ForceGraph = forwardRef<ForceGraphHandle, ForceGraphProps>(function
   const selectedNodes = useGraphStore((s) => s.selectedNodes);
   const highlightMode = useGraphSettingsStore((s) => s.highlightMode);
 
-  // Subscribe to trigger re-renders when these change (used in draw via getState)
-  useGraphSettingsStore((s) => s.labelColors);
-  useGraphSettingsStore((s) => s.edgeColors);
-  useGraphSettingsStore((s) => s.labelIcons);
+  // Subscribe to settings changes and trigger redraw (used in draw via getState)
+  const labelColors = useGraphSettingsStore((s) => s.labelColors);
+  const edgeColors = useGraphSettingsStore((s) => s.edgeColors);
+  const labelIcons = useGraphSettingsStore((s) => s.labelIcons);
+  const imageProperty = useGraphSettingsStore((s) => s.imageProperty);
+  const captionProperty = useGraphSettingsStore((s) => s.captionProperty);
+
+  // Redraw when visual settings change (without restarting simulation)
+  useEffect(() => {
+    drawRef.current();
+  }, [labelColors, edgeColors, labelIcons, imageProperty, captionProperty]);
 
   // Canvas and simulation refs
   const containerRef = useRef<HTMLDivElement>(null);
