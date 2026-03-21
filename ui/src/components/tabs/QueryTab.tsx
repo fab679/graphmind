@@ -18,7 +18,14 @@ import { useQueryStore } from "@/stores/queryStore";
 import { useGraphStore } from "@/stores/graphStore";
 import { useUiStore } from "@/stores/uiStore";
 import { executeScript } from "@/api/client";
+import type { ScriptResponse } from "@/api/client";
 import { cn } from "@/lib/utils";
+
+interface ScriptResult {
+  success: boolean;
+  executed: number;
+  errors: string[];
+}
 
 export function QueryTab() {
   const currentQuery = useQueryStore((s) => s.currentQuery);
@@ -38,6 +45,7 @@ export function QueryTab() {
   const [showHistory, setShowHistory] = useState(false);
   const [showSaved, setShowSaved] = useState(false);
   const [forceView, setForceView] = useState<'auto' | 'graph' | 'table'>('auto');
+  const [scriptResult, setScriptResult] = useState<ScriptResult | null>(null);
 
   // Determine result type
   const hasGraphResult = nodes.length > 0;
@@ -63,7 +71,12 @@ export function QueryTab() {
       if (file) {
         const text = await file.text();
         const graph = useUiStore.getState().activeGraph;
-        await executeScript(text, graph);
+        const result: ScriptResponse = await executeScript(text, graph);
+        if (result.errors && result.errors.length > 0) {
+          setScriptResult({ success: false, executed: result.executed, errors: result.errors });
+        } else {
+          setScriptResult({ success: true, executed: result.executed, errors: [] });
+        }
         // Refresh
         executeQuery("MATCH (n) RETURN n LIMIT 100");
       }
@@ -123,6 +136,12 @@ export function QueryTab() {
           <Upload className="h-3 w-3" />
           Upload
         </button>
+
+        {history.length > 0 && !isExecuting && (records.length > 0 || columns.length > 0 || nodes.length > 0) && (
+          <span className="text-xs text-muted-foreground">
+            {history[0].rowCount} rows &bull; {history[0].duration < 1000 ? `${history[0].duration}ms` : `${(history[0].duration / 1000).toFixed(1)}s`}
+          </span>
+        )}
 
         {(hasGraphResult || hasTableResult) && !isExecuting && (
           <div className="flex items-center gap-0.5 rounded-md border border-border p-0.5">
@@ -236,6 +255,49 @@ export function QueryTab() {
                 <ResultsTable />
               </div>
             )}
+
+          {scriptResult && !isExecuting && (
+            <div className="absolute left-3 top-3 z-10 max-w-sm">
+              <div
+                className={cn(
+                  "rounded-lg border p-4 shadow-md",
+                  scriptResult.success
+                    ? "border-emerald-500/30 bg-emerald-500/10"
+                    : "border-destructive/30 bg-destructive/10",
+                )}
+              >
+                <div className="mb-1 flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-2">
+                    {scriptResult.success ? (
+                      <Check className="h-4 w-4 text-emerald-500" />
+                    ) : (
+                      <AlertCircle className="h-4 w-4 text-destructive" />
+                    )}
+                    <span className="text-sm font-medium text-foreground">
+                      {scriptResult.success
+                        ? `Script executed: ${scriptResult.executed} statements`
+                        : `Script partially failed: ${scriptResult.executed} succeeded`}
+                    </span>
+                  </div>
+                  <button
+                    onClick={() => setScriptResult(null)}
+                    className="text-muted-foreground hover:text-foreground"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+                {scriptResult.errors.length > 0 && (
+                  <ul className="mt-2 space-y-1">
+                    {scriptResult.errors.map((err, i) => (
+                      <li key={i} className="font-mono text-xs text-destructive/80">
+                        {err}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </div>
+          )}
 
           {hasNoResult && !writeSuccess && (
             <div className="flex h-full items-center justify-center text-muted-foreground">

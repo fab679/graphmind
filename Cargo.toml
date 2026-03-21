@@ -105,43 +105,15 @@ graphmind-sdk = { path = "crates/graphmind-sdk" }
 http-body-util = "0.1"
 
 [[bench]]
-name = "graph_benchmarks"
+name = "query_benchmark"
 harness = false
 
 [[bench]]
-name = "full_benchmark"
+name = "storage_benchmark"
 harness = false
 
 [[bench]]
-name = "vector_benchmark"
-harness = false
-
-[[bench]]
-name = "graphalytics_benchmark"
-harness = false
-
-[[bench]]
-name = "ldbc_benchmark"
-harness = false
-
-[[bench]]
-name = "ldbc_bi_benchmark"
-harness = false
-
-[[bench]]
-name = "finbench_benchmark"
-harness = false
-
-[[bench]]
-name = "mvcc_benchmark"
-harness = false
-
-[[bench]]
-name = "late_materialization_bench"
-harness = false
-
-[[bench]]
-name = "graph_optimization_benchmark"
+name = "algorithm_benchmark"
 harness = false
 
 [profile.release]

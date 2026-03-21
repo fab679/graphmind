@@ -19,3 +19,6 @@ vectors/
 wal/
 data/
 .env
+
+docs/
+.CLAUDE.md

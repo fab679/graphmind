@@ -116,7 +116,6 @@ const config: Config = {
             { label: 'Architecture', to: '/docs/advanced/architecture' },
             { label: 'Vector Search', to: '/docs/advanced/vector-search' },
             { label: 'Graph Algorithms', to: '/docs/advanced/algorithms' },
-            { label: 'ADRs', to: '/docs/category/architecture-decision-records' },
           ],
         },
         {

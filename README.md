@@ -195,10 +195,6 @@ See [`dist/config.toml`](dist/config.toml) for a full config file example.
 ## Documentation
 
 - [Full Documentation](https://fab679.github.io/graphmind/)
-- [Cypher Guide](docs/CYPHER_COMPATIBILITY.md)
-- [REST API Reference](docs-site/docs/sdks/rest-api.md)
-- [Architecture](docs/ARCHITECTURE.md)
-- [LDBC Benchmark Results](docs/ldbc/)
 - [Releases & Changelog](https://github.com/fab679/graphmind/releases)
 
 ## License
