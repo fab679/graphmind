@@ -1315,42 +1315,37 @@ export const ForceGraph = forwardRef<ForceGraphHandle, ForceGraphProps>(function
         rafRef.current = requestAnimationFrame(() => drawRef.current());
       });
 
-    simRef.current = sim;
+    // Pre-compute layout: run simulation silently to completion before rendering
+    // This prevents the "double render" where nodes animate from random positions
+    sim.stop();
 
-    // If a non-force layout is active, apply it after sim initializes positions
     if (layoutRef.current !== "force") {
-      setTimeout(() => {
-        applyLayout(layoutRef.current);
-      }, 50);
+      // For non-force layouts, apply directly
+      simRef.current = sim;
+      applyLayout(layoutRef.current);
+    } else {
+      // For force layout: tick the simulation to completion silently
+      const iterations = Math.min(300, Math.ceil(Math.log(simNodes.length + 1) * 50));
+      for (let i = 0; i < iterations; i++) {
+        sim.tick();
+      }
+      simRef.current = sim;
     }
 
-    // Reset zoom
-    if (zoomRef.current && canvasRef.current) {
-      select<HTMLCanvasElement, unknown>(canvasRef.current).call(
-        zoomRef.current.transform,
-        zoomIdentity,
-      );
-      transformRef.current = { x: 0, y: 0, k: 1 };
-    }
+    // Now fit to screen with the settled positions
+    fitToScreen();
 
-    // Fix #6: Single auto-fit — use sim.on("end") + one safety timeout
-    const autoFitDone = { current: false };
-
-    const doFit = () => {
-      if (autoFitDone.current) return;
-      autoFitDone.current = true;
-      fitToScreen();
-    };
-
-    sim.on("end", doFit);
-
-    // Safety timeout in case simulation settles before "end" fires or takes too long
-    const safetyTimeout = setTimeout(doFit, 1500);
+    // Start the simulation for interactive dragging (low alpha so it's nearly settled)
+    sim.alpha(0.1)
+      .on("tick", () => {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = requestAnimationFrame(() => drawRef.current());
+      })
+      .restart();
 
     return () => {
       sim.stop();
       cancelAnimationFrame(rafRef.current);
-      clearTimeout(safetyTimeout);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nodes, edges]);

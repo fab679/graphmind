@@ -133,7 +133,7 @@ export function ExploreTab() {
 
           {/* Property inspector (floating right, on node OR edge selection) */}
           {(selectedNode || selectedEdge) && (
-            <div className="absolute right-2 top-2 z-[5] w-72 max-h-[calc(100%-16px)] overflow-auto rounded-lg border bg-card shadow-lg">
+            <div className="absolute right-2 top-14 z-[5] w-72 max-h-[calc(100%-72px)] overflow-auto rounded-lg border bg-card shadow-lg">
               <button
                 onClick={() => {
                   useGraphStore.getState().selectNode(null);
