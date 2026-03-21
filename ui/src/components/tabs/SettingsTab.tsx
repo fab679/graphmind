@@ -1,7 +1,7 @@
 import { useGraphSettingsStore } from "@/stores/graphSettingsStore";
 import { useUiStore } from "@/stores/uiStore";
 import { getColorForLabel } from "@/lib/colors";
-import { NODE_ICON_CATALOG } from "@/lib/icons";
+import { IconPicker } from "@/components/ui/icon-picker";
 import { RotateCcw } from "lucide-react";
 
 export function SettingsTab() {
@@ -14,6 +14,9 @@ export function SettingsTab() {
   const setEdgeColor = useGraphSettingsStore((s) => s.setEdgeColor);
   const setLabelIcon = useGraphSettingsStore((s) => s.setLabelIcon);
   const resetLabelIcon = useGraphSettingsStore((s) => s.resetLabelIcon);
+  const imageProperty = useGraphSettingsStore((s) => s.imageProperty);
+  const setImageProperty = useGraphSettingsStore((s) => s.setImageProperty);
+  const resetImageProperty = useGraphSettingsStore((s) => s.resetImageProperty);
   const setCaptionProperty = useGraphSettingsStore((s) => s.setCaptionProperty);
   const resetAll = useGraphSettingsStore((s) => s.resetAll);
 
@@ -60,24 +63,16 @@ export function SettingsTab() {
                     onChange={(e) => setLabelColor(nt.label, e.target.value)}
                     className="h-6 w-8 rounded cursor-pointer"
                   />
-                  <select
-                    value={labelIcons[nt.label] || ""}
-                    onChange={(e) => {
-                      if (e.target.value) {
-                        setLabelIcon(nt.label, e.target.value);
-                      } else {
-                        resetLabelIcon(nt.label);
-                      }
-                    }}
-                    className="h-6 rounded border border-border bg-input text-[10px] px-1"
-                  >
-                    <option value="">--</option>
-                    {NODE_ICON_CATALOG.map((icon) => (
-                      <option key={icon.name} value={icon.name}>
-                        {icon.name}
-                      </option>
-                    ))}
-                  </select>
+                  <IconPicker
+                    currentIcon={labelIcons[nt.label] || null}
+                    currentImageProp={imageProperty[nt.label] || null}
+                    label={nt.label}
+                    properties={nt.properties ? Object.keys(nt.properties) : []}
+                    onSelectIcon={(name) => setLabelIcon(nt.label, name)}
+                    onResetIcon={() => resetLabelIcon(nt.label)}
+                    onSelectImageProp={(prop) => setImageProperty(nt.label, prop)}
+                    onResetImageProp={() => resetImageProperty(nt.label)}
+                  />
                   <select
                     value={captionProperty[nt.label] || ""}
                     onChange={(e) =>
