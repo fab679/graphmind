@@ -1,4 +1,4 @@
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
 import {
   forceCenter,
   forceCollide,
@@ -8,9 +8,8 @@ import {
 } from "d3-force";
 import { select } from "d3-selection";
 import { zoom, zoomIdentity } from "d3-zoom";
-import type { D3ZoomEvent } from "d3-zoom";
+import type { D3ZoomEvent, ZoomBehavior } from "d3-zoom";
 import type { Simulation, SimulationNodeDatum } from "d3-force";
-import type { ZoomBehavior } from "d3-zoom";
 import type { GraphEdge, GraphNode } from "@/types/api";
 import { useGraphStore } from "@/stores/graphStore";
 import { useQueryStore } from "@/stores/queryStore";
@@ -227,12 +226,21 @@ function distToBezier(
   return minDist;
 }
 
-function isDarkMode(): boolean {
-  return document.documentElement.classList.contains("dark");
-}
-
-function getLabelColor(): string {
-  return isDarkMode() ? "#e2e8f0" : "#1e293b";
+function distToSegment(
+  px: number,
+  py: number,
+  ax: number,
+  ay: number,
+  bx: number,
+  by: number,
+): number {
+  const dx = bx - ax;
+  const dy = by - ay;
+  const lenSq = dx * dx + dy * dy;
+  if (lenSq === 0) return Math.hypot(px - ax, py - ay);
+  let t = ((px - ax) * dx + (py - ay) * dy) / lenSq;
+  t = Math.max(0, Math.min(1, t));
+  return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
 }
 
 // ---------------------------------------------------------------------------
@@ -260,7 +268,6 @@ function applyHierarchicalLayout(
 ): void {
   if (nodes.length === 0) return;
 
-  // Build adjacency and count incoming edges
   const incomingCount = new Map<string, number>();
   const adjacency = new Map<string, string[]>();
   for (const n of nodes) {
@@ -273,18 +280,15 @@ function applyHierarchicalLayout(
     incomingCount.set(tgtId, (incomingCount.get(tgtId) ?? 0) + 1);
     const neighbors = adjacency.get(srcId);
     if (neighbors) neighbors.push(tgtId);
-    // Also add reverse for undirected traversal
     const revNeighbors = adjacency.get(tgtId);
     if (revNeighbors) revNeighbors.push(srcId);
   }
 
-  // BFS from nodes with fewest incoming edges to assign layers
   const layers = new Map<string, number>();
   const sorted = [...nodes].sort(
     (a, b) => (incomingCount.get(a.id) ?? 0) - (incomingCount.get(b.id) ?? 0),
   );
 
-  // Start BFS from roots (fewest incoming)
   const queue: string[] = [];
   for (const n of sorted) {
     if (!layers.has(n.id) && (incomingCount.get(n.id) ?? 0) === 0) {
@@ -292,7 +296,6 @@ function applyHierarchicalLayout(
       queue.push(n.id);
     }
   }
-  // If no roots found, seed with first node
   if (queue.length === 0 && nodes.length > 0) {
     layers.set(sorted[0].id, 0);
     queue.push(sorted[0].id);
@@ -310,14 +313,12 @@ function applyHierarchicalLayout(
     }
   }
 
-  // Assign remaining unvisited nodes
   for (const n of nodes) {
     if (!layers.has(n.id)) {
       layers.set(n.id, 0);
     }
   }
 
-  // Group by layer
   const layerGroups = new Map<number, SimNode[]>();
   for (const n of nodes) {
     const layer = layers.get(n.id) ?? 0;
@@ -370,7 +371,6 @@ function findShortestPathBFS(
   startId: string,
   endId: string,
 ): { nodeIds: string[]; edgeIds: string[] } | null {
-  // Build adjacency from simLinks
   const adj = new Map<string, { neighbor: string; edgeId: string }[]>();
 
   for (const link of links) {
@@ -394,7 +394,6 @@ function findShortestPathBFS(
   while (queue.length > 0) {
     const current = queue.shift()!;
     if (current === endId) {
-      // Reconstruct path
       const nodeIds: string[] = [];
       const edgeIds: string[] = [];
       let cursor: string | null = endId;
@@ -429,11 +428,9 @@ function findShortestPathBFS(
 
 function nodeMatchesSearch(node: SimNode, query: string): boolean {
   const q = query.toLowerCase();
-  // Check labels
   for (const label of node.labels) {
     if (label.toLowerCase().includes(q)) return true;
   }
-  // Check properties
   for (const val of Object.values(node.properties)) {
     if (val != null && String(val).toLowerCase().includes(q)) return true;
   }
@@ -441,126 +438,442 @@ function nodeMatchesSearch(node: SimNode, query: string): boolean {
 }
 
 // ---------------------------------------------------------------------------
+// Canvas drawing helpers
+// ---------------------------------------------------------------------------
+
+function drawArrow(
+  ctx: CanvasRenderingContext2D,
+  tipX: number,
+  tipY: number,
+  ux: number,
+  uy: number,
+  isSelected: boolean,
+  edgeColor: string,
+) {
+  const size = ARROW_SIZE;
+  ctx.beginPath();
+  ctx.moveTo(tipX, tipY);
+  ctx.lineTo(tipX - ux * size + uy * size * 0.4, tipY - uy * size - ux * size * 0.4);
+  ctx.lineTo(tipX - ux * size - uy * size * 0.4, tipY - uy * size + ux * size * 0.4);
+  ctx.closePath();
+  ctx.fillStyle = isSelected ? "#60a5fa" : edgeColor;
+  ctx.fill();
+}
+
+function drawEdgeLabel(
+  ctx: CanvasRenderingContext2D,
+  label: string,
+  x: number,
+  y: number,
+  zoomScale: number,
+) {
+  if (zoomScale < 0.5) return;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillStyle = "rgba(148, 163, 184, 0.8)";
+  ctx.fillText(label, x, y - 6);
+}
+
+// ---------------------------------------------------------------------------
+// Fit-to-screen transform computation (pure function, no side effects)
+// ---------------------------------------------------------------------------
+
+function computeFitTransform(
+  simNodes: SimNode[],
+  cw: number,
+  ch: number,
+): Transform | null {
+  if (simNodes.length === 0 || cw === 0 || ch === 0) return null;
+
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const n of simNodes) {
+    if (n.x != null && n.y != null) {
+      minX = Math.min(minX, n.x - n.radius);
+      minY = Math.min(minY, n.y - n.radius);
+      maxX = Math.max(maxX, n.x + n.radius);
+      maxY = Math.max(maxY, n.y + n.radius);
+    }
+  }
+  if (!isFinite(minX)) return null;
+
+  const graphW = maxX - minX || 1;
+  const graphH = maxY - minY || 1;
+  const padding = 40;
+  const scale = Math.min((cw - padding * 2) / graphW, (ch - padding * 2) / graphH, 2);
+  const tx = (cw - graphW * scale) / 2 - minX * scale;
+  const ty = (ch - graphH * scale) / 2 - minY * scale;
+  return { x: tx, y: ty, k: scale };
+}
+
+// ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
 
-export const ForceGraph = forwardRef<ForceGraphHandle, ForceGraphProps>(function ForceGraph({
-  nodes: propNodes,
-  edges: propEdges,
-  onNodeDoubleClick,
-  hideToolbar,
-  searchQuery: searchQueryProp,
-}, ref) {
+export const ForceGraph = forwardRef<ForceGraphHandle, ForceGraphProps>(function ForceGraph(
+  { nodes: nodesProp, edges: edgesProp, hideToolbar, searchQuery: searchQueryProp, onNodeDoubleClick },
+  ref,
+) {
+  // Read from store if not passed as props
   const storeNodes = useGraphStore((s) => s.nodes);
   const storeEdges = useGraphStore((s) => s.edges);
+  const nodes = nodesProp ?? storeNodes;
+  const edges = edgesProp ?? storeEdges;
+
   const selectedNode = useGraphStore((s) => s.selectedNode);
   const selectedEdge = useGraphStore((s) => s.selectedEdge);
-  const selectNode = useGraphStore((s) => s.selectNode);
-  const selectEdge = useGraphStore((s) => s.selectEdge);
-  const selectedNodesFromStore = useGraphStore((s) => s.selectedNodes);
-
+  const selectedNodes = useGraphStore((s) => s.selectedNodes);
   const highlightMode = useGraphSettingsStore((s) => s.highlightMode);
+
   // Subscribe to trigger re-renders when these change (used in draw via getState)
   useGraphSettingsStore((s) => s.labelColors);
   useGraphSettingsStore((s) => s.edgeColors);
   useGraphSettingsStore((s) => s.labelIcons);
 
-  const nodes = propNodes ?? storeNodes;
-  const edges = propEdges ?? storeEdges;
-
-  const canvasRef = useRef<HTMLCanvasElement>(null);
+  // Canvas and simulation refs
   const containerRef = useRef<HTMLDivElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
   const simRef = useRef<Simulation<SimNode, SimLink> | null>(null);
   const simNodesRef = useRef<SimNode[]>([]);
   const simLinksRef = useRef<SimLink[]>([]);
   const transformRef = useRef<Transform>({ x: 0, y: 0, k: 1 });
   const zoomRef = useRef<ZoomBehavior<HTMLCanvasElement, unknown> | null>(null);
-  const dragNodeRef = useRef<SimNode | null>(null);
   const rafRef = useRef<number>(0);
+  const canvasRectRef = useRef<DOMRect | null>(null);
+  const layoutRef = useRef<LayoutType>("force");
+
+  // Interaction state refs (not React state — no re-renders)
   const selectedNodeIdRef = useRef<string | null>(null);
   const selectedEdgeIdRef = useRef<string | null>(null);
   const selectedNodeIdsRef = useRef<Set<string>>(new Set());
-  const highlightModeRef = useRef(highlightMode);
-  const layoutRef = useRef<LayoutType>("force");
+  const highlightModeRef = useRef(false);
   const searchQueryRef = useRef("");
-
-  // Fix #3: Cache getBoundingClientRect — store in a ref, update on resize
-  const canvasRectRef = useRef<DOMRect | null>(null);
-
-  // Fix #1: Memoize search matches — store in refs, compute in useEffect
   const searchMatchNodesRef = useRef<Set<string> | null>(null);
   const searchMatchEdgesRef = useRef<Set<string> | null>(null);
-
-  // Fix #2: Memoize connected nodes — store in refs, compute in useEffect
   const connectedNodeIdsRef = useRef<Set<string> | null>(null);
   const connectedEdgeIdsRef = useRef<Set<string> | null>(null);
 
-  // Context menu state
+  // React state (only for things that affect JSX rendering)
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
-
-  // Shortest path state
   const [shortestPathMode, setShortestPathMode] = useState(false);
   const [pathStartNode, setPathStartNode] = useState<string | null>(null);
   const [highlightedPath, setHighlightedPath] = useState<HighlightedPath | null>(null);
   const [pathBanner, setPathBanner] = useState<string | null>(null);
 
+  // Refs for shortest path state (for use in draw/events without re-render)
   const shortestPathModeRef = useRef(false);
   const pathStartNodeRef = useRef<string | null>(null);
   const highlightedPathRef = useRef<HighlightedPath | null>(null);
 
-  // Forward reference to draw (declared later but only called at runtime)
+  // ============================================================
+  // SYNC: React state -> refs (synchronously in render)
+  // ============================================================
+  selectedNodeIdRef.current = selectedNode?.id ?? null;
+  selectedEdgeIdRef.current = selectedEdge?.id ?? null;
+  selectedNodeIdsRef.current = new Set(selectedNodes.map((n) => n.id));
+  highlightModeRef.current = highlightMode;
+  shortestPathModeRef.current = shortestPathMode;
+  pathStartNodeRef.current = pathStartNode;
+  highlightedPathRef.current = highlightedPath;
+
+  // ============================================================
+  // DRAW FUNCTION (stable ref, reads everything from refs)
+  // ============================================================
   const drawRef = useRef<() => void>(() => {});
 
-  // Fix #10: Move ref syncs into useEffect instead of render body
+  // Create the draw function once, it reads all state from refs
   useEffect(() => {
-    selectedNodeIdRef.current = selectedNode?.id ?? null;
-  }, [selectedNode]);
+    drawRef.current = () => {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return;
 
-  useEffect(() => {
-    selectedEdgeIdRef.current = selectedEdge?.id ?? null;
-  }, [selectedEdge]);
-
-  useEffect(() => {
-    selectedNodeIdsRef.current = new Set(selectedNodesFromStore.map((n) => n.id));
-  }, [selectedNodesFromStore]);
-
-  useEffect(() => {
-    highlightModeRef.current = highlightMode;
-  }, [highlightMode]);
-
-  useEffect(() => {
-    shortestPathModeRef.current = shortestPathMode;
-  }, [shortestPathMode]);
-
-  useEffect(() => {
-    pathStartNodeRef.current = pathStartNode;
-  }, [pathStartNode]);
-
-  useEffect(() => {
-    highlightedPathRef.current = highlightedPath;
-  }, [highlightedPath]);
-
-  // Fix #1: Memoize search matches — compute when searchQueryProp changes
-  useEffect(() => {
-    const q = searchQueryProp ?? "";
-    searchQueryRef.current = q;
-
-    if (q) {
+      const width = canvas.width;
+      const height = canvas.height;
+      const dpr = window.devicePixelRatio || 1;
+      const t = transformRef.current;
       const simNodes = simNodesRef.current;
       const simLinks = simLinksRef.current;
-      const matchNodes = new Set<string>();
-      for (const node of simNodes) {
-        if (nodeMatchesSearch(node, q)) {
-          matchNodes.add(node.id);
-        }
-      }
-      const matchEdges = new Set<string>();
+
+      // Read all state from refs once
+      const selNodeId = selectedNodeIdRef.current;
+      const selEdgeId = selectedEdgeIdRef.current;
+      const multiSelectedIds = selectedNodeIdsRef.current;
+      const hlMode = highlightModeRef.current;
+      const currentPath = highlightedPathRef.current;
+      const spStartNode = pathStartNodeRef.current;
+      const spMode = shortestPathModeRef.current;
+      const searchMatchNodes = searchMatchNodesRef.current;
+      const searchMatchEdges = searchMatchEdgesRef.current;
+      const connectedNodeIds = connectedNodeIdsRef.current;
+      const connectedEdgeIds = connectedEdgeIdsRef.current;
+      const settingsState = useGraphSettingsStore.getState();
+      const isDark = document.documentElement.classList.contains("dark");
+      const labelColor = isDark ? "#e2e8f0" : "#1e293b";
+
+      ctx.clearRect(0, 0, width, height);
+      ctx.save();
+      ctx.scale(dpr, dpr);
+      ctx.translate(t.x, t.y);
+      ctx.scale(t.k, t.k);
+
+      // --- Edges ---
+      ctx.font = EDGE_FONT;
+
       for (const link of simLinks) {
+        const src = sourceNode(link);
+        const tgt = targetNode(link);
+        if (src.x == null || src.y == null || tgt.x == null || tgt.y == null) continue;
+
+        const isSelected = link.id === selEdgeId;
+        const isOnPath = currentPath?.edgeIds.has(link.id) ?? false;
+        const lineWidth = isSelected
+          ? SELECTED_EDGE_WIDTH
+          : isOnPath
+            ? PATH_EDGE_WIDTH
+            : DEFAULT_EDGE_WIDTH;
+
+        // Determine edge opacity
+        let edgeAlpha = 1;
+        if (currentPath) {
+          edgeAlpha = isOnPath || isSelected ? 1 : 0.08;
+        } else if (searchMatchEdges) {
+          edgeAlpha = searchMatchEdges.has(link.id) ? 1 : 0.1;
+        } else if (hlMode && selNodeId && connectedEdgeIds && !isSelected) {
+          edgeAlpha = connectedEdgeIds.has(link.id) ? 1 : 0.1;
+        }
+
+        const edgeColor = isOnPath ? PATH_COLOR : getCustomEdgeColor(link.type);
+        if (isSelected) {
+          ctx.strokeStyle = "#60a5fa";
+        } else {
+          ctx.globalAlpha = edgeAlpha;
+          ctx.strokeStyle = edgeColor;
+        }
+        ctx.lineWidth = lineWidth;
+        ctx.beginPath();
+
+        const sx = src.x;
+        const sy = src.y;
+        const tx = tgt.x;
+        const ty = tgt.y;
+
+        if (link.curvature === 0) {
+          ctx.moveTo(sx, sy);
+          ctx.lineTo(tx, ty);
+          ctx.stroke();
+
+          const dx = tx - sx;
+          const dy = ty - sy;
+          const len = Math.sqrt(dx * dx + dy * dy) || 1;
+          const ux = dx / len;
+          const uy = dy / len;
+          const arrowX = tx - ux * tgt.radius;
+          const arrowY = ty - uy * tgt.radius;
+          drawArrow(ctx, arrowX, arrowY, ux, uy, isSelected, isOnPath ? PATH_COLOR : edgeColor);
+
+          const mx = (sx + tx) / 2;
+          const my = (sy + ty) / 2;
+          drawEdgeLabel(ctx, link.type, mx, my, t.k);
+        } else {
+          const [cpx, cpy] = controlPoint(sx, sy, tx, ty, link.curvature);
+          ctx.moveTo(sx, sy);
+          ctx.quadraticCurveTo(cpx, cpy, tx, ty);
+          ctx.stroke();
+
+          const tangentX = 2 * (tx - cpx);
+          const tangentY = 2 * (ty - cpy);
+          const tangentLen = Math.sqrt(tangentX * tangentX + tangentY * tangentY) || 1;
+          const ux = tangentX / tangentLen;
+          const uy = tangentY / tangentLen;
+          const arrowX = tx - ux * tgt.radius;
+          const arrowY = ty - uy * tgt.radius;
+          drawArrow(ctx, arrowX, arrowY, ux, uy, isSelected, isOnPath ? PATH_COLOR : edgeColor);
+
+          const [mx, my] = bezierPoint(sx, sy, cpx, cpy, tx, ty, 0.5);
+          drawEdgeLabel(ctx, link.type, mx, my, t.k);
+        }
+
+        ctx.globalAlpha = 1;
+      }
+
+      // --- Nodes ---
+      for (const node of simNodes) {
+        if (node.x == null || node.y == null) continue;
+
+        const label = node.labels[0] ?? "Node";
+        const color = getCustomColorForLabel(label);
+        const isSelected = node.id === selNodeId;
+        const isOnPath = currentPath?.nodeIds.has(node.id) ?? false;
+        const isPathStart = spMode && spStartNode === node.id;
+        const isSearchMatch = searchMatchNodes?.has(node.id) ?? false;
+
+        // Determine node opacity
+        let nodeAlpha = 1;
+        if (currentPath) {
+          nodeAlpha = isOnPath || isSelected ? 1 : 0.15;
+        } else if (searchMatchNodes) {
+          nodeAlpha = isSearchMatch ? 1 : 0.2;
+        } else if (hlMode && selNodeId && connectedNodeIds && !isSelected) {
+          nodeAlpha = connectedNodeIds.has(node.id) ? 1 : 0.2;
+        }
+
+        ctx.globalAlpha = nodeAlpha;
+
+        // Path highlight ring
+        if (isOnPath && !isSelected) {
+          ctx.globalAlpha = 1;
+          ctx.beginPath();
+          ctx.arc(node.x, node.y, node.radius + PATH_RING_WIDTH, 0, Math.PI * 2);
+          ctx.fillStyle = "rgba(245, 158, 11, 0.3)";
+          ctx.fill();
+          ctx.strokeStyle = PATH_COLOR;
+          ctx.lineWidth = 2;
+          ctx.stroke();
+          ctx.globalAlpha = nodeAlpha;
+        }
+
+        // Path start node ring (green)
+        if (isPathStart && !highlightedPathRef.current) {
+          ctx.globalAlpha = 1;
+          ctx.beginPath();
+          ctx.arc(node.x, node.y, node.radius + PATH_RING_WIDTH, 0, Math.PI * 2);
+          ctx.fillStyle = "rgba(34, 197, 94, 0.3)";
+          ctx.fill();
+          ctx.strokeStyle = "#22c55e";
+          ctx.lineWidth = 2;
+          ctx.stroke();
+          ctx.globalAlpha = nodeAlpha;
+        }
+
+        // Search highlight ring (bright cyan)
+        if (isSearchMatch && searchMatchNodes && !isSelected && !isOnPath) {
+          ctx.globalAlpha = 1;
+          ctx.beginPath();
+          ctx.arc(node.x, node.y, node.radius + 3, 0, Math.PI * 2);
+          ctx.fillStyle = "rgba(6, 182, 212, 0.25)";
+          ctx.fill();
+          ctx.strokeStyle = "#06b6d4";
+          ctx.lineWidth = 2;
+          ctx.stroke();
+          ctx.globalAlpha = nodeAlpha;
+        }
+
+        // Selection ring (primary selected or multi-selected)
+        const isMultiSelected = multiSelectedIds.size > 1 && multiSelectedIds.has(node.id);
+        if (isSelected || isMultiSelected) {
+          ctx.globalAlpha = 1;
+          ctx.beginPath();
+          ctx.arc(node.x, node.y, node.radius + SELECTED_RING_WIDTH, 0, Math.PI * 2);
+          ctx.fillStyle = isSelected
+            ? "rgba(96, 165, 250, 0.35)"
+            : "rgba(96, 165, 250, 0.2)";
+          ctx.fill();
+          ctx.strokeStyle = "#60a5fa";
+          ctx.lineWidth = isSelected ? 2 : 1.5;
+          ctx.stroke();
+        }
+
+        // Node circle
+        ctx.beginPath();
+        ctx.arc(node.x, node.y, node.radius, 0, Math.PI * 2);
+        ctx.fillStyle = color;
+        ctx.fill();
+        ctx.strokeStyle = "rgba(0,0,0,0.3)";
+        ctx.lineWidth = 1;
+        ctx.stroke();
+
+        // --- Icon / image overlay ---
+        const iconName = settingsState.labelIcons[label];
+        const imagePropName = settingsState.imageProperty[label];
+
+        let drewImage = false;
+        if (imagePropName) {
+          const imgUrl = node.properties[imagePropName];
+          if (typeof imgUrl === "string" && imgUrl.startsWith("http")) {
+            const img = loadImage(imgUrl, () => drawRef.current());
+            if (img) {
+              ctx.save();
+              ctx.beginPath();
+              ctx.arc(node.x, node.y, node.radius - 1, 0, Math.PI * 2);
+              ctx.clip();
+              ctx.drawImage(img, node.x - node.radius, node.y - node.radius, node.radius * 2, node.radius * 2);
+              ctx.restore();
+              drewImage = true;
+            }
+          }
+        }
+
+        if (!drewImage && iconName) {
+          const icon = NODE_ICON_CATALOG.find((i) => i.name === iconName);
+          if (icon && icon.path) {
+            drawIconOnCanvas(ctx, icon.path, node.x, node.y, node.radius * 0.6, "rgba(255,255,255,0.9)");
+          }
+        }
+
+        // Auto-detect image URL from well-known properties
+        if (!drewImage && !iconName) {
+          const autoImgUrl = getImageUrl(node.properties);
+          if (autoImgUrl) {
+            const img = loadImage(autoImgUrl, () => drawRef.current());
+            if (img) {
+              ctx.save();
+              ctx.beginPath();
+              ctx.arc(node.x, node.y, node.radius - 1, 0, Math.PI * 2);
+              ctx.clip();
+              ctx.drawImage(img, node.x - node.radius, node.y - node.radius, node.radius * 2, node.radius * 2);
+              ctx.restore();
+            }
+          }
+        }
+
+        // Node label
+        const displayName = getNodeCaption(label, node.properties);
+        const maxLabelLen = 18;
+        const truncated =
+          displayName.length > maxLabelLen
+            ? displayName.slice(0, maxLabelLen - 1) + "\u2026"
+            : displayName;
+
+        ctx.font = LABEL_FONT;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "top";
+        ctx.fillStyle = labelColor;
+        ctx.fillText(truncated, node.x, node.y + node.radius + 3);
+
+        ctx.globalAlpha = 1;
+      }
+
+      ctx.restore();
+
+      // "No data" message
+      if (simNodes.length === 0) {
+        const noDataColor = isDark ? "#64748b" : "#94a3b8";
+        ctx.font = "14px Inter, system-ui, sans-serif";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillStyle = noDataColor;
+        ctx.fillText("No data to display", width / (2 * dpr), height / (2 * dpr));
+      }
+    };
+  }, []); // EMPTY deps -- draw reads everything from refs
+
+  // ============================================================
+  // SEARCH MATCH COMPUTATION (on search query change)
+  // ============================================================
+  useEffect(() => {
+    searchQueryRef.current = searchQueryProp ?? "";
+    const q = (searchQueryProp ?? "").toLowerCase();
+    if (q) {
+      const matchNodes = new Set<string>();
+      const matchEdges = new Set<string>();
+      for (const node of simNodesRef.current) {
+        if (nodeMatchesSearch(node, q)) matchNodes.add(node.id);
+      }
+      for (const link of simLinksRef.current) {
         const srcId = typeof link.source === "string" ? link.source : (link.source as SimNode).id;
         const tgtId = typeof link.target === "string" ? link.target : (link.target as SimNode).id;
-        if (matchNodes.has(srcId) && matchNodes.has(tgtId)) {
-          matchEdges.add(link.id);
-        }
+        if (matchNodes.has(srcId) && matchNodes.has(tgtId)) matchEdges.add(link.id);
       }
       searchMatchNodesRef.current = matchNodes;
       searchMatchEdgesRef.current = matchEdges;
@@ -568,37 +881,44 @@ export const ForceGraph = forwardRef<ForceGraphHandle, ForceGraphProps>(function
       searchMatchNodesRef.current = null;
       searchMatchEdgesRef.current = null;
     }
-
     drawRef.current();
   }, [searchQueryProp]);
 
-  // Fix #2: Memoize connected nodes — compute when selectedNode/highlightMode changes
+  // ============================================================
+  // CONNECTED NODES COMPUTATION (for highlight mode)
+  // ============================================================
   useEffect(() => {
-    const selId = selectedNode?.id ?? null;
-    if (highlightMode && selId) {
-      const simLinks = simLinksRef.current;
-      const connNodes = new Set<string>();
-      const connEdges = new Set<string>();
-      for (const link of simLinks) {
+    if (highlightMode && selectedNode) {
+      const nodeIds = new Set<string>();
+      const edgeIds = new Set<string>();
+      for (const link of simLinksRef.current) {
         const srcId = typeof link.source === "string" ? link.source : (link.source as SimNode).id;
         const tgtId = typeof link.target === "string" ? link.target : (link.target as SimNode).id;
-        if (srcId === selId || tgtId === selId) {
-          connNodes.add(srcId);
-          connNodes.add(tgtId);
-          connEdges.add(link.id);
+        if (srcId === selectedNode.id || tgtId === selectedNode.id) {
+          nodeIds.add(srcId);
+          nodeIds.add(tgtId);
+          edgeIds.add(link.id);
         }
       }
-      connectedNodeIdsRef.current = connNodes;
-      connectedEdgeIdsRef.current = connEdges;
+      connectedNodeIdsRef.current = nodeIds;
+      connectedEdgeIdsRef.current = edgeIds;
     } else {
       connectedNodeIdsRef.current = null;
       connectedEdgeIdsRef.current = null;
     }
-
     drawRef.current();
   }, [selectedNode, highlightMode]);
 
+  // ============================================================
+  // REDRAW on selection/state changes (no simulation restart!)
+  // ============================================================
+  useEffect(() => {
+    drawRef.current();
+  }, [selectedNode, selectedEdge, selectedNodes, highlightMode, highlightedPath]);
+
+  // ============================================================
   // Close context menu on Escape or scroll
+  // ============================================================
   useEffect(() => {
     if (!contextMenu) return;
 
@@ -626,10 +946,12 @@ export const ForceGraph = forwardRef<ForceGraphHandle, ForceGraphProps>(function
     };
   }, [contextMenu]);
 
+  // ============================================================
   // Escape key to exit shortest path mode
+  // ============================================================
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
-      if (e.key === "Escape" && shortestPathMode) {
+      if (e.key === "Escape" && shortestPathModeRef.current) {
         setShortestPathMode(false);
         setPathStartNode(null);
         setHighlightedPath(null);
@@ -638,619 +960,71 @@ export const ForceGraph = forwardRef<ForceGraphHandle, ForceGraphProps>(function
     }
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [shortestPathMode]);
-
-  // --------------------------------------------------
-  // Layout application
-  // --------------------------------------------------
-
-  const getCanvasDimensions = useCallback((): [number, number] => {
-    const canvas = canvasRef.current;
-    if (!canvas) return [800, 600];
-    const dpr = window.devicePixelRatio || 1;
-    return [canvas.width / dpr, canvas.height / dpr];
   }, []);
 
-  const applyLayout = useCallback(
-    (layout: LayoutType) => {
-      layoutRef.current = layout;
-      const simNodes = simNodesRef.current;
-      const simLinks = simLinksRef.current;
-      const [w, h] = getCanvasDimensions();
-
-      // Guard: if simulation hasn't built nodes yet, defer
-      if (simNodes.length === 0 || w === 0 || h === 0) {
-        console.warn("applyLayout deferred: no nodes or zero canvas", { nodes: simNodes.length, w, h });
-        return;
-      }
-
-      if (layout === "force") {
-        unpinAllNodes(simNodes);
-        if (simRef.current) {
-          simRef.current.alpha(0.8).restart();
-        }
-      } else if (layout === "circular") {
-        applyCircularLayout(simNodes, w, h);
-        if (simRef.current) {
-          simRef.current.alpha(0).stop();
-        }
-      } else if (layout === "hierarchical") {
-        applyHierarchicalLayout(simNodes, simLinks, w, h);
-        if (simRef.current) {
-          simRef.current.alpha(0).stop();
-        }
-      } else if (layout === "grid") {
-        applyGridLayout(simNodes, w, h);
-        if (simRef.current) {
-          simRef.current.alpha(0).stop();
-        }
-      }
-
-      drawRef.current();
-    },
-    [getCanvasDimensions],
-  );
-
-  // --------------------------------------------------
-  // Shortest path logic
-  // --------------------------------------------------
-
-  const handleShortestPathClick = useCallback(
-    async (node: SimNode) => {
-      if (!pathStartNodeRef.current) {
-        // First click: set start node
-        setPathStartNode(node.id);
-        setPathBanner("Click second node to find path");
-        drawRef.current();
-      } else {
-        // Second click: find path
-        const startId = pathStartNodeRef.current;
-        const endId = node.id;
-
-        if (startId === endId) {
-          setPathBanner("Start and end are the same node");
-          return;
-        }
-
-        setPathBanner("Finding path...");
-
-        // Try API first
-        let pathResult: { nodeIds: string[]; edgeIds: string[] } | null = null;
-
-        try {
-          const apiQuery = `MATCH p = shortestPath((a)-[*]-(b)) WHERE id(a) = ${startId} AND id(b) = ${endId} RETURN p`;
-          const result = await executeQuery(apiQuery);
-          if (!result.error && result.nodes.length > 0) {
-            const pathNodeIds = result.nodes.map((n) => n.id);
-            const pathEdgeIds = result.edges.map((e) => e.id);
-            pathResult = { nodeIds: pathNodeIds, edgeIds: pathEdgeIds };
-          }
-        } catch {
-          // API call failed, fall through to client-side BFS
-        }
-
-        // Fallback: client-side BFS
-        if (!pathResult) {
-          pathResult = findShortestPathBFS(simLinksRef.current, startId, endId);
-        }
-
-        if (pathResult) {
-          const hp: HighlightedPath = {
-            nodeIds: new Set(pathResult.nodeIds),
-            edgeIds: new Set(pathResult.edgeIds),
-            hops: pathResult.edgeIds.length,
-          };
-          setHighlightedPath(hp);
-          setPathBanner(`Path found: ${hp.hops} hop${hp.hops !== 1 ? "s" : ""}`);
-        } else {
-          setHighlightedPath(null);
-          setPathBanner("No path found between these nodes");
-        }
-
-        drawRef.current();
-      }
-    },
-    [],
-  );
-
-  const clearShortestPath = useCallback(() => {
-    setPathStartNode(null);
-    setHighlightedPath(null);
-    if (shortestPathModeRef.current) {
-      setPathBanner("Click first node for shortest path");
-    } else {
-      setPathBanner(null);
-    }
-    drawRef.current();
-  }, []);
-
-  // --------------------------------------------------
-  // Context menu actions
-  // --------------------------------------------------
-
-  const handleExpandNeighbors = useCallback(async (nodeId: string) => {
-    setContextMenu(null);
-    try {
-      const query = `MATCH (n)-[r]-(m) WHERE id(n) = ${nodeId} RETURN n, r, m`;
-      const result = await executeQuery(query);
-      if (result.error) {
-        console.error("Expand neighbors error:", result.error);
-        return;
-      }
-
-      const state = useGraphStore.getState();
-      const existingNodeIds = new Set(state.nodes.map((n) => n.id));
-      const existingEdgeIds = new Set(state.edges.map((e) => e.id));
-
-      const mergedNodes = [...state.nodes];
-      for (const node of result.nodes) {
-        if (!existingNodeIds.has(node.id)) {
-          mergedNodes.push(node);
-          existingNodeIds.add(node.id);
-        }
-      }
-
-      const mergedEdges = [...state.edges];
-      for (const edge of result.edges) {
-        if (!existingEdgeIds.has(edge.id)) {
-          mergedEdges.push(edge);
-          existingEdgeIds.add(edge.id);
-        }
-      }
-
-      useGraphStore.getState().setGraphData(mergedNodes, mergedEdges);
-    } catch (err) {
-      console.error("Expand neighbors failed:", err);
-    }
-  }, []);
-
-  const handleViewAllRelationships = useCallback(async () => {
-    setContextMenu(null);
-    const state = useGraphStore.getState();
-    if (state.nodes.length === 0) return;
-
-    try {
-      const canvasNodeIds = new Set(state.nodes.map((n) => n.id));
-      const existingEdgeIds = new Set(state.edges.map((e) => e.id));
-      const mergedEdges = [...state.edges];
-
-      const result = await executeQuery("MATCH (n)-[r]->(m) RETURN n, r, m");
-      if (result.error) {
-        console.error("View all relationships error:", result.error);
-        return;
-      }
-
-      for (const edge of result.edges) {
-        if (
-          canvasNodeIds.has(edge.source) &&
-          canvasNodeIds.has(edge.target) &&
-          !existingEdgeIds.has(edge.id)
-        ) {
-          mergedEdges.push(edge);
-          existingEdgeIds.add(edge.id);
-        }
-      }
-
-      useGraphStore.getState().setGraphData(state.nodes, mergedEdges);
-    } catch (err) {
-      console.error("View all relationships failed:", err);
-    }
-  }, []);
-
-  // --------------------------------------------------
-  // Fit-to-screen helper (shared by imperative handle, toolbar, and auto-fit)
-  // --------------------------------------------------
-
-  const fitToScreen = useCallback(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const simNodes = simNodesRef.current;
-    const dpr = window.devicePixelRatio || 1;
-    const cw = canvas.width / dpr;
-    const ch = canvas.height / dpr;
-
-    if (simNodes.length === 0 || cw === 0 || ch === 0) {
-      if (zoomRef.current) {
-        select<HTMLCanvasElement, unknown>(canvas).call(zoomRef.current.transform, zoomIdentity);
-      }
-      transformRef.current = { x: 0, y: 0, k: 1 };
-      drawRef.current();
-      return;
-    }
-
-    // Compute bounding box of all nodes
-    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-    for (const n of simNodes) {
-      if (n.x != null && n.y != null) {
-        minX = Math.min(minX, n.x - n.radius);
-        minY = Math.min(minY, n.y - n.radius);
-        maxX = Math.max(maxX, n.x + n.radius);
-        maxY = Math.max(maxY, n.y + n.radius);
-      }
-    }
-    if (!isFinite(minX)) {
-      transformRef.current = { x: 0, y: 0, k: 1 };
-      drawRef.current();
-      return;
-    }
-
-    const graphW = maxX - minX || 1;
-    const graphH = maxY - minY || 1;
-    const padding = 40;
-    const scale = Math.min((cw - padding * 2) / graphW, (ch - padding * 2) / graphH, 2);
-    const tx = (cw - graphW * scale) / 2 - minX * scale;
-    const ty = (ch - graphH * scale) / 2 - minY * scale;
-
-    // Update transform and sync with d3-zoom
-    transformRef.current = { x: tx, y: ty, k: scale };
-    if (zoomRef.current) {
-      select<HTMLCanvasElement, unknown>(canvas).call(
-        zoomRef.current.transform,
-        zoomIdentity.translate(tx, ty).scale(scale),
-      );
-    }
-    drawRef.current();
-  }, []);
-
-  // --------------------------------------------------
-  // Draw
-  // --------------------------------------------------
-
-  const draw = useCallback(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-
-    const width = canvas.width;
-    const height = canvas.height;
-    const dpr = window.devicePixelRatio || 1;
-    const t = transformRef.current;
-    const simNodes = simNodesRef.current;
-    const simLinks = simLinksRef.current;
-    const selNodeId = selectedNodeIdRef.current;
-    const selEdgeId = selectedEdgeIdRef.current;
-    const multiSelectedIds = selectedNodeIdsRef.current;
-    const hlMode = highlightModeRef.current;
-    const labelColor = getLabelColor();
-    const currentPath = highlightedPathRef.current;
-    const spStartNode = pathStartNodeRef.current;
-    const spMode = shortestPathModeRef.current;
-
-    // Fix #2: Read memoized connected nodes from refs (computed in useEffect)
-    const connectedNodeIds = connectedNodeIdsRef.current;
-    const connectedEdgeIds = connectedEdgeIdsRef.current;
-
-    // Fix #1: Read memoized search matches from refs (computed in useEffect)
-    const searchMatchNodes = searchMatchNodesRef.current;
-    const searchMatchEdges = searchMatchEdgesRef.current;
-
-    // Fix #4: Get store state once before draw loop
-    const settingsState = useGraphSettingsStore.getState();
-
-    ctx.clearRect(0, 0, width, height);
-    ctx.save();
-    ctx.scale(dpr, dpr);
-    ctx.translate(t.x, t.y);
-    ctx.scale(t.k, t.k);
-
-    // --- Edges ---
-    // Fix #9: Batch edge text rendering — set font once before edge loop
-    ctx.font = EDGE_FONT;
-
-    for (const link of simLinks) {
-      const src = sourceNode(link);
-      const tgt = targetNode(link);
-      if (src.x == null || src.y == null || tgt.x == null || tgt.y == null) continue;
-
-      const isSelected = link.id === selEdgeId;
-      const isOnPath = currentPath?.edgeIds.has(link.id) ?? false;
-      const lineWidth = isSelected
-        ? SELECTED_EDGE_WIDTH
-        : isOnPath
-          ? PATH_EDGE_WIDTH
-          : DEFAULT_EDGE_WIDTH;
-
-      // Determine edge opacity
-      let edgeAlpha = 1;
-      if (currentPath) {
-        // Shortest path active: dim non-path edges
-        edgeAlpha = isOnPath || isSelected ? 1 : 0.08;
-      } else if (searchMatchEdges) {
-        // Search active: dim non-matching edges
-        edgeAlpha = searchMatchEdges.has(link.id) ? 1 : 0.1;
-      } else if (hlMode && selNodeId && connectedEdgeIds && !isSelected) {
-        edgeAlpha = connectedEdgeIds.has(link.id) ? 1 : 0.1;
-      }
-
-      const edgeColor = isOnPath ? PATH_COLOR : getCustomEdgeColor(link.type);
-      if (isSelected) {
-        ctx.strokeStyle = "#60a5fa";
-      } else {
-        ctx.globalAlpha = edgeAlpha;
-        ctx.strokeStyle = edgeColor;
-      }
-      ctx.lineWidth = lineWidth;
-      ctx.beginPath();
-
-      const sx = src.x;
-      const sy = src.y;
-      const tx = tgt.x;
-      const ty = tgt.y;
-
-      if (link.curvature === 0) {
-        ctx.moveTo(sx, sy);
-        ctx.lineTo(tx, ty);
-        ctx.stroke();
-
-        const dx = tx - sx;
-        const dy = ty - sy;
-        const len = Math.sqrt(dx * dx + dy * dy) || 1;
-        const ux = dx / len;
-        const uy = dy / len;
-        const arrowX = tx - ux * tgt.radius;
-        const arrowY = ty - uy * tgt.radius;
-        drawArrow(ctx, arrowX, arrowY, ux, uy, isSelected, isOnPath ? PATH_COLOR : edgeColor);
-
-        const mx = (sx + tx) / 2;
-        const my = (sy + ty) / 2;
-        drawEdgeLabel(ctx, link.type, mx, my, t.k);
-      } else {
-        const [cpx, cpy] = controlPoint(sx, sy, tx, ty, link.curvature);
-        ctx.moveTo(sx, sy);
-        ctx.quadraticCurveTo(cpx, cpy, tx, ty);
-        ctx.stroke();
-
-        const tangentX = 2 * (tx - cpx);
-        const tangentY = 2 * (ty - cpy);
-        const tangentLen = Math.sqrt(tangentX * tangentX + tangentY * tangentY) || 1;
-        const ux = tangentX / tangentLen;
-        const uy = tangentY / tangentLen;
-        const arrowX = tx - ux * tgt.radius;
-        const arrowY = ty - uy * tgt.radius;
-        drawArrow(ctx, arrowX, arrowY, ux, uy, isSelected, isOnPath ? PATH_COLOR : edgeColor);
-
-        const [mx, my] = bezierPoint(sx, sy, cpx, cpy, tx, ty, 0.5);
-        drawEdgeLabel(ctx, link.type, mx, my, t.k);
-      }
-
-      ctx.globalAlpha = 1;
-    }
-
-    // --- Nodes ---
-    for (const node of simNodes) {
-      if (node.x == null || node.y == null) continue;
-
-      const label = node.labels[0] ?? "Node";
-      const color = getCustomColorForLabel(label);
-      const isSelected = node.id === selNodeId;
-      const isOnPath = currentPath?.nodeIds.has(node.id) ?? false;
-      const isPathStart = spMode && spStartNode === node.id;
-      const isSearchMatch = searchMatchNodes?.has(node.id) ?? false;
-
-      // Determine node opacity
-      let nodeAlpha = 1;
-      if (currentPath) {
-        nodeAlpha = isOnPath || isSelected ? 1 : 0.15;
-      } else if (searchMatchNodes) {
-        nodeAlpha = isSearchMatch ? 1 : 0.2;
-      } else if (hlMode && selNodeId && connectedNodeIds && !isSelected) {
-        nodeAlpha = connectedNodeIds.has(node.id) ? 1 : 0.2;
-      }
-
-      ctx.globalAlpha = nodeAlpha;
-
-      // Path highlight ring
-      if (isOnPath && !isSelected) {
-        ctx.globalAlpha = 1;
-        ctx.beginPath();
-        ctx.arc(node.x, node.y, node.radius + PATH_RING_WIDTH, 0, Math.PI * 2);
-        ctx.fillStyle = "rgba(245, 158, 11, 0.3)";
-        ctx.fill();
-        ctx.strokeStyle = PATH_COLOR;
-        ctx.lineWidth = 2;
-        ctx.stroke();
-        ctx.globalAlpha = nodeAlpha;
-      }
-
-      // Path start node ring (green)
-      if (isPathStart && !highlightedPathRef.current) {
-        ctx.globalAlpha = 1;
-        ctx.beginPath();
-        ctx.arc(node.x, node.y, node.radius + PATH_RING_WIDTH, 0, Math.PI * 2);
-        ctx.fillStyle = "rgba(34, 197, 94, 0.3)";
-        ctx.fill();
-        ctx.strokeStyle = "#22c55e";
-        ctx.lineWidth = 2;
-        ctx.stroke();
-        ctx.globalAlpha = nodeAlpha;
-      }
-
-      // Search highlight ring (bright cyan)
-      if (isSearchMatch && searchMatchNodes && !isSelected && !isOnPath) {
-        ctx.globalAlpha = 1;
-        ctx.beginPath();
-        ctx.arc(node.x, node.y, node.radius + 3, 0, Math.PI * 2);
-        ctx.fillStyle = "rgba(6, 182, 212, 0.25)";
-        ctx.fill();
-        ctx.strokeStyle = "#06b6d4";
-        ctx.lineWidth = 2;
-        ctx.stroke();
-        ctx.globalAlpha = nodeAlpha;
-      }
-
-      // Selection ring (primary selected or multi-selected)
-      const isMultiSelected = multiSelectedIds.size > 1 && multiSelectedIds.has(node.id);
-      if (isSelected || isMultiSelected) {
-        ctx.globalAlpha = 1;
-        ctx.beginPath();
-        ctx.arc(node.x, node.y, node.radius + SELECTED_RING_WIDTH, 0, Math.PI * 2);
-        ctx.fillStyle = isSelected
-          ? "rgba(96, 165, 250, 0.35)"
-          : "rgba(96, 165, 250, 0.2)";
-        ctx.fill();
-        ctx.strokeStyle = "#60a5fa";
-        ctx.lineWidth = isSelected ? 2 : 1.5;
-        ctx.stroke();
-      }
-
-      // Node circle
-      ctx.beginPath();
-      ctx.arc(node.x, node.y, node.radius, 0, Math.PI * 2);
-      ctx.fillStyle = color;
-      ctx.fill();
-      ctx.strokeStyle = "rgba(0,0,0,0.3)";
-      ctx.lineWidth = 1;
-      ctx.stroke();
-
-      // --- Icon / image overlay ---
-      // Fix #4: Use settingsState captured once above instead of per-node getState()
-      const iconName = settingsState.labelIcons[label];
-      const imagePropName = settingsState.imageProperty[label];
-
-      // Try explicit image property first
-      let drewImage = false;
-      if (imagePropName) {
-        const imgUrl = node.properties[imagePropName];
-        if (typeof imgUrl === "string" && imgUrl.startsWith("http")) {
-          const img = loadImage(imgUrl, () => drawRef.current());
-          if (img) {
-            ctx.save();
-            ctx.beginPath();
-            ctx.arc(node.x, node.y, node.radius - 1, 0, Math.PI * 2);
-            ctx.clip();
-            ctx.drawImage(img, node.x - node.radius, node.y - node.radius, node.radius * 2, node.radius * 2);
-            ctx.restore();
-            drewImage = true;
-          }
-        }
-      }
-
-      // If no image, try icon from catalog
-      if (!drewImage && iconName) {
-        const icon = NODE_ICON_CATALOG.find(i => i.name === iconName);
-        if (icon && icon.path) {
-          drawIconOnCanvas(ctx, icon.path, node.x, node.y, node.radius * 0.6, "rgba(255,255,255,0.9)");
-        }
-      }
-
-      // Auto-detect image URL from well-known properties
-      if (!drewImage && !iconName) {
-        const autoImgUrl = getImageUrl(node.properties);
-        if (autoImgUrl) {
-          const img = loadImage(autoImgUrl, () => drawRef.current());
-          if (img) {
-            ctx.save();
-            ctx.beginPath();
-            ctx.arc(node.x, node.y, node.radius - 1, 0, Math.PI * 2);
-            ctx.clip();
-            ctx.drawImage(img, node.x - node.radius, node.y - node.radius, node.radius * 2, node.radius * 2);
-            ctx.restore();
-          }
-        }
-      }
-
-      // Node label
-      const displayName = getNodeCaption(label, node.properties);
-      const maxLabelLen = 18;
-      const truncated =
-        displayName.length > maxLabelLen
-          ? displayName.slice(0, maxLabelLen - 1) + "\u2026"
-          : displayName;
-
-      ctx.font = LABEL_FONT;
-      ctx.textAlign = "center";
-      ctx.textBaseline = "top";
-      ctx.fillStyle = labelColor;
-      ctx.fillText(truncated, node.x, node.y + node.radius + 3);
-
-      ctx.globalAlpha = 1;
-    }
-
-    ctx.restore();
-
-    // "No data" message
-    if (simNodes.length === 0) {
-      const noDataColor = isDarkMode() ? "#64748b" : "#94a3b8";
-      ctx.font = "14px Inter, system-ui, sans-serif";
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.fillStyle = noDataColor;
-      ctx.fillText("No data to display", width / (2 * dpr), height / (2 * dpr));
-    }
-  }, []);
-
-  // Assign draw to forward ref
-  drawRef.current = draw;
-
-  // Expose imperative methods via ref
-  useImperativeHandle(ref, () => ({
-    applyLayout: (layout: string) => applyLayout(layout as LayoutType),
-    zoomIn: () => {
-      if (zoomRef.current && canvasRef.current) {
-        select<HTMLCanvasElement, unknown>(canvasRef.current).call(zoomRef.current.scaleBy, 1.3);
-      }
-    },
-    zoomOut: () => {
-      if (zoomRef.current && canvasRef.current) {
-        select<HTMLCanvasElement, unknown>(canvasRef.current).call(zoomRef.current.scaleBy, 0.7);
-      }
-    },
-    fitToScreen,
-    exportPNG: () => {
-      const canvas = canvasRef.current;
-      if (!canvas) return;
-      const exportCanvas = document.createElement("canvas");
-      exportCanvas.width = canvas.width;
-      exportCanvas.height = canvas.height;
-      const ctx = exportCanvas.getContext("2d");
-      if (!ctx) return;
-      const dark = document.documentElement.classList.contains("dark");
-      ctx.fillStyle = dark ? "#0a0f1a" : "#ffffff";
-      ctx.fillRect(0, 0, exportCanvas.width, exportCanvas.height);
-      ctx.drawImage(canvas, 0, 0);
-      const a = document.createElement("a");
-      a.href = exportCanvas.toDataURL("image/png");
-      a.download = "graphmind-export.png";
-      a.click();
-    },
-    getCanvas: () => canvasRef.current,
-    setShortestPathMode: (active: boolean) => {
-      setShortestPathMode(active);
-      if (active) {
-        setPathStartNode(null);
-        setHighlightedPath(null);
-        setPathBanner("Click first node for shortest path");
-      } else {
-        setPathStartNode(null);
-        setHighlightedPath(null);
-        setPathBanner(null);
-      }
-    },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }), []);
-
-  // --------------------------------------------------
-  // Build / rebuild simulation when data changes
-  // --------------------------------------------------
-
+  // ============================================================
+  // MAIN SETUP: Simulation + Canvas + Zoom + Events
+  // This is the ONE useEffect that does everything
+  // ============================================================
   useEffect(() => {
+    const canvas = canvasRef.current;
+    const container = containerRef.current;
+    if (!canvas || !container) return;
+
+    const dpr = window.devicePixelRatio || 1;
+
+    // --- 1. Size canvas ---
+    const rect = container.getBoundingClientRect();
+    canvas.width = rect.width * dpr;
+    canvas.height = rect.height * dpr;
+    canvas.style.width = `${rect.width}px`;
+    canvas.style.height = `${rect.height}px`;
+    canvasRectRef.current = rect;
+
+    const cw = rect.width;
+    const ch = rect.height;
+
+    // Handle empty data
+    if (nodes.length === 0) {
+      simNodesRef.current = [];
+      simLinksRef.current = [];
+      drawRef.current();
+
+      // Still set up resize observer for empty state
+      let lastW = rect.width;
+      let lastH = rect.height;
+      const resizeObs = new ResizeObserver(() => {
+        const r = container.getBoundingClientRect();
+        if (Math.abs(r.width - lastW) < 1 && Math.abs(r.height - lastH) < 1) return;
+        lastW = r.width;
+        lastH = r.height;
+        canvas.width = r.width * dpr;
+        canvas.height = r.height * dpr;
+        canvas.style.width = `${r.width}px`;
+        canvas.style.height = `${r.height}px`;
+        canvasRectRef.current = r;
+        drawRef.current();
+      });
+      resizeObs.observe(container);
+      return () => {
+        resizeObs.disconnect();
+      };
+    }
+
+    // --- 2. Build simulation data ---
     const degreeMap = new Map<string, number>();
     for (const edge of edges) {
       degreeMap.set(edge.source, (degreeMap.get(edge.source) ?? 0) + 1);
       degreeMap.set(edge.target, (degreeMap.get(edge.target) ?? 0) + 1);
     }
 
-    // Initialize nodes near center with small random offset so the simulation spreads them out
-    const cx = (canvasRef.current?.clientWidth ?? 800) / 2;
-    const cy = (canvasRef.current?.clientHeight ?? 600) / 2;
     const simNodes: SimNode[] = nodes.map((n) => ({
       id: n.id,
       labels: n.labels,
       properties: n.properties,
       radius: nodeRadius(degreeMap.get(n.id) ?? 0),
-      x: cx + (Math.random() - 0.5) * 50,
-      y: cy + (Math.random() - 0.5) * 50,
+      x: cw / 2 + (Math.random() - 0.5) * 50,
+      y: ch / 2 + (Math.random() - 0.5) * 50,
     }));
 
     const nodeIdSet = new Set(simNodes.map((n) => n.id));
@@ -1271,178 +1045,80 @@ export const ForceGraph = forwardRef<ForceGraphHandle, ForceGraphProps>(function
     simNodesRef.current = simNodes;
     simLinksRef.current = simLinks;
 
-    // Stop previous simulation
-    if (simRef.current) {
-      simRef.current.stop();
-    }
-
-    // Fix #5: Adaptive force parameters based on node count
+    // --- 3. Create and PRE-RUN simulation ---
     const nodeCount = simNodes.length;
-    const linkDistance = nodeCount > 200 ? 120 : nodeCount > 50 ? 100 : 80;
-    const chargeStrength = nodeCount > 200 ? -100 : nodeCount > 50 ? -150 : -200;
-    const distanceMax = nodeCount > 200 ? 300 : nodeCount > 50 ? 500 : Infinity;
+    const linkDist = nodeCount > 200 ? 120 : nodeCount > 50 ? 100 : 80;
+    const chargeStr = nodeCount > 200 ? -100 : nodeCount > 50 ? -150 : -200;
+    const distMax = nodeCount > 200 ? 300 : nodeCount > 50 ? 500 : Infinity;
 
     const sim = forceSimulation<SimNode>(simNodes)
       .force(
         "link",
         forceLink<SimNode, SimLink>(simLinks)
           .id((d) => d.id)
-          .distance(linkDistance),
+          .distance(linkDist),
       )
       .force(
         "charge",
         forceManyBody()
-          .strength(chargeStrength)
-          .distanceMax(distanceMax),
+          .strength(chargeStr)
+          .distanceMax(distMax),
       )
-      .force(
-        "center",
-        forceCenter(
-          (canvasRef.current?.clientWidth ?? 800) / 2,
-          (canvasRef.current?.clientHeight ?? 600) / 2,
-        ),
-      )
-      .force(
-        "collide",
-        forceCollide<SimNode>().radius((d) => d.radius + 4),
-      )
-      // Fix #5: Faster alphaDecay and higher velocityDecay for quicker settling
+      .force("center", forceCenter(cw / 2, ch / 2))
+      .force("collide", forceCollide<SimNode>().radius((d) => d.radius + 4))
       .alphaDecay(0.03)
       .velocityDecay(0.4)
-      .on("tick", () => {
-        cancelAnimationFrame(rafRef.current);
-        // Fix #8: Use drawRef.current() instead of draw directly
-        rafRef.current = requestAnimationFrame(() => drawRef.current());
-      });
+      .stop(); // DON'T auto-start
 
-    // Pre-compute layout: run simulation silently to completion before rendering
-    // This prevents the "double render" where nodes animate from random positions
-    sim.stop();
-
+    // Apply current layout or pre-tick for force layout
     if (layoutRef.current !== "force") {
-      // For non-force layouts, apply directly
       simRef.current = sim;
-      applyLayout(layoutRef.current);
-    } else {
-      // For force layout: tick the simulation to completion silently
-      const iterations = Math.min(300, Math.ceil(Math.log(simNodes.length + 1) * 50));
-      for (let i = 0; i < iterations; i++) {
-        sim.tick();
+      const layout = layoutRef.current;
+      if (layout === "circular") {
+        applyCircularLayout(simNodes, cw, ch);
+      } else if (layout === "hierarchical") {
+        applyHierarchicalLayout(simNodes, simLinks, cw, ch);
+      } else if (layout === "grid") {
+        applyGridLayout(simNodes, cw, ch);
       }
+    } else {
+      // Pre-tick to settled positions (synchronous, no rendering)
+      const iterations = Math.min(300, Math.ceil(Math.log(nodeCount + 1) * 50));
+      for (let i = 0; i < iterations; i++) sim.tick();
       simRef.current = sim;
     }
 
-    // Now fit to screen with the settled positions
-    fitToScreen();
-
-    // Start the simulation for interactive dragging (low alpha so it's nearly settled)
-    sim.alpha(0.1)
-      .on("tick", () => {
-        cancelAnimationFrame(rafRef.current);
-        rafRef.current = requestAnimationFrame(() => drawRef.current());
-      })
-      .restart();
-
-    return () => {
-      sim.stop();
-      cancelAnimationFrame(rafRef.current);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [nodes, edges]);
-
-  // --------------------------------------------------
-  // Canvas setup: zoom, resize, interaction
-  // --------------------------------------------------
-
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    const container = containerRef.current;
-    if (!canvas || !container) return;
-
-    const dpr = window.devicePixelRatio || 1;
-
-    // Fix #7: Track last dimensions to guard canvas resize
-    let lastWidth = 0;
-    let lastHeight = 0;
-
-    function resize() {
-      if (!canvas || !container) return;
-      const rect = container.getBoundingClientRect();
-      const newWidth = rect.width;
-      const newHeight = rect.height;
-
-      // Fix #7: Skip if dimensions unchanged
-      if (newWidth === lastWidth && newHeight === lastHeight) return;
-      lastWidth = newWidth;
-      lastHeight = newHeight;
-
-      canvas.width = newWidth * dpr;
-      canvas.height = newHeight * dpr;
-      canvas.style.width = `${newWidth}px`;
-      canvas.style.height = `${newHeight}px`;
-
-      // Fix #3: Update cached rect on resize
-      canvasRectRef.current = rect;
-
-      drawRef.current();
+    // --- 4. Compute initial fit-to-screen transform ---
+    const fitT = computeFitTransform(simNodes, cw, ch);
+    if (fitT) {
+      transformRef.current = fitT;
     }
 
-    const observer = new ResizeObserver(resize);
-    observer.observe(container);
-    resize();
-
-    // --- Zoom ---
-    const zoomBehavior = zoom<HTMLCanvasElement, unknown>()
-      .scaleExtent([0.1, 8])
-      .filter((event: Event) => {
-        if (event.type === "wheel") return true;
-        if (event.type === "dblclick") return false;
-        if (event instanceof MouseEvent && event.button === 0) {
-          const [mx, my] = mouseToWorld(event);
-          return !findNodeAt(mx, my);
-        }
-        return true;
-      })
-      .on("zoom", (event: D3ZoomEvent<HTMLCanvasElement, unknown>) => {
-        transformRef.current = {
-          x: event.transform.x,
-          y: event.transform.y,
-          k: event.transform.k,
-        };
-        drawRef.current();
-      });
-
-    zoomRef.current = zoomBehavior;
-    const sel = select<HTMLCanvasElement, unknown>(canvas).call(zoomBehavior);
-
-    // --- Mouse helpers ---
-    // Fix #3: Use cached rect in mouse handlers
+    // --- 5. Mouse/touch helpers (closured for event handlers) ---
     function mouseToWorld(event: MouseEvent): [number, number] {
-      if (!canvas) return [0, 0];
-      const rect = canvasRectRef.current ?? canvas.getBoundingClientRect();
+      const r = canvasRectRef.current ?? canvas!.getBoundingClientRect();
       const t = transformRef.current;
-      const cx = event.clientX - rect.left;
-      const cy = event.clientY - rect.top;
-      return [(cx - t.x) / t.k, (cy - t.y) / t.k];
+      const mx = event.clientX - r.left;
+      const my = event.clientY - r.top;
+      return [(mx - t.x) / t.k, (my - t.y) / t.k];
     }
 
     function findNodeAt(wx: number, wy: number): SimNode | null {
-      const simNodes = simNodesRef.current;
-      for (let i = simNodes.length - 1; i >= 0; i--) {
-        const n = simNodes[i];
+      const sn = simNodesRef.current;
+      for (let i = sn.length - 1; i >= 0; i--) {
+        const n = sn[i];
         if (n.x == null || n.y == null) continue;
-        const dist = Math.hypot(wx - n.x, wy - n.y);
-        if (dist <= n.radius + HIT_TOLERANCE) return n;
+        if (Math.hypot(wx - n.x, wy - n.y) <= n.radius + HIT_TOLERANCE) return n;
       }
       return null;
     }
 
     function findEdgeAt(wx: number, wy: number): SimLink | null {
-      const simLinks = simLinksRef.current;
+      const sl = simLinksRef.current;
       let closest: SimLink | null = null;
       let closestDist = HIT_TOLERANCE;
 
-      for (const link of simLinks) {
+      for (const link of sl) {
         const src = sourceNode(link);
         const tgt = targetNode(link);
         if (src.x == null || src.y == null || tgt.x == null || tgt.y == null) continue;
@@ -1463,24 +1139,66 @@ export const ForceGraph = forwardRef<ForceGraphHandle, ForceGraphProps>(function
       return closest;
     }
 
-    function distToSegment(
-      px: number,
-      py: number,
-      ax: number,
-      ay: number,
-      bx: number,
-      by: number,
-    ): number {
-      const dx = bx - ax;
-      const dy = by - ay;
-      const lenSq = dx * dx + dy * dy;
-      if (lenSq === 0) return Math.hypot(px - ax, py - ay);
-      let t = ((px - ax) * dx + (py - ay) * dy) / lenSq;
-      t = Math.max(0, Math.min(1, t));
-      return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
-    }
+    // --- 6. Set up D3 zoom ---
+    const zoomBehavior = zoom<HTMLCanvasElement, unknown>()
+      .scaleExtent([0.1, 8])
+      .filter((event: Event) => {
+        if (event.type === "wheel") return true;
+        if (event.type === "dblclick") return false;
+        if (event instanceof MouseEvent && event.button === 0) {
+          const [mx, my] = mouseToWorld(event);
+          return !findNodeAt(mx, my);
+        }
+        return true;
+      })
+      .on("zoom", (event: D3ZoomEvent<HTMLCanvasElement, unknown>) => {
+        transformRef.current = {
+          x: event.transform.x,
+          y: event.transform.y,
+          k: event.transform.k,
+        };
+        drawRef.current();
+      });
 
-    // --- Drag & click ---
+    const canvasSel = select<HTMLCanvasElement, unknown>(canvas);
+    canvasSel.call(zoomBehavior);
+
+    // Sync zoom to match our computed transform
+    const t = transformRef.current;
+    canvasSel.call(zoomBehavior.transform, zoomIdentity.translate(t.x, t.y).scale(t.k));
+
+    zoomRef.current = zoomBehavior;
+
+    // --- 7. Initial draw ---
+    drawRef.current();
+
+    // --- 8. Start simulation for interactive dragging (very low alpha) ---
+    sim.alpha(0.05)
+      .on("tick", () => {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = requestAnimationFrame(() => drawRef.current());
+      })
+      .restart();
+
+    // --- 9. Resize observer ---
+    let lastW = rect.width;
+    let lastH = rect.height;
+    const resizeObs = new ResizeObserver(() => {
+      const r = container.getBoundingClientRect();
+      if (Math.abs(r.width - lastW) < 1 && Math.abs(r.height - lastH) < 1) return;
+      lastW = r.width;
+      lastH = r.height;
+      canvas.width = r.width * dpr;
+      canvas.height = r.height * dpr;
+      canvas.style.width = `${r.width}px`;
+      canvas.style.height = `${r.height}px`;
+      canvasRectRef.current = r;
+      drawRef.current();
+    });
+    resizeObs.observe(container);
+
+    // --- 10. Mouse/touch event handlers ---
+    let dragNode: SimNode | null = null;
     let isDragging = false;
     let didDrag = false;
 
@@ -1491,7 +1209,7 @@ export const ForceGraph = forwardRef<ForceGraphHandle, ForceGraphProps>(function
       if (node) {
         isDragging = true;
         didDrag = false;
-        dragNodeRef.current = node;
+        dragNode = node;
         node.fx = node.x;
         node.fy = node.y;
         simRef.current?.alphaTarget(0.3).restart();
@@ -1499,30 +1217,92 @@ export const ForceGraph = forwardRef<ForceGraphHandle, ForceGraphProps>(function
     }
 
     function onMouseMove(event: MouseEvent) {
-      if (!isDragging || !dragNodeRef.current) {
+      if (!isDragging || !dragNode) {
         const [wx, wy] = mouseToWorld(event);
         const over = findNodeAt(wx, wy);
-        if (canvas) canvas.style.cursor = over ? "grab" : "default";
+        canvas!.style.cursor = over ? "grab" : "default";
         return;
       }
       didDrag = true;
-      if (canvas) canvas.style.cursor = "grabbing";
+      canvas!.style.cursor = "grabbing";
       const [wx, wy] = mouseToWorld(event);
-      dragNodeRef.current.fx = wx;
-      dragNodeRef.current.fy = wy;
+      dragNode.fx = wx;
+      dragNode.fy = wy;
     }
 
     function onMouseUp() {
-      if (isDragging && dragNodeRef.current) {
+      if (isDragging && dragNode) {
         // For non-force layouts, keep node pinned at new position
         if (layoutRef.current === "force") {
-          dragNodeRef.current.fx = null;
-          dragNodeRef.current.fy = null;
+          dragNode.fx = null;
+          dragNode.fy = null;
         }
         simRef.current?.alphaTarget(0);
         isDragging = false;
-        dragNodeRef.current = null;
+        dragNode = null;
       }
+    }
+
+    async function handleShortestPathClick(node: SimNode) {
+      if (!pathStartNodeRef.current) {
+        setPathStartNode(node.id);
+        setPathBanner("Click second node to find path");
+        drawRef.current();
+      } else {
+        const startId = pathStartNodeRef.current;
+        const endId = node.id;
+
+        if (startId === endId) {
+          setPathBanner("Start and end are the same node");
+          return;
+        }
+
+        setPathBanner("Finding path...");
+
+        let pathResult: { nodeIds: string[]; edgeIds: string[] } | null = null;
+
+        try {
+          const apiQuery = `MATCH p = shortestPath((a)-[*]-(b)) WHERE id(a) = ${startId} AND id(b) = ${endId} RETURN p`;
+          const result = await executeQuery(apiQuery);
+          if (!result.error && result.nodes.length > 0) {
+            const pathNodeIds = result.nodes.map((n) => n.id);
+            const pathEdgeIds = result.edges.map((e) => e.id);
+            pathResult = { nodeIds: pathNodeIds, edgeIds: pathEdgeIds };
+          }
+        } catch {
+          // API call failed, fall through to client-side BFS
+        }
+
+        if (!pathResult) {
+          pathResult = findShortestPathBFS(simLinksRef.current, startId, endId);
+        }
+
+        if (pathResult) {
+          const hp: HighlightedPath = {
+            nodeIds: new Set(pathResult.nodeIds),
+            edgeIds: new Set(pathResult.edgeIds),
+            hops: pathResult.edgeIds.length,
+          };
+          setHighlightedPath(hp);
+          setPathBanner(`Path found: ${hp.hops} hop${hp.hops !== 1 ? "s" : ""}`);
+        } else {
+          setHighlightedPath(null);
+          setPathBanner("No path found between these nodes");
+        }
+
+        drawRef.current();
+      }
+    }
+
+    function clearShortestPath() {
+      setPathStartNode(null);
+      setHighlightedPath(null);
+      if (shortestPathModeRef.current) {
+        setPathBanner("Click first node for shortest path");
+      } else {
+        setPathBanner(null);
+      }
+      drawRef.current();
     }
 
     function onClick(event: MouseEvent) {
@@ -1536,7 +1316,6 @@ export const ForceGraph = forwardRef<ForceGraphHandle, ForceGraphProps>(function
       // Handle shortest path mode
       if (shortestPathModeRef.current) {
         if (node) {
-          // If there's already a highlighted path, clear it first
           if (highlightedPathRef.current) {
             clearShortestPath();
             return;
@@ -1544,7 +1323,6 @@ export const ForceGraph = forwardRef<ForceGraphHandle, ForceGraphProps>(function
           handleShortestPathClick(node);
           return;
         }
-        // Clicked empty space: clear path if displayed
         if (highlightedPathRef.current) {
           clearShortestPath();
           return;
@@ -1552,28 +1330,29 @@ export const ForceGraph = forwardRef<ForceGraphHandle, ForceGraphProps>(function
       }
 
       if (node) {
-        const graphNode = {
+        const graphNode: GraphNode = {
           id: node.id,
           labels: node.labels,
           properties: node.properties,
         };
         if (event.shiftKey) {
-          const { selectedNodes: selNodes, addToSelection, removeFromSelection } = useGraphStore.getState();
-          const isAlreadySelected = selNodes.some((n) => n.id === node.id);
+          const store = useGraphStore.getState();
+          const isAlreadySelected = store.selectedNodes.some((n) => n.id === node.id);
           if (isAlreadySelected) {
-            removeFromSelection(graphNode);
+            store.removeFromSelection(graphNode);
           } else {
-            addToSelection(graphNode);
+            store.addToSelection(graphNode);
           }
         } else {
-          selectNode(graphNode);
+          useGraphStore.getState().selectNode(graphNode);
         }
         drawRef.current();
         return;
       }
+
       const edge = findEdgeAt(wx, wy);
       if (edge) {
-        selectEdge({
+        useGraphStore.getState().selectEdge({
           id: edge.id,
           source: sourceNode(edge).id,
           target: targetNode(edge).id,
@@ -1583,8 +1362,9 @@ export const ForceGraph = forwardRef<ForceGraphHandle, ForceGraphProps>(function
         drawRef.current();
         return;
       }
+
       // Clicked on empty space -- clear selection
-      selectNode(null);
+      useGraphStore.getState().selectNode(null);
       drawRef.current();
     }
 
@@ -1622,9 +1402,12 @@ export const ForceGraph = forwardRef<ForceGraphHandle, ForceGraphProps>(function
     canvas.addEventListener("dblclick", onDblClick);
     canvas.addEventListener("contextmenu", onContextMenu);
 
+    // --- 11. Cleanup ---
     return () => {
-      observer.disconnect();
-      sel.on(".zoom", null);
+      sim.stop();
+      cancelAnimationFrame(rafRef.current);
+      resizeObs.disconnect();
+      canvasSel.on(".zoom", null);
       canvas.removeEventListener("mousedown", onMouseDown);
       canvas.removeEventListener("mousemove", onMouseMove);
       window.removeEventListener("mouseup", onMouseUp);
@@ -1632,14 +1415,199 @@ export const ForceGraph = forwardRef<ForceGraphHandle, ForceGraphProps>(function
       canvas.removeEventListener("dblclick", onDblClick);
       canvas.removeEventListener("contextmenu", onContextMenu);
     };
-    // Fix #8: Removed `draw` from deps — uses drawRef.current() throughout
-  }, [selectNode, selectEdge, onNodeDoubleClick, handleShortestPathClick, clearShortestPath]);
+  }, [nodes, edges, onNodeDoubleClick]); // ONLY rebuild on data change
 
-  // Re-draw when selection or highlight mode changes (without restarting simulation)
-  useEffect(() => {
+  // ============================================================
+  // Helper: get canvas logical dimensions
+  // ============================================================
+  function getCanvasDimensions(): [number, number] {
+    const canvas = canvasRef.current;
+    if (!canvas) return [800, 600];
+    const dpr = window.devicePixelRatio || 1;
+    return [canvas.width / dpr, canvas.height / dpr];
+  }
+
+  // ============================================================
+  // Layout application (used by imperative handle and toolbar)
+  // ============================================================
+  function doApplyLayout(layout: LayoutType) {
+    layoutRef.current = layout;
+    const simNodes = simNodesRef.current;
+    const simLinks = simLinksRef.current;
+    const [w, h] = getCanvasDimensions();
+
+    if (simNodes.length === 0 || w === 0 || h === 0) return;
+
+    if (layout === "force") {
+      unpinAllNodes(simNodes);
+      if (simRef.current) {
+        simRef.current.alpha(0.8).restart();
+      }
+    } else if (layout === "circular") {
+      applyCircularLayout(simNodes, w, h);
+      simRef.current?.alpha(0).stop();
+    } else if (layout === "hierarchical") {
+      applyHierarchicalLayout(simNodes, simLinks, w, h);
+      simRef.current?.alpha(0).stop();
+    } else if (layout === "grid") {
+      applyGridLayout(simNodes, w, h);
+      simRef.current?.alpha(0).stop();
+    }
+
     drawRef.current();
-  }, [selectedNode, selectedEdge, selectedNodesFromStore, highlightMode, highlightedPath]);
+  }
 
+  // ============================================================
+  // Fit-to-screen (used by imperative handle and toolbar)
+  // ============================================================
+  function doFitToScreen() {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const dpr = window.devicePixelRatio || 1;
+    const cw = canvas.width / dpr;
+    const ch = canvas.height / dpr;
+
+    const fitT = computeFitTransform(simNodesRef.current, cw, ch);
+    if (fitT) {
+      transformRef.current = fitT;
+      if (zoomRef.current) {
+        select<HTMLCanvasElement, unknown>(canvas).call(
+          zoomRef.current.transform,
+          zoomIdentity.translate(fitT.x, fitT.y).scale(fitT.k),
+        );
+      }
+    } else {
+      transformRef.current = { x: 0, y: 0, k: 1 };
+      if (zoomRef.current) {
+        select<HTMLCanvasElement, unknown>(canvas).call(zoomRef.current.transform, zoomIdentity);
+      }
+    }
+    drawRef.current();
+  }
+
+  // ============================================================
+  // Context menu actions
+  // ============================================================
+  async function handleExpandNeighbors(nodeId: string) {
+    setContextMenu(null);
+    try {
+      const query = `MATCH (n)-[r]-(m) WHERE id(n) = ${nodeId} RETURN n, r, m`;
+      const result = await executeQuery(query);
+      if (result.error) {
+        console.error("Expand neighbors error:", result.error);
+        return;
+      }
+
+      const state = useGraphStore.getState();
+      const existingNodeIds = new Set(state.nodes.map((n) => n.id));
+      const existingEdgeIds = new Set(state.edges.map((e) => e.id));
+
+      const mergedNodes = [...state.nodes];
+      for (const node of result.nodes) {
+        if (!existingNodeIds.has(node.id)) {
+          mergedNodes.push(node);
+          existingNodeIds.add(node.id);
+        }
+      }
+
+      const mergedEdges = [...state.edges];
+      for (const edge of result.edges) {
+        if (!existingEdgeIds.has(edge.id)) {
+          mergedEdges.push(edge);
+          existingEdgeIds.add(edge.id);
+        }
+      }
+
+      useGraphStore.getState().setGraphData(mergedNodes, mergedEdges);
+    } catch (err) {
+      console.error("Expand neighbors failed:", err);
+    }
+  }
+
+  async function handleViewAllRelationships() {
+    setContextMenu(null);
+    const state = useGraphStore.getState();
+    if (state.nodes.length === 0) return;
+
+    try {
+      const canvasNodeIds = new Set(state.nodes.map((n) => n.id));
+      const existingEdgeIds = new Set(state.edges.map((e) => e.id));
+      const mergedEdges = [...state.edges];
+
+      const result = await executeQuery("MATCH (n)-[r]->(m) RETURN n, r, m");
+      if (result.error) {
+        console.error("View all relationships error:", result.error);
+        return;
+      }
+
+      for (const edge of result.edges) {
+        if (
+          canvasNodeIds.has(edge.source) &&
+          canvasNodeIds.has(edge.target) &&
+          !existingEdgeIds.has(edge.id)
+        ) {
+          mergedEdges.push(edge);
+          existingEdgeIds.add(edge.id);
+        }
+      }
+
+      useGraphStore.getState().setGraphData(state.nodes, mergedEdges);
+    } catch (err) {
+      console.error("View all relationships failed:", err);
+    }
+  }
+
+  // ============================================================
+  // Imperative handle
+  // ============================================================
+  useImperativeHandle(ref, () => ({
+    applyLayout: (layout: string) => doApplyLayout(layout as LayoutType),
+    zoomIn: () => {
+      if (zoomRef.current && canvasRef.current) {
+        select<HTMLCanvasElement, unknown>(canvasRef.current).call(zoomRef.current.scaleBy, 1.3);
+      }
+    },
+    zoomOut: () => {
+      if (zoomRef.current && canvasRef.current) {
+        select<HTMLCanvasElement, unknown>(canvasRef.current).call(zoomRef.current.scaleBy, 0.7);
+      }
+    },
+    fitToScreen: doFitToScreen,
+    exportPNG: () => {
+      const cvs = canvasRef.current;
+      if (!cvs) return;
+      const exportCanvas = document.createElement("canvas");
+      exportCanvas.width = cvs.width;
+      exportCanvas.height = cvs.height;
+      const ctx = exportCanvas.getContext("2d");
+      if (!ctx) return;
+      const dark = document.documentElement.classList.contains("dark");
+      ctx.fillStyle = dark ? "#0a0f1a" : "#ffffff";
+      ctx.fillRect(0, 0, exportCanvas.width, exportCanvas.height);
+      ctx.drawImage(cvs, 0, 0);
+      const a = document.createElement("a");
+      a.href = exportCanvas.toDataURL("image/png");
+      a.download = "graphmind-export.png";
+      a.click();
+    },
+    getCanvas: () => canvasRef.current,
+    setShortestPathMode: (active: boolean) => {
+      setShortestPathMode(active);
+      if (active) {
+        setPathStartNode(null);
+        setHighlightedPath(null);
+        setPathBanner("Click first node for shortest path");
+      } else {
+        setPathStartNode(null);
+        setHighlightedPath(null);
+        setPathBanner(null);
+      }
+    },
+  }));
+
+  // ============================================================
+  // RENDER
+  // ============================================================
   return (
     <div ref={containerRef} style={{ width: "100%", height: "100%", position: "relative" }}>
       <canvas ref={canvasRef} style={{ display: "block" }} />
@@ -1655,9 +1623,9 @@ export const ForceGraph = forwardRef<ForceGraphHandle, ForceGraphProps>(function
       {!hideToolbar && (
         <GraphToolbar
           onLayoutChange={(layout) => {
-            applyLayout(layout as LayoutType);
+            doApplyLayout(layout as LayoutType);
           }}
-          onFitToScreen={fitToScreen}
+          onFitToScreen={doFitToScreen}
           onZoomIn={() => {
             if (zoomRef.current && canvasRef.current) {
               select<HTMLCanvasElement, unknown>(canvasRef.current).call(
@@ -1763,43 +1731,5 @@ export const ForceGraph = forwardRef<ForceGraphHandle, ForceGraphProps>(function
     </div>
   );
 });
-
-// ---------------------------------------------------------------------------
-// Canvas drawing helpers (kept outside component to avoid closure allocations)
-// ---------------------------------------------------------------------------
-
-function drawArrow(
-  ctx: CanvasRenderingContext2D,
-  tipX: number,
-  tipY: number,
-  ux: number,
-  uy: number,
-  isSelected: boolean,
-  edgeColor: string,
-) {
-  const size = ARROW_SIZE;
-  ctx.beginPath();
-  ctx.moveTo(tipX, tipY);
-  ctx.lineTo(tipX - ux * size + uy * size * 0.4, tipY - uy * size - ux * size * 0.4);
-  ctx.lineTo(tipX - ux * size - uy * size * 0.4, tipY - uy * size + ux * size * 0.4);
-  ctx.closePath();
-  ctx.fillStyle = isSelected ? "#60a5fa" : edgeColor;
-  ctx.fill();
-}
-
-function drawEdgeLabel(
-  ctx: CanvasRenderingContext2D,
-  label: string,
-  x: number,
-  y: number,
-  zoomScale: number,
-) {
-  if (zoomScale < 0.5) return;
-  // Fix #9: Font is already set once before the edge loop; just set alignment
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  ctx.fillStyle = "rgba(148, 163, 184, 0.8)";
-  ctx.fillText(label, x, y - 6);
-}
 
 export default ForceGraph;
