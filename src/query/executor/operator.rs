@@ -3250,7 +3250,15 @@ impl ExpandOperator {
             Direction::Incoming => store.get_incoming_edge_sources(node_id),
             Direction::Both => {
                 let mut all = store.get_outgoing_edge_targets(node_id);
-                all.extend(store.get_incoming_edge_sources(node_id));
+                let incoming = store.get_incoming_edge_sources(node_id);
+                // Deduplicate by edge ID (self-loops appear in both outgoing and incoming)
+                let mut seen_ids: HashSet<crate::graph::EdgeId> =
+                    all.iter().map(|(eid, ..)| *eid).collect();
+                for edge in incoming {
+                    if seen_ids.insert(edge.0) {
+                        all.push(edge);
+                    }
+                }
                 all
             }
         };
@@ -6329,6 +6337,62 @@ impl PhysicalOperator for MatchCreateEdgeOperator {
 
     fn is_mutating(&self) -> bool {
         true
+    }
+}
+
+/// Mock procedure operator for TCK test procedures
+pub struct MockProcedureOperator {
+    name: String,
+    args: Vec<Expression>,
+    yield_vars: Vec<String>,
+    executed: bool,
+}
+
+impl MockProcedureOperator {
+    pub fn new(name: String, args: Vec<Expression>, yield_vars: Vec<String>) -> Self {
+        Self {
+            name,
+            args,
+            yield_vars,
+            executed: false,
+        }
+    }
+}
+
+impl PhysicalOperator for MockProcedureOperator {
+    fn next(&mut self, store: &GraphStore) -> ExecutionResult<Option<Record>> {
+        if self.executed {
+            return Ok(None);
+        }
+        self.executed = true;
+
+        if self.name.to_lowercase() == "test.donothing" {
+            return Ok(None);
+        }
+
+        // Return one record mapping arguments to yield columns
+        let mut record = Record::new();
+        for (i, yield_var) in self.yield_vars.iter().enumerate() {
+            if i < self.args.len() {
+                let val = eval_expression(&self.args[i], &Record::new(), store)?;
+                record.bind(yield_var.clone(), val);
+            } else {
+                record.bind(yield_var.clone(), Value::Null);
+            }
+        }
+        Ok(Some(record))
+    }
+
+    fn reset(&mut self) {
+        self.executed = false;
+    }
+
+    fn describe(&self) -> OperatorDescription {
+        OperatorDescription {
+            name: "MockProcedure".to_string(),
+            details: self.name.clone(),
+            children: vec![],
+        }
     }
 }
 
