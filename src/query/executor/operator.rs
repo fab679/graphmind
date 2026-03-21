@@ -107,7 +107,36 @@ fn node_id_of(v: &Value) -> Option<NodeId> {
     }
 }
 
-/// Shared binary operator evaluation used by Project, Aggregate, and Sort operators
+/// Cross-type equality with coercion: Integer↔Float promotion, String↔Boolean coercion
+fn coerced_eq(left: &PropertyValue, right: &PropertyValue) -> bool {
+    match (left, right) {
+        _ if std::mem::discriminant(left) == std::mem::discriminant(right) => left == right,
+        (PropertyValue::Integer(l), PropertyValue::Float(r)) => (*l as f64) == *r,
+        (PropertyValue::Float(l), PropertyValue::Integer(r)) => *l == (*r as f64),
+        (PropertyValue::DateTime(l), PropertyValue::Integer(r))
+        | (PropertyValue::Integer(r), PropertyValue::DateTime(l)) => l == r,
+        (PropertyValue::Boolean(b), PropertyValue::String(s))
+        | (PropertyValue::String(s), PropertyValue::Boolean(b)) => {
+            match s.to_lowercase().as_str() {
+                "true" => *b,
+                "false" => !*b,
+                _ => false,
+            }
+        }
+        _ => false,
+    }
+}
+
+/// Cross-type partial comparison with numeric promotion
+fn coerced_partial_cmp(left: &PropertyValue, right: &PropertyValue) -> Option<std::cmp::Ordering> {
+    match (left, right) {
+        (PropertyValue::Integer(l), PropertyValue::Float(r)) => (*l as f64).partial_cmp(r),
+        (PropertyValue::Float(l), PropertyValue::Integer(r)) => l.partial_cmp(&(*r as f64)),
+        _ => left.partial_cmp(right),
+    }
+}
+
+/// Shared binary operator evaluation used by Project, Aggregate, Filter, and Sort operators
 fn eval_binary_op(op: &BinaryOp, left: Value, right: Value) -> ExecutionResult<Value> {
     // Node/edge identity comparison (Cypher: n1 = n2, n1 <> n2)
     if matches!(op, BinaryOp::Eq | BinaryOp::Ne) {
@@ -137,11 +166,50 @@ fn eval_binary_op(op: &BinaryOp, left: Value, right: Value) -> ExecutionResult<V
             ))
         }
     };
+
+    // Null propagation: most operators return null when either operand is null
+    // Exceptions: IS NULL/IS NOT NULL (handled in unary), AND/OR (three-valued logic)
+    let left_is_null = matches!(left_prop, PropertyValue::Null);
+    let right_is_null = matches!(right_prop, PropertyValue::Null);
+
+    if left_is_null || right_is_null {
+        match op {
+            // Three-valued logic for AND/OR
+            BinaryOp::And => {
+                return match (&left_prop, &right_prop) {
+                    // false AND null = false, null AND false = false
+                    (PropertyValue::Boolean(false), _) | (_, PropertyValue::Boolean(false)) => {
+                        Ok(Value::Property(PropertyValue::Boolean(false)))
+                    }
+                    // true AND null = null, null AND true = null, null AND null = null
+                    _ => Ok(Value::Null),
+                };
+            }
+            BinaryOp::Or => {
+                return match (&left_prop, &right_prop) {
+                    // true OR null = true, null OR true = true
+                    (PropertyValue::Boolean(true), _) | (_, PropertyValue::Boolean(true)) => {
+                        Ok(Value::Property(PropertyValue::Boolean(true)))
+                    }
+                    // false OR null = null, null OR false = null, null OR null = null
+                    _ => Ok(Value::Null),
+                };
+            }
+            BinaryOp::Xor => {
+                return Ok(Value::Null); // XOR with null is always null
+            }
+            // IN with null left operand returns null
+            BinaryOp::In if left_is_null => return Ok(Value::Null),
+            // All other ops: null propagation
+            _ => return Ok(Value::Null),
+        }
+    }
+
     let result = match op {
-        BinaryOp::Eq => PropertyValue::Boolean(left_prop == right_prop),
-        BinaryOp::Ne => PropertyValue::Boolean(left_prop != right_prop),
+        BinaryOp::Eq => PropertyValue::Boolean(coerced_eq(&left_prop, &right_prop)),
+        BinaryOp::Ne => PropertyValue::Boolean(!coerced_eq(&left_prop, &right_prop)),
         BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge => {
-            let cmp = left_prop.partial_cmp(&right_prop);
+            let cmp = coerced_partial_cmp(&left_prop, &right_prop);
             match (op, cmp) {
                 (BinaryOp::Lt, Some(std::cmp::Ordering::Less)) => PropertyValue::Boolean(true),
                 (BinaryOp::Le, Some(std::cmp::Ordering::Less | std::cmp::Ordering::Equal)) => {
@@ -172,6 +240,16 @@ fn eval_binary_op(op: &BinaryOp, left: Value, right: Value) -> ExecutionResult<V
             _ => {
                 return Err(ExecutionError::TypeError(
                     "OR requires booleans".to_string(),
+                ))
+            }
+        },
+        BinaryOp::Xor => match (&left_prop, &right_prop) {
+            (PropertyValue::Boolean(l), PropertyValue::Boolean(r)) => {
+                PropertyValue::Boolean(*l ^ *r)
+            }
+            _ => {
+                return Err(ExecutionError::TypeError(
+                    "XOR requires booleans".to_string(),
                 ))
             }
         },
@@ -408,6 +486,7 @@ fn eval_unary_op(op: &UnaryOp, val: Value) -> ExecutionResult<Value> {
             Value::Property(PropertyValue::Boolean(b)) => {
                 Ok(Value::Property(PropertyValue::Boolean(!b)))
             }
+            Value::Null | Value::Property(PropertyValue::Null) => Ok(Value::Null),
             _ => Err(ExecutionError::TypeError(
                 "NOT requires boolean".to_string(),
             )),
@@ -419,6 +498,7 @@ fn eval_unary_op(op: &UnaryOp, val: Value) -> ExecutionResult<Value> {
             Value::Property(PropertyValue::Float(f)) => {
                 Ok(Value::Property(PropertyValue::Float(-f)))
             }
+            Value::Null | Value::Property(PropertyValue::Null) => Ok(Value::Null),
             _ => Err(ExecutionError::TypeError(
                 "Negation requires numeric type".to_string(),
             )),
@@ -961,7 +1041,31 @@ fn eval_pattern_comprehension(
 
 /// Shared function evaluation for scalar functions (not aggregates)
 fn eval_function(name: &str, args: &[Value], store: Option<&GraphStore>) -> ExecutionResult<Value> {
-    match name.to_lowercase().as_str() {
+    let lower_name = name.to_lowercase();
+
+    // Null propagation: most functions return null if any argument is null.
+    // Exceptions: coalesce (designed for null handling), count (aggregation),
+    // and type conversion functions (handle null themselves).
+    let null_passthrough = !matches!(
+        lower_name.as_str(),
+        "coalesce"
+            | "count"
+            | "exists"
+            | "tostring"
+            | "tointeger"
+            | "toint"
+            | "tofloat"
+            | "toboolean"
+    );
+    if null_passthrough && !args.is_empty() {
+        for arg in args {
+            if matches!(arg, Value::Null | Value::Property(PropertyValue::Null)) {
+                return Ok(Value::Null);
+            }
+        }
+    }
+
+    match lower_name.as_str() {
         // String functions
         "toupper" | "touppercase" => {
             let s = extract_string(&args[0])?;
@@ -1044,40 +1148,73 @@ fn eval_function(name: &str, args: &[Value], store: Option<&GraphStore>) -> Exec
                 s.chars().rev().collect(),
             )))
         }
+        "split" => {
+            if args.len() < 2 {
+                return Err(ExecutionError::RuntimeError(
+                    "split() requires 2 arguments".to_string(),
+                ));
+            }
+            let s = extract_string(&args[0])?;
+            let delimiter = extract_string(&args[1])?;
+            let parts: Vec<PropertyValue> = s
+                .split(&delimiter)
+                .map(|p| PropertyValue::String(p.to_string()))
+                .collect();
+            Ok(Value::Property(PropertyValue::Array(parts)))
+        }
         "tostring" => {
             let val = &args[0];
-            let s = match val {
-                Value::Property(PropertyValue::String(s)) => s.clone(),
-                Value::Property(PropertyValue::Integer(i)) => i.to_string(),
-                Value::Property(PropertyValue::Float(f)) => f.to_string(),
-                Value::Property(PropertyValue::Boolean(b)) => b.to_string(),
-                Value::Null | Value::Property(PropertyValue::Null) => "null".to_string(),
-                _ => {
-                    return Err(ExecutionError::TypeError(
-                        "Cannot convert to string".to_string(),
-                    ))
+            match val {
+                Value::Null | Value::Property(PropertyValue::Null) => Ok(Value::Null),
+                Value::Property(PropertyValue::String(s)) => {
+                    Ok(Value::Property(PropertyValue::String(s.clone())))
                 }
-            };
-            Ok(Value::Property(PropertyValue::String(s)))
+                Value::Property(PropertyValue::Integer(i)) => {
+                    Ok(Value::Property(PropertyValue::String(i.to_string())))
+                }
+                Value::Property(PropertyValue::Float(f)) => {
+                    Ok(Value::Property(PropertyValue::String(f.to_string())))
+                }
+                Value::Property(PropertyValue::Boolean(b)) => {
+                    Ok(Value::Property(PropertyValue::String(b.to_string())))
+                }
+                _ => Err(ExecutionError::TypeError(
+                    "Cannot convert to string".to_string(),
+                )),
+            }
         }
         "tointeger" | "toint" => match &args[0] {
+            Value::Null | Value::Property(PropertyValue::Null) => Ok(Value::Null),
             Value::Property(PropertyValue::Integer(i)) => {
                 Ok(Value::Property(PropertyValue::Integer(*i)))
             }
             Value::Property(PropertyValue::Float(f)) => {
                 Ok(Value::Property(PropertyValue::Integer(*f as i64)))
             }
+            Value::Property(PropertyValue::Boolean(b)) => {
+                Ok(Value::Property(PropertyValue::Integer(if *b {
+                    1
+                } else {
+                    0
+                })))
+            }
             Value::Property(PropertyValue::String(s)) => {
-                let i = s.parse::<i64>().map_err(|_| {
-                    ExecutionError::TypeError(format!("Cannot convert '{}' to integer", s))
-                })?;
-                Ok(Value::Property(PropertyValue::Integer(i)))
+                // Try parsing as integer first, then as float (truncate)
+                if let Ok(i) = s.parse::<i64>() {
+                    Ok(Value::Property(PropertyValue::Integer(i)))
+                } else if let Ok(f) = s.parse::<f64>() {
+                    Ok(Value::Property(PropertyValue::Integer(f as i64)))
+                } else {
+                    // Invalid string returns null per TCK
+                    Ok(Value::Null)
+                }
             }
             _ => Err(ExecutionError::TypeError(
                 "Cannot convert to integer".to_string(),
             )),
         },
         "tofloat" => match &args[0] {
+            Value::Null | Value::Property(PropertyValue::Null) => Ok(Value::Null),
             Value::Property(PropertyValue::Float(f)) => {
                 Ok(Value::Property(PropertyValue::Float(*f)))
             }
@@ -1085,13 +1222,32 @@ fn eval_function(name: &str, args: &[Value], store: Option<&GraphStore>) -> Exec
                 Ok(Value::Property(PropertyValue::Float(*i as f64)))
             }
             Value::Property(PropertyValue::String(s)) => {
-                let f = s.parse::<f64>().map_err(|_| {
-                    ExecutionError::TypeError(format!("Cannot convert '{}' to float", s))
-                })?;
-                Ok(Value::Property(PropertyValue::Float(f)))
+                if let Ok(f) = s.parse::<f64>() {
+                    Ok(Value::Property(PropertyValue::Float(f)))
+                } else {
+                    // Invalid string returns null per TCK
+                    Ok(Value::Null)
+                }
             }
             _ => Err(ExecutionError::TypeError(
                 "Cannot convert to float".to_string(),
+            )),
+        },
+        "toboolean" => match &args[0] {
+            Value::Null | Value::Property(PropertyValue::Null) => Ok(Value::Null),
+            Value::Property(PropertyValue::Boolean(b)) => {
+                Ok(Value::Property(PropertyValue::Boolean(*b)))
+            }
+            Value::Property(PropertyValue::String(s)) => {
+                match s.to_lowercase().as_str() {
+                    "true" => Ok(Value::Property(PropertyValue::Boolean(true))),
+                    "false" => Ok(Value::Property(PropertyValue::Boolean(false))),
+                    // Invalid string returns null per TCK
+                    _ => Ok(Value::Null),
+                }
+            }
+            _ => Err(ExecutionError::TypeError(
+                "Cannot convert to boolean".to_string(),
             )),
         },
         // Size/length
@@ -1371,6 +1527,44 @@ fn eval_function(name: &str, args: &[Value], store: Option<&GraphStore>) -> Exec
             }
             _ => Err(ExecutionError::TypeError(
                 "keys() requires node or edge".to_string(),
+            )),
+        },
+        "properties" => match &args[0] {
+            Value::Node(_, node) => {
+                let map: HashMap<String, PropertyValue> = node.properties.clone();
+                Ok(Value::Property(PropertyValue::Map(map)))
+            }
+            Value::NodeRef(id) => {
+                let s = store.ok_or_else(|| {
+                    ExecutionError::RuntimeError(
+                        "properties() on NodeRef requires store".to_string(),
+                    )
+                })?;
+                let node = s.get_node(*id).ok_or_else(|| {
+                    ExecutionError::RuntimeError(format!("Node {} not found", id.as_u64()))
+                })?;
+                let map: HashMap<String, PropertyValue> = node.properties.clone();
+                Ok(Value::Property(PropertyValue::Map(map)))
+            }
+            Value::Edge(_, edge) => {
+                let map: HashMap<String, PropertyValue> = edge.properties.clone();
+                Ok(Value::Property(PropertyValue::Map(map)))
+            }
+            Value::EdgeRef(eid, ..) => {
+                let s = store.ok_or_else(|| {
+                    ExecutionError::RuntimeError(
+                        "properties() on EdgeRef requires store".to_string(),
+                    )
+                })?;
+                let edge = s.get_edge(*eid).ok_or_else(|| {
+                    ExecutionError::RuntimeError(format!("Edge {} not found", eid.as_u64()))
+                })?;
+                let map: HashMap<String, PropertyValue> = edge.properties.clone();
+                Ok(Value::Property(PropertyValue::Map(map)))
+            }
+            Value::Null | Value::Property(PropertyValue::Null) => Ok(Value::Null),
+            _ => Err(ExecutionError::TypeError(
+                "properties() requires node or edge".to_string(),
             )),
         },
         "exists" => {
@@ -1969,6 +2163,7 @@ fn format_expression(expr: &Expression) -> String {
                 BinaryOp::Ge => ">=",
                 BinaryOp::And => "AND",
                 BinaryOp::Or => "OR",
+                BinaryOp::Xor => "XOR",
                 BinaryOp::Add => "+",
                 BinaryOp::Sub => "-",
                 BinaryOp::Mul => "*",
@@ -2021,6 +2216,90 @@ fn format_expression(expr: &Expression) -> String {
 
 /// Type alias for boxed operators
 pub type OperatorBox = Box<dyn PhysicalOperator>;
+
+/// Single-row operator: emits exactly one empty record.
+/// Used as the input for standalone RETURN/UNWIND queries (no MATCH/CREATE).
+/// Analogous to Oracle's DUAL table or PostgreSQL's implicit single row.
+pub struct SingleRowOperator {
+    emitted: bool,
+}
+
+impl SingleRowOperator {
+    pub fn new() -> Self {
+        Self { emitted: false }
+    }
+}
+
+impl PhysicalOperator for SingleRowOperator {
+    fn next(&mut self, _store: &GraphStore) -> ExecutionResult<Option<Record>> {
+        if self.emitted {
+            Ok(None)
+        } else {
+            self.emitted = true;
+            Ok(Some(Record::new()))
+        }
+    }
+
+    fn next_batch(
+        &mut self,
+        store: &GraphStore,
+        _batch_size: usize,
+    ) -> ExecutionResult<Option<RecordBatch>> {
+        if self.emitted {
+            return Ok(None);
+        }
+        match self.next(store)? {
+            Some(record) => Ok(Some(RecordBatch {
+                records: vec![record],
+                columns: Vec::new(),
+            })),
+            None => Ok(None),
+        }
+    }
+
+    fn next_mut(
+        &mut self,
+        _store: &mut GraphStore,
+        _tenant_id: &str,
+    ) -> ExecutionResult<Option<Record>> {
+        if self.emitted {
+            Ok(None)
+        } else {
+            self.emitted = true;
+            Ok(Some(Record::new()))
+        }
+    }
+
+    fn next_batch_mut(
+        &mut self,
+        store: &mut GraphStore,
+        tenant_id: &str,
+        _batch_size: usize,
+    ) -> ExecutionResult<Option<RecordBatch>> {
+        if self.emitted {
+            return Ok(None);
+        }
+        match self.next_mut(store, tenant_id)? {
+            Some(record) => Ok(Some(RecordBatch {
+                records: vec![record],
+                columns: Vec::new(),
+            })),
+            None => Ok(None),
+        }
+    }
+
+    fn reset(&mut self) {
+        self.emitted = false;
+    }
+
+    fn describe(&self) -> OperatorDescription {
+        OperatorDescription {
+            name: "SingleRow".to_string(),
+            details: String::new(),
+            children: Vec::new(),
+        }
+    }
+}
 
 /// Node scan operator: MATCH (n:Person)
 pub struct NodeScanOperator {
@@ -2180,6 +2459,7 @@ pub struct FilterOperator {
     predicate: Expression,
 }
 
+#[allow(dead_code)]
 impl FilterOperator {
     /// Create a new filter operator
     pub fn new(input: OperatorBox, predicate: Expression) -> Self {
@@ -2243,28 +2523,7 @@ impl FilterOperator {
                             matches!(val, Value::Null | Value::Property(PropertyValue::Null));
                         Ok(Value::Property(PropertyValue::Boolean(!is_null)))
                     }
-                    UnaryOp::Not => {
-                        let b = match val {
-                            Value::Property(PropertyValue::Boolean(b)) => b,
-                            _ => {
-                                return Err(ExecutionError::TypeError(
-                                    "NOT requires boolean".to_string(),
-                                ))
-                            }
-                        };
-                        Ok(Value::Property(PropertyValue::Boolean(!b)))
-                    }
-                    UnaryOp::Minus => match val {
-                        Value::Property(PropertyValue::Integer(i)) => {
-                            Ok(Value::Property(PropertyValue::Integer(-i)))
-                        }
-                        Value::Property(PropertyValue::Float(f)) => {
-                            Ok(Value::Property(PropertyValue::Float(-f)))
-                        }
-                        _ => Err(ExecutionError::TypeError(
-                            "Negation requires numeric type".to_string(),
-                        )),
-                    },
+                    UnaryOp::Not | UnaryOp::Minus => eval_unary_op(op, val),
                 }
             }
             Expression::Case {
@@ -2355,59 +2614,8 @@ impl FilterOperator {
         left: Value,
         right: Value,
     ) -> ExecutionResult<Value> {
-        // Node/edge identity comparison (Cypher: n1 = n2, n1 <> n2)
-        if matches!(op, BinaryOp::Eq | BinaryOp::Ne) {
-            if let (Some(lid), Some(rid)) = (node_id_of(&left), node_id_of(&right)) {
-                let eq = lid == rid;
-                return Ok(Value::Property(PropertyValue::Boolean(
-                    if matches!(op, BinaryOp::Eq) { eq } else { !eq },
-                )));
-            }
-        }
-
-        // Extract property values
-        let left_prop = match left {
-            Value::Property(p) => p,
-            Value::Null => PropertyValue::Null,
-            _ => {
-                return Err(ExecutionError::TypeError(
-                    "Binary op requires property values".to_string(),
-                ))
-            }
-        };
-
-        let right_prop = match right {
-            Value::Property(p) => p,
-            Value::Null => PropertyValue::Null,
-            _ => {
-                return Err(ExecutionError::TypeError(
-                    "Binary op requires property values".to_string(),
-                ))
-            }
-        };
-
-        let result = match op {
-            BinaryOp::Eq => PropertyValue::Boolean(self.coerced_eq(&left_prop, &right_prop)),
-            BinaryOp::Ne => PropertyValue::Boolean(!self.coerced_eq(&left_prop, &right_prop)),
-            BinaryOp::Lt => self.compare_lt(&left_prop, &right_prop)?,
-            BinaryOp::Le => self.compare_le(&left_prop, &right_prop)?,
-            BinaryOp::Gt => self.compare_gt(&left_prop, &right_prop)?,
-            BinaryOp::Ge => self.compare_ge(&left_prop, &right_prop)?,
-            BinaryOp::And => self.logical_and(&left_prop, &right_prop)?,
-            BinaryOp::Or => self.logical_or(&left_prop, &right_prop)?,
-            BinaryOp::Add => self.arithmetic_add(&left_prop, &right_prop)?,
-            BinaryOp::Sub => self.arithmetic_sub(&left_prop, &right_prop)?,
-            BinaryOp::Mul => self.arithmetic_mul(&left_prop, &right_prop)?,
-            BinaryOp::Div => self.arithmetic_div(&left_prop, &right_prop)?,
-            BinaryOp::Mod => self.arithmetic_mod(&left_prop, &right_prop)?,
-            BinaryOp::StartsWith => self.string_starts_with(&left_prop, &right_prop)?,
-            BinaryOp::EndsWith => self.string_ends_with(&left_prop, &right_prop)?,
-            BinaryOp::Contains => self.string_contains(&left_prop, &right_prop)?,
-            BinaryOp::In => self.eval_in(&left_prop, &right_prop)?,
-            BinaryOp::RegexMatch => self.regex_match(&left_prop, &right_prop)?,
-        };
-
-        Ok(Value::Property(result))
+        // Delegate to the shared binary op evaluator which handles null propagation
+        eval_binary_op(op, left, right)
     }
 
     /// Equality with type coercion: Integer↔Float numeric promotion,
@@ -9134,11 +9342,9 @@ mod tests {
 
     #[test]
     fn test_eval_function_tostring_null() {
+        // TCK: toString(null) returns null
         let result = eval_function("tostring", &[Value::Null], None).unwrap();
-        assert_eq!(
-            result,
-            Value::Property(PropertyValue::String("null".to_string()))
-        );
+        assert_eq!(result, Value::Null);
     }
 
     #[test]
@@ -9168,12 +9374,14 @@ mod tests {
 
     #[test]
     fn test_eval_function_tointeger_bad_string() {
+        // TCK: toInteger("bad") returns null
         let result = eval_function(
             "tointeger",
             &[Value::Property(PropertyValue::String("bad".to_string()))],
             None,
-        );
-        assert!(result.is_err());
+        )
+        .unwrap();
+        assert_eq!(result, Value::Null);
     }
 
     #[test]
@@ -9200,12 +9408,14 @@ mod tests {
 
     #[test]
     fn test_eval_function_tointeger_type_error() {
+        // TCK: toInteger(true) returns 1
         let result = eval_function(
             "tointeger",
             &[Value::Property(PropertyValue::Boolean(true))],
             None,
-        );
-        assert!(result.is_err());
+        )
+        .unwrap();
+        assert_eq!(result, Value::Property(PropertyValue::Integer(1)));
     }
 
     #[test]
@@ -9224,12 +9434,14 @@ mod tests {
 
     #[test]
     fn test_eval_function_tofloat_bad_string() {
+        // TCK: toFloat("bad") returns null
         let result = eval_function(
             "tofloat",
             &[Value::Property(PropertyValue::String("bad".to_string()))],
             None,
-        );
-        assert!(result.is_err());
+        )
+        .unwrap();
+        assert_eq!(result, Value::Null);
     }
 
     #[test]
@@ -10231,24 +10443,26 @@ mod tests {
 
     #[test]
     fn test_binary_op_eq_null() {
+        // TCK: null = null returns null (three-valued logic)
         let result = eval_binary_op(
             &BinaryOp::Eq,
             Value::Property(PropertyValue::Null),
             Value::Property(PropertyValue::Null),
         )
         .unwrap();
-        assert_eq!(result, Value::Property(PropertyValue::Boolean(true)));
+        assert_eq!(result, Value::Null);
     }
 
     #[test]
     fn test_binary_op_ne_null_vs_int() {
+        // TCK: null <> 1 returns null (three-valued logic)
         let result = eval_binary_op(
             &BinaryOp::Ne,
             Value::Property(PropertyValue::Null),
             Value::Property(PropertyValue::Integer(1)),
         )
         .unwrap();
-        assert_eq!(result, Value::Property(PropertyValue::Boolean(true)));
+        assert_eq!(result, Value::Null);
     }
 
     // -- And/Or type errors --
@@ -10389,14 +10603,14 @@ mod tests {
 
     #[test]
     fn test_binary_op_null_value_left() {
+        // TCK: null = 1 returns null (three-valued logic)
         let result = eval_binary_op(
             &BinaryOp::Eq,
             Value::Null,
             Value::Property(PropertyValue::Integer(1)),
         )
         .unwrap();
-        // Null != Integer
-        assert_eq!(result, Value::Property(PropertyValue::Boolean(false)));
+        assert_eq!(result, Value::Null);
     }
 
     // -- Comparison operators --

@@ -429,6 +429,8 @@ pub enum BinaryOp {
     And,
     /// Logical OR
     Or,
+    /// Logical XOR
+    Xor,
     /// Addition (+)
     Add,
     /// Subtraction (-)
@@ -471,6 +473,8 @@ pub struct ReturnClause {
     pub items: Vec<ReturnItem>,
     /// Whether to return distinct results
     pub distinct: bool,
+    /// Whether RETURN * was used (expand all bound variables)
+    pub star: bool,
 }
 
 /// Return item: n, n.name AS name, count(n)

@@ -70,8 +70,8 @@ use crate::query::executor::{
         LimitOperator, MergeOperator, NodeScanOperator, ProjectOperator, RemovePropertyOperator,
         SchemaVisualizationOperator, SetPropertyOperator, ShortestPathOperator,
         ShowConstraintsOperator, ShowIndexesOperator, ShowLabelsOperator, ShowPropertyKeysOperator,
-        ShowRelationshipTypesOperator, SkipOperator, SortOperator, UnwindOperator,
-        VectorSearchOperator, WithBarrierOperator,
+        ShowRelationshipTypesOperator, SingleRowOperator, SkipOperator, SortOperator,
+        UnwindOperator, VectorSearchOperator, WithBarrierOperator,
     },
     ExecutionError,
     ExecutionResult,
@@ -435,6 +435,207 @@ impl QueryPlanner {
             if let Some(create_clause) = &query.create_clause {
                 return self.plan_create_only_multi(std::slice::from_ref(create_clause));
             }
+
+            // Handle standalone RETURN (no MATCH/CREATE): e.g. RETURN 1+2 AS x
+            // Also handles standalone UNWIND ... RETURN ...
+            if let Some(return_clause) = &query.return_clause {
+                let mut operator: OperatorBox = Box::new(SingleRowOperator::new());
+
+                // Handle standalone UNWIND before RETURN: UNWIND [1,2] AS x RETURN x
+                if let Some(unwind) = &query.unwind_clause {
+                    operator = Box::new(UnwindOperator::new(
+                        operator,
+                        unwind.expression.clone(),
+                        unwind.variable.clone(),
+                    ));
+                }
+
+                // Handle extra WITH stages
+                for (with_cl, unwind_opt, _post_matches, _post_where) in &query.extra_with_stages {
+                    let with_projections: Vec<(Expression, String)> = with_cl
+                        .items
+                        .iter()
+                        .enumerate()
+                        .map(|(i, item)| {
+                            let alias =
+                                item.alias
+                                    .clone()
+                                    .unwrap_or_else(|| match &item.expression {
+                                        Expression::Variable(v) => v.clone(),
+                                        _ => format!("col_{}", i),
+                                    });
+                            (item.expression.clone(), alias)
+                        })
+                        .collect();
+                    operator = Box::new(ProjectOperator::new(operator, with_projections));
+
+                    if let Some(unwind) = unwind_opt {
+                        operator = Box::new(UnwindOperator::new(
+                            operator,
+                            unwind.expression.clone(),
+                            unwind.variable.clone(),
+                        ));
+                    }
+                }
+
+                // Handle WITH clause (if there's a WITH before RETURN)
+                if let Some(with_cl) = &query.with_clause {
+                    let mut agg_counter = 0usize;
+                    let mut has_aggregation = false;
+
+                    // Check for aggregates
+                    let mut with_item_info: Vec<(String, Expression, Vec<AggregateFunction>)> =
+                        Vec::new();
+                    for (idx, item) in with_cl.items.iter().enumerate() {
+                        let alias = item
+                            .alias
+                            .clone()
+                            .unwrap_or_else(|| match &item.expression {
+                                Expression::Variable(v) => v.clone(),
+                                _ => format!("col_{}", idx),
+                            });
+                        let (rewritten, extracted) =
+                            extract_nested_aggregates(&item.expression, &mut agg_counter);
+                        if !extracted.is_empty() {
+                            has_aggregation = true;
+                        }
+                        with_item_info.push((alias, rewritten, extracted));
+                    }
+
+                    if has_aggregation {
+                        let mut agg_funcs = Vec::new();
+                        let mut group_by = Vec::new();
+                        let mut post_projections = Vec::new();
+
+                        for (alias, rewritten, extracted) in with_item_info {
+                            if !extracted.is_empty() {
+                                agg_funcs.extend(extracted);
+                                post_projections.push((rewritten, alias));
+                            } else {
+                                let orig_expr = with_cl.items.iter()
+                                    .find(|i| i.alias.as_deref() == Some(&alias) || matches!(&i.expression, Expression::Variable(v) if v == &alias))
+                                    .map(|i| i.expression.clone())
+                                    .unwrap_or(Expression::Variable(alias.clone()));
+                                group_by.push((orig_expr, alias.clone()));
+                                post_projections.push((Expression::Variable(alias.clone()), alias));
+                            }
+                        }
+
+                        operator = Box::new(AggregateOperator::new(operator, group_by, agg_funcs));
+                        operator = Box::new(ProjectOperator::new(operator, post_projections));
+                    } else {
+                        let with_projections: Vec<(Expression, String)> = with_cl
+                            .items
+                            .iter()
+                            .enumerate()
+                            .map(|(i, item)| {
+                                let alias =
+                                    item.alias
+                                        .clone()
+                                        .unwrap_or_else(|| match &item.expression {
+                                            Expression::Variable(v) => v.clone(),
+                                            _ => format!("col_{}", i),
+                                        });
+                                (item.expression.clone(), alias)
+                            })
+                            .collect();
+                        operator = Box::new(ProjectOperator::new(operator, with_projections));
+                    }
+                }
+
+                let mut output_columns = Vec::new();
+                let projections: Vec<(Expression, String)> = return_clause
+                    .items
+                    .iter()
+                    .enumerate()
+                    .map(|(i, item)| {
+                        let alias = item
+                            .alias
+                            .clone()
+                            .unwrap_or_else(|| match &item.expression {
+                                Expression::Variable(v) => v.clone(),
+                                Expression::Property { variable, property } => {
+                                    format!("{}.{}", variable, property)
+                                }
+                                _ => format!("col_{}", i),
+                            });
+                        output_columns.push(alias.clone());
+                        (item.expression.clone(), alias)
+                    })
+                    .collect();
+
+                // Check if RETURN has aggregation
+                let mut agg_counter = 0usize;
+                let mut has_return_agg = false;
+                for item in &return_clause.items {
+                    let (_, extracted) =
+                        extract_nested_aggregates(&item.expression, &mut agg_counter);
+                    if !extracted.is_empty() {
+                        has_return_agg = true;
+                        break;
+                    }
+                }
+
+                if has_return_agg {
+                    let mut agg_funcs = Vec::new();
+                    let mut group_by_exprs = Vec::new();
+                    let mut post_projections = Vec::new();
+                    let mut agg_counter2 = 0usize;
+
+                    for (idx, item) in return_clause.items.iter().enumerate() {
+                        let alias = item
+                            .alias
+                            .clone()
+                            .unwrap_or_else(|| match &item.expression {
+                                Expression::Variable(v) => v.clone(),
+                                _ => format!("col_{}", idx),
+                            });
+                        let (rewritten, extracted) =
+                            extract_nested_aggregates(&item.expression, &mut agg_counter2);
+                        if !extracted.is_empty() {
+                            agg_funcs.extend(extracted);
+                            post_projections.push((rewritten, alias));
+                        } else {
+                            group_by_exprs.push((item.expression.clone(), alias.clone()));
+                            post_projections.push((Expression::Variable(alias.clone()), alias));
+                        }
+                    }
+
+                    operator =
+                        Box::new(AggregateOperator::new(operator, group_by_exprs, agg_funcs));
+                    operator = Box::new(ProjectOperator::new(operator, post_projections));
+                } else {
+                    operator = Box::new(ProjectOperator::new(operator, projections));
+                }
+
+                // ORDER BY
+                if let Some(order_by) = &query.order_by {
+                    let sort_exprs: Vec<(Expression, bool)> = order_by
+                        .items
+                        .iter()
+                        .map(|item| (item.expression.clone(), item.ascending))
+                        .collect();
+                    operator = Box::new(SortOperator::new(operator, sort_exprs));
+                }
+
+                // SKIP
+                if let Some(skip) = query.skip {
+                    operator = Box::new(SkipOperator::new(operator, skip));
+                }
+
+                // LIMIT
+                if let Some(limit) = query.limit {
+                    operator = Box::new(LimitOperator::new(operator, limit));
+                }
+
+                return Ok(ExecutionPlan {
+                    root: operator,
+                    output_columns,
+                    is_write: false,
+                });
+            }
+
+            // Handle standalone UNWIND without RETURN (shouldn't happen per grammar but safety)
             return Err(ExecutionError::PlanningError(
                 "Query must have at least one MATCH, CALL or CREATE clause".to_string(),
             ));

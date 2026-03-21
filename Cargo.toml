@@ -103,6 +103,7 @@ tempfile = "3.8"
 criterion = "0.5"
 graphmind-sdk = { path = "crates/graphmind-sdk" }
 http-body-util = "0.1"
+walkdir = "2"
 
 [[bench]]
 name = "query_benchmark"

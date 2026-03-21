@@ -73,6 +73,7 @@ struct CypherParser;
 static PRATT_PARSER: LazyLock<PrattParser<Rule>> = LazyLock::new(|| {
     PrattParser::new()
         .op(Op::infix(Rule::or_op, Assoc::Left))
+        .op(Op::infix(Rule::xor_op, Assoc::Left))
         .op(Op::infix(Rule::and_op, Assoc::Left))
         .op(Op::infix(Rule::in_op, Assoc::Left) | Op::infix(Rule::comparison_op, Assoc::Left))
         .op(Op::infix(Rule::add_sub_op, Assoc::Left))
@@ -183,6 +184,15 @@ fn parse_statement(pair: pest::iterators::Pair<Rule>, query: &mut Query) -> Pars
             }
             Rule::create_stmt => {
                 parse_create_statement(inner, query)?;
+            }
+            Rule::return_stmt => {
+                parse_return_statement(inner, query)?;
+            }
+            Rule::with_stmt => {
+                parse_with_statement(inner, query)?;
+            }
+            Rule::unwind_stmt => {
+                parse_unwind_statement(inner, query)?;
             }
             _ => {}
         }
@@ -552,6 +562,160 @@ fn parse_create_statement(pair: pest::iterators::Pair<Rule>, query: &mut Query) 
             }
             Rule::return_clause => {
                 query.return_clause = Some(parse_return_clause(inner)?);
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+/// Parse a standalone WITH statement: e.g. `WITH 1 AS x RETURN x`
+fn parse_with_statement(pair: pest::iterators::Pair<Rule>, query: &mut Query) -> ParseResult<()> {
+    for inner in pair.into_inner() {
+        match inner.as_rule() {
+            Rule::with_clause => {
+                if query.with_clause.is_some() {
+                    let prev_with = query.with_clause.take().unwrap();
+                    let prev_unwind = query.unwind_clause.take();
+                    query
+                        .extra_with_stages
+                        .push((prev_with, prev_unwind, Vec::new(), None));
+                }
+                query.with_clause = Some(parse_with_clause(inner)?);
+            }
+            Rule::unwind_clause => {
+                query.unwind_clause = Some(parse_unwind_clause(inner)?);
+            }
+            Rule::match_clause => {
+                for mc_inner in inner.into_inner() {
+                    if mc_inner.as_rule() == Rule::pattern {
+                        query.match_clauses.push(MatchClause {
+                            pattern: parse_pattern(mc_inner)?,
+                            optional: false,
+                        });
+                    }
+                }
+            }
+            Rule::optional_match_clause => {
+                for mc_inner in inner.into_inner() {
+                    if mc_inner.as_rule() == Rule::pattern {
+                        query.match_clauses.push(MatchClause {
+                            pattern: parse_pattern(mc_inner)?,
+                            optional: true,
+                        });
+                    }
+                }
+            }
+            Rule::where_clause => {
+                query.where_clause = Some(parse_where_clause(inner)?);
+            }
+            Rule::create_clause => {
+                for create_inner in inner.into_inner() {
+                    if create_inner.as_rule() == Rule::pattern {
+                        query.create_clause = Some(CreateClause {
+                            pattern: parse_pattern(create_inner)?,
+                        });
+                    }
+                }
+            }
+            Rule::set_clause => {
+                query.set_clauses.push(parse_set_clause(inner)?);
+            }
+            Rule::delete_clause => {
+                query.delete_clause = Some(parse_delete_clause(inner)?);
+            }
+            Rule::return_clause => {
+                query.return_clause = Some(parse_return_clause(inner)?);
+            }
+            Rule::order_by_clause => {
+                query.order_by = Some(parse_order_by_clause(inner)?);
+            }
+            Rule::skip_clause => {
+                for skip_inner in inner.into_inner() {
+                    if skip_inner.as_rule() == Rule::integer {
+                        query.skip = Some(skip_inner.as_str().parse().unwrap());
+                    }
+                }
+            }
+            Rule::limit_clause => {
+                for limit_inner in inner.into_inner() {
+                    if limit_inner.as_rule() == Rule::integer {
+                        query.limit = Some(limit_inner.as_str().parse().unwrap());
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+/// Parse a standalone RETURN statement (no MATCH): e.g. `RETURN 1+2 AS x`
+fn parse_return_statement(pair: pest::iterators::Pair<Rule>, query: &mut Query) -> ParseResult<()> {
+    for inner in pair.into_inner() {
+        match inner.as_rule() {
+            Rule::return_clause => {
+                query.return_clause = Some(parse_return_clause(inner)?);
+            }
+            Rule::order_by_clause => {
+                query.order_by = Some(parse_order_by_clause(inner)?);
+            }
+            Rule::skip_clause => {
+                for skip_inner in inner.into_inner() {
+                    if skip_inner.as_rule() == Rule::integer {
+                        query.skip = Some(skip_inner.as_str().parse().unwrap());
+                    }
+                }
+            }
+            Rule::limit_clause => {
+                for limit_inner in inner.into_inner() {
+                    if limit_inner.as_rule() == Rule::integer {
+                        query.limit = Some(limit_inner.as_str().parse().unwrap());
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+/// Parse a standalone UNWIND statement: e.g. `UNWIND [1,2] AS x RETURN x`
+fn parse_unwind_statement(pair: pest::iterators::Pair<Rule>, query: &mut Query) -> ParseResult<()> {
+    for inner in pair.into_inner() {
+        match inner.as_rule() {
+            Rule::unwind_clause => {
+                query.unwind_clause = Some(parse_unwind_clause(inner)?);
+            }
+            Rule::with_clause => {
+                if query.with_clause.is_some() {
+                    let prev_with = query.with_clause.take().unwrap();
+                    let prev_unwind = query.unwind_clause.take();
+                    query
+                        .extra_with_stages
+                        .push((prev_with, prev_unwind, Vec::new(), None));
+                }
+                query.with_clause = Some(parse_with_clause(inner)?);
+            }
+            Rule::return_clause => {
+                query.return_clause = Some(parse_return_clause(inner)?);
+            }
+            Rule::order_by_clause => {
+                query.order_by = Some(parse_order_by_clause(inner)?);
+            }
+            Rule::skip_clause => {
+                for skip_inner in inner.into_inner() {
+                    if skip_inner.as_rule() == Rule::integer {
+                        query.skip = Some(skip_inner.as_str().parse().unwrap());
+                    }
+                }
+            }
+            Rule::limit_clause => {
+                for limit_inner in inner.into_inner() {
+                    if limit_inner.as_rule() == Rule::integer {
+                        query.limit = Some(limit_inner.as_str().parse().unwrap());
+                    }
+                }
             }
             _ => {}
         }
@@ -1198,6 +1362,7 @@ fn parse_where_clause(pair: pest::iterators::Pair<Rule>) -> ParseResult<WhereCla
 
 fn parse_return_clause(pair: pest::iterators::Pair<Rule>) -> ParseResult<ReturnClause> {
     let mut distinct = false;
+    let mut star = false;
     let mut items = Vec::new();
 
     for inner in pair.into_inner() {
@@ -1207,8 +1372,14 @@ fn parse_return_clause(pair: pest::iterators::Pair<Rule>) -> ParseResult<ReturnC
             }
             Rule::return_items => {
                 for item_pair in inner.into_inner() {
-                    if item_pair.as_rule() == Rule::return_item {
-                        items.push(parse_return_item(item_pair)?);
+                    match item_pair.as_rule() {
+                        Rule::return_item => {
+                            items.push(parse_return_item(item_pair)?);
+                        }
+                        Rule::star => {
+                            star = true;
+                        }
+                        _ => {}
                     }
                 }
             }
@@ -1216,7 +1387,11 @@ fn parse_return_clause(pair: pest::iterators::Pair<Rule>) -> ParseResult<ReturnC
         }
     }
 
-    Ok(ReturnClause { items, distinct })
+    Ok(ReturnClause {
+        items,
+        distinct,
+        star,
+    })
 }
 
 fn parse_return_item(pair: pest::iterators::Pair<Rule>) -> ParseResult<ReturnItem> {
@@ -1292,6 +1467,7 @@ fn parse_expression(pair: pest::iterators::Pair<Rule>) -> ParseResult<Expression
 
             let op = match op.as_rule() {
                 Rule::or_op => BinaryOp::Or,
+                Rule::xor_op => BinaryOp::Xor,
                 Rule::and_op => BinaryOp::And,
                 Rule::comparison_op => parse_op_str(op.as_str())?,
                 Rule::in_op => BinaryOp::In,

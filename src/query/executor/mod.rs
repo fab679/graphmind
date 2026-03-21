@@ -338,7 +338,23 @@ impl<'a> MutQueryExecutor<'a> {
         }
 
         // Execute the plan with mutable access
-        self.execute_plan_mut(plan)
+        let result = self.execute_plan_mut(plan)?;
+
+        // If query has no RETURN clause and no CALL with YIELD, return empty result
+        // (TCK expects CREATE/DELETE/SET without RETURN to produce no rows)
+        let has_call_yield = query
+            .call_clause
+            .as_ref()
+            .map(|c| !c.yield_items.is_empty())
+            .unwrap_or(false);
+        if query.return_clause.is_none() && !has_call_yield {
+            return Ok(RecordBatch {
+                records: Vec::new(),
+                columns: Vec::new(),
+            });
+        }
+
+        Ok(result)
     }
 
     fn execute_plan_mut(&mut self, mut plan: ExecutionPlan) -> ExecutionResult<RecordBatch> {
@@ -672,12 +688,13 @@ mod tests {
         let mut store = GraphStore::new();
 
         // MERGE should create the node since it doesn't exist
+        // Without RETURN clause, should return empty result (TCK compliant)
         let query = parse_query(r#"MERGE (n:Person {name: "Alice"})"#).unwrap();
         let mut executor = MutQueryExecutor::new(&mut store, "default".to_string());
         let result = executor.execute(&query);
         assert!(result.is_ok(), "MERGE create failed: {:?}", result.err());
         let batch = result.unwrap();
-        assert_eq!(batch.records.len(), 1);
+        assert_eq!(batch.records.len(), 0);
 
         // Verify node was created
         let nodes = store.get_nodes_by_label(&Label::new("Person"));
@@ -7726,20 +7743,24 @@ mod tests {
 
     #[test]
     fn test_cov_tointeger_bad() {
+        // TCK: toInteger("bad") returns null, not an error
         let mut store = GraphStore::new();
         let id = store.create_node("I");
         store.set_node_property("default", id, "v", "bad").unwrap();
         let q = parse_query("MATCH (n:I) RETURN toInteger(n.v) AS i").unwrap();
-        assert!(QueryExecutor::new(&store).execute(&q).is_err());
+        let result = QueryExecutor::new(&store).execute(&q).unwrap();
+        assert_eq!(result.records.len(), 1);
     }
 
     #[test]
     fn test_cov_tofloat_bad() {
+        // TCK: toFloat("xyz") returns null, not an error
         let mut store = GraphStore::new();
         let id = store.create_node("I");
         store.set_node_property("default", id, "v", "xyz").unwrap();
         let q = parse_query("MATCH (n:I) RETURN toFloat(n.v) AS f").unwrap();
-        assert!(QueryExecutor::new(&store).execute(&q).is_err());
+        let result = QueryExecutor::new(&store).execute(&q).unwrap();
+        assert_eq!(result.records.len(), 1);
     }
 
     // --- 10. Math: log, exp, rand ---

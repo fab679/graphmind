@@ -8,7 +8,16 @@ COMMENT = _{ ("/*" ~ (!"*/" ~ ANY)* ~ "*/") | ("//" ~ (!"\n" ~ ANY)*) }
 query = { SOI ~ explain_clause? ~ statement ~ (union_clause ~ statement)* ~ ";"? ~ EOI }
 explain_clause = { ^"PROFILE" | ^"EXPLAIN" }
 union_clause = { ^"UNION" ~ ^"ALL"? }
-statement = { show_indexes_stmt | show_constraints_stmt | drop_index_stmt | create_constraint_stmt | create_vector_index_stmt | create_index_stmt | call_stmt | merge_stmt | match_stmt | create_stmt }
+statement = { show_indexes_stmt | show_constraints_stmt | drop_index_stmt | create_constraint_stmt | create_vector_index_stmt | create_index_stmt | call_stmt | merge_stmt | match_stmt | create_stmt | with_stmt | unwind_stmt | return_stmt }
+
+// Standalone RETURN (without MATCH/CREATE): e.g. RETURN 1+2 AS result
+return_stmt = { return_clause ~ order_by_clause? ~ skip_clause? ~ limit_clause? }
+
+// Standalone WITH ... RETURN: e.g. WITH 1 AS x RETURN x
+with_stmt = { with_clause ~ (unwind_clause ~ (with_clause ~ unwind_clause?)*)? ~ ((match_clause | optional_match_clause)+ ~ where_clause?)? ~ create_clause? ~ set_clause* ~ delete_clause? ~ return_clause? ~ order_by_clause? ~ skip_clause? ~ limit_clause? }
+
+// Standalone UNWIND (without MATCH): e.g. UNWIND [1,2,3] AS x RETURN x
+unwind_stmt = { unwind_clause ~ (with_clause ~ unwind_clause?)* ~ return_clause ~ order_by_clause? ~ skip_clause? ~ limit_clause? }
 
 // CREATE VECTOR INDEX statement
 create_vector_index_stmt = { ^"CREATE" ~ ^"VECTOR" ~ ^"INDEX" ~ variable? ~ ^"FOR" ~ "(" ~ variable ~ ":" ~ label ~ ")" ~ ^"ON" ~ "(" ~ variable ~ "." ~ property_key ~ ")" ~ options? }
@@ -96,13 +105,14 @@ property = { property_key ~ ":" ~ value }
 property_key = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
 
 // RETURN items
-return_items = { return_item ~ ("," ~ return_item)* }
+return_items = { star | return_item ~ ("," ~ return_item)* }
 return_item = { expression ~ (^"AS" ~ variable)? }
+star = { "*" }
 
 // ORDER BY items
 order_items = { order_item ~ ("," ~ order_item)* }
 order_item = { expression ~ order_direction? }
-order_direction = { ^"ASC" | ^"DESC" }
+order_direction = { ^"ASCENDING" | ^"DESCENDING" | ^"ASC" | ^"DESC" }
 
 // Expressions
 expression = { term ~ (binary_op ~ term)* }
@@ -167,8 +177,9 @@ comparison_op = { "<=" | "<>" | ">=" | "<" | ">" | "==" | "=~" | "=" | "!=" | ^"
 in_op = @{ ^"IN" ~ !(ASCII_ALPHANUMERIC | "_") }
 and_op = @{ ^"AND" ~ !(ASCII_ALPHANUMERIC | "_") }
 or_op = @{ ^"OR" ~ !(ASCII_ALPHANUMERIC | "_") }
+xor_op = @{ ^"XOR" ~ !(ASCII_ALPHANUMERIC | "_") }
 
-binary_op = _{ mul_div_mod_op | add_sub_op | comparison_op | in_op | and_op | or_op }
+binary_op = _{ mul_div_mod_op | add_sub_op | comparison_op | in_op | and_op | xor_op | or_op }
 
 unary_op = { ^"NOT" | "-" }
 
