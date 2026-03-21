@@ -88,11 +88,13 @@ node = { "(" ~ variable? ~ labels? ~ properties? ~ ")" }
 labels = { (":" ~ label)+ }
 label = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
 
-// Edge pattern: -[:KNOWS]-> or <-[:KNOWS]- or -[:KNOWS]- or --> or <-- or --
+// Edge pattern: -[:KNOWS]-> or <-[:KNOWS]- or -[:KNOWS]- or <-[:KNOWS]-> or --> or <-- or <--> or --
 edge_pattern = {
+    ("<-" ~ edge_detail ~ "->") |
     ("<-" ~ edge_detail ~ "-") |
     ("-" ~ edge_detail ~ "->") |
     ("-" ~ edge_detail ~ "-") |
+    ("<-->") |
     ("<--") |
     ("-->") |
     ("--")

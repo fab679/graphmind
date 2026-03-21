@@ -2236,6 +2236,13 @@ impl QueryPlanner {
                         edge.properties.clone().unwrap_or_default();
                     let edge_variable = edge.variable.clone();
 
+                    // Reject bidirectional edges in CREATE
+                    if matches!(edge.direction, Direction::Both) {
+                        return Err(ExecutionError::PlanningError(
+                            "Cannot create relationship with bidirectional direction. Use -> or <- instead.".to_string(),
+                        ));
+                    }
+
                     if let (Some(source_var), Some(target_var)) =
                         (&current_source_var, &node_variable)
                     {
