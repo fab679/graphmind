@@ -216,7 +216,7 @@ impl<'a> QueryExecutor<'a> {
 
         // Handle UNION queries
         if !query.union_queries.is_empty() {
-            for (union_query, is_all) in &query.union_queries {
+            for (union_query, _is_all) in &query.union_queries {
                 let union_plan = self.planner.plan(union_query, self.store)?;
                 let union_result = self.execute_plan(union_plan)?;
                 result.records.extend(union_result.records);

@@ -1909,6 +1909,15 @@ fn extract_string(val: &Value) -> ExecutionResult<String> {
         Value::Property(PropertyValue::Integer(i)) => Ok(i.to_string()),
         Value::Property(PropertyValue::Float(f)) => Ok(f.to_string()),
         Value::Property(PropertyValue::Boolean(b)) => Ok(b.to_string()),
+        Value::Property(PropertyValue::Array(arr)) => {
+            let items: Vec<String> = arr.iter().map(|v| format!("{}", v)).collect();
+            Ok(format!("[{}]", items.join(", ")))
+        }
+        Value::Property(PropertyValue::Map(m)) => {
+            let items: Vec<String> = m.iter().map(|(k, v)| format!("{}: {}", k, v)).collect();
+            Ok(format!("{{{}}}", items.join(", ")))
+        }
+        Value::Null | Value::Property(PropertyValue::Null) => Ok("null".to_string()),
         _ => Err(ExecutionError::TypeError(
             "Expected string argument".to_string(),
         )),

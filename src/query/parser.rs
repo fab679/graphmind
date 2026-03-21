@@ -101,6 +101,7 @@ pub enum ParseError {
 pub type ParseResult<T> = Result<T, ParseError>;
 
 /// Parse an integer literal supporting decimal, hex (0x...), and octal (0o...) formats
+#[allow(dead_code)]
 fn parse_integer_literal(s: &str) -> i64 {
     parse_integer_literal_checked(s).unwrap_or(0)
 }
@@ -1502,7 +1503,7 @@ fn parse_value(pair: pest::iterators::Pair<Rule>) -> ParseResult<PropertyValue> 
             }
             Rule::integer => {
                 let val = parse_integer_literal_checked(inner.as_str())
-                    .map_err(|e| ParseError::SemanticError(e))?;
+                    .map_err(ParseError::SemanticError)?;
                 return Ok(PropertyValue::Integer(val));
             }
             Rule::float => {

@@ -392,7 +392,9 @@ impl QueryPlanner {
                 for path in &cc.pattern.paths {
                     if let Some(v) = &path.start.variable {
                         if match_node_vars.contains(v)
-                            && (!path.start.labels.is_empty() || path.start.properties.is_some())
+                            && (path.segments.is_empty()
+                                || !path.start.labels.is_empty()
+                                || path.start.properties.is_some())
                         {
                             return Err(ExecutionError::PlanningError(format!(
                                 "Variable '{}' already declared in MATCH",
