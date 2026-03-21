@@ -458,6 +458,23 @@ fn eval_binary_op(op: &BinaryOp, left: Value, right: Value) -> ExecutionResult<V
                 ))
             }
         },
+        BinaryOp::Pow => match (&left_prop, &right_prop) {
+            (PropertyValue::Integer(l), PropertyValue::Integer(r)) => {
+                PropertyValue::Float((*l as f64).powf(*r as f64))
+            }
+            (PropertyValue::Float(l), PropertyValue::Integer(r)) => {
+                PropertyValue::Float(l.powf(*r as f64))
+            }
+            (PropertyValue::Integer(l), PropertyValue::Float(r)) => {
+                PropertyValue::Float((*l as f64).powf(*r))
+            }
+            (PropertyValue::Float(l), PropertyValue::Float(r)) => PropertyValue::Float(l.powf(*r)),
+            _ => {
+                return Err(ExecutionError::TypeError(
+                    "Power requires numeric operands".to_string(),
+                ))
+            }
+        },
         BinaryOp::StartsWith => match (&left_prop, &right_prop) {
             (PropertyValue::String(l), PropertyValue::String(r)) => {
                 PropertyValue::Boolean(l.starts_with(r.as_str()))
@@ -2268,6 +2285,7 @@ fn format_expression(expr: &Expression) -> String {
                 BinaryOp::Mul => "*",
                 BinaryOp::Div => "/",
                 BinaryOp::Mod => "%",
+                BinaryOp::Pow => "^",
                 BinaryOp::StartsWith => "STARTS WITH",
                 BinaryOp::EndsWith => "ENDS WITH",
                 BinaryOp::Contains => "CONTAINS",

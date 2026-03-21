@@ -1738,6 +1738,7 @@ fn parse_op_str(op_str: &str) -> ParseResult<BinaryOp> {
         "*" => BinaryOp::Mul,
         "/" => BinaryOp::Div,
         "%" => BinaryOp::Mod,
+        "^" => BinaryOp::Pow,
         _ if op_str.eq_ignore_ascii_case("STARTS WITH") => BinaryOp::StartsWith,
         _ if op_str.eq_ignore_ascii_case("ENDS WITH") => BinaryOp::EndsWith,
         _ if op_str.eq_ignore_ascii_case("CONTAINS") => BinaryOp::Contains,

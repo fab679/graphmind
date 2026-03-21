@@ -443,6 +443,8 @@ pub enum BinaryOp {
     Div,
     /// Modulo (%)
     Mod,
+    /// Power (^)
+    Pow,
     /// String starts with
     StartsWith,
     /// String ends with
