@@ -138,33 +138,59 @@ fn coerced_partial_cmp(left: &PropertyValue, right: &PropertyValue) -> Option<st
 
 /// Shared binary operator evaluation used by Project, Aggregate, Filter, and Sort operators
 fn eval_binary_op(op: &BinaryOp, left: Value, right: Value) -> ExecutionResult<Value> {
-    // Node/edge identity comparison (Cypher: n1 = n2, n1 <> n2)
+    // Node/edge identity comparison (Cypher: n1 = n2, n1 <> n2, r1 = r2)
     if matches!(op, BinaryOp::Eq | BinaryOp::Ne) {
+        // Node identity
         if let (Some(lid), Some(rid)) = (node_id_of(&left), node_id_of(&right)) {
             let eq = lid == rid;
             return Ok(Value::Property(PropertyValue::Boolean(
                 if matches!(op, BinaryOp::Eq) { eq } else { !eq },
             )));
         }
+        // Edge identity
+        let left_eid = match &left {
+            Value::EdgeRef(id, ..) | Value::Edge(id, _) => Some(*id),
+            _ => None,
+        };
+        let right_eid = match &right {
+            Value::EdgeRef(id, ..) | Value::Edge(id, _) => Some(*id),
+            _ => None,
+        };
+        if let (Some(lid), Some(rid)) = (left_eid, right_eid) {
+            let eq = lid == rid;
+            return Ok(Value::Property(PropertyValue::Boolean(
+                if matches!(op, BinaryOp::Eq) { eq } else { !eq },
+            )));
+        }
+        // Path identity
+        if let (
+            Value::Path {
+                nodes: n1,
+                edges: e1,
+            },
+            Value::Path {
+                nodes: n2,
+                edges: e2,
+            },
+        ) = (&left, &right)
+        {
+            let eq = n1 == n2 && e1 == e2;
+            return Ok(Value::Property(PropertyValue::Boolean(
+                if matches!(op, BinaryOp::Eq) { eq } else { !eq },
+            )));
+        }
     }
 
+    // Convert Values to PropertyValues, treating non-property values as Null for comparisons
     let left_prop = match left {
         Value::Property(p) => p,
         Value::Null => PropertyValue::Null,
-        _ => {
-            return Err(ExecutionError::TypeError(
-                "Binary op requires property values".to_string(),
-            ))
-        }
+        _ => PropertyValue::Null, // NodeRef, EdgeRef, Path — treat as null for arithmetic/comparisons
     };
     let right_prop = match right {
         Value::Property(p) => p,
         Value::Null => PropertyValue::Null,
-        _ => {
-            return Err(ExecutionError::TypeError(
-                "Binary op requires property values".to_string(),
-            ))
-        }
+        _ => PropertyValue::Null, // NodeRef, EdgeRef, Path — treat as null for arithmetic/comparisons
     };
 
     // Null propagation: most operators return null when either operand is null
@@ -1193,6 +1219,21 @@ fn eval_function(name: &str, args: &[Value], store: Option<&GraphStore>) -> Exec
                 Value::Property(PropertyValue::Boolean(b)) => {
                     Ok(Value::Property(PropertyValue::String(b.to_string())))
                 }
+                Value::Property(PropertyValue::Array(arr)) => {
+                    let items: Vec<String> = arr.iter().map(|v| format!("{}", v)).collect();
+                    Ok(Value::Property(PropertyValue::String(format!(
+                        "[{}]",
+                        items.join(", ")
+                    ))))
+                }
+                Value::Property(PropertyValue::Map(m)) => {
+                    let items: Vec<String> =
+                        m.iter().map(|(k, v)| format!("{}: {}", k, v)).collect();
+                    Ok(Value::Property(PropertyValue::String(format!(
+                        "{{{}}}",
+                        items.join(", ")
+                    ))))
+                }
                 _ => Err(ExecutionError::TypeError(
                     "Cannot convert to string".to_string(),
                 )),
@@ -1276,8 +1317,11 @@ fn eval_function(name: &str, args: &[Value], store: Option<&GraphStore>) -> Exec
             Value::Path { edges, .. } => {
                 Ok(Value::Property(PropertyValue::Integer(edges.len() as i64)))
             }
+            Value::Property(PropertyValue::Map(m)) => {
+                Ok(Value::Property(PropertyValue::Integer(m.len() as i64)))
+            }
             _ => Err(ExecutionError::TypeError(
-                "size() requires string, list, or path".to_string(),
+                "size() requires string, list, map, or path".to_string(),
             )),
         },
         // Path functions
@@ -10692,7 +10736,7 @@ mod tests {
             Value::NodeRef(NodeId::new(1)),
             Value::Property(PropertyValue::Integer(1)),
         );
-        assert!(result.is_err());
+        assert!(result.is_ok()); // NodeRef treated as null, null + int = null
     }
 
     #[test]
@@ -10703,7 +10747,7 @@ mod tests {
             Value::Property(PropertyValue::Integer(1)),
             Value::NodeRef(NodeId::new(1)),
         );
-        assert!(result.is_err());
+        assert!(result.is_ok()); // int + NodeRef = null
     }
 
     // -- Null handling in binary op --

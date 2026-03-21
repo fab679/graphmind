@@ -1444,7 +1444,6 @@ fn expression_to_property_value(expr: &Expression) -> PropertyValue {
             Expression::Literal(PropertyValue::Float(f)) => PropertyValue::Float(-f),
             _ => PropertyValue::Null,
         },
-        Expression::Literal(PropertyValue::Array(items)) => PropertyValue::Array(items.clone()),
         _ => PropertyValue::Null, // Variable refs, function calls, etc. — handled at runtime
     }
 }
