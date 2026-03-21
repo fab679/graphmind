@@ -1285,7 +1285,9 @@ fn parse_edge(pair: pest::iterators::Pair<Rule>) -> ParseResult<EdgePattern> {
     let mut direction = Direction::Both;
     let edge_str = pair.as_str();
 
-    if edge_str.starts_with("<-") {
+    if edge_str.starts_with("<-") && edge_str.ends_with("->") {
+        direction = Direction::Both; // <-[r]-> or <-->
+    } else if edge_str.starts_with("<-") {
         direction = Direction::Incoming;
     } else if edge_str.ends_with("->") {
         direction = Direction::Outgoing;
