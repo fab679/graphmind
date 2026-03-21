@@ -453,10 +453,69 @@ impl QueryPlanner {
         // Handle CREATE-only queries (no MATCH/CALL required)
         if query.match_clauses.is_empty() && query.call_clause.is_none() {
             if !query.create_clauses.is_empty() {
-                return self.plan_create_only_multi(&query.create_clauses);
+                let mut plan = self.plan_create_only_multi(&query.create_clauses)?;
+                // Apply RETURN, SKIP, LIMIT if present
+                if let Some(rc) = &query.return_clause {
+                    let projections: Vec<(Expression, String)> = rc
+                        .items
+                        .iter()
+                        .enumerate()
+                        .map(|(i, item)| {
+                            let alias =
+                                item.alias
+                                    .clone()
+                                    .unwrap_or_else(|| match &item.expression {
+                                        Expression::Variable(v) => v.clone(),
+                                        Expression::Property { variable, property } => {
+                                            format!("{}.{}", variable, property)
+                                        }
+                                        _ => format!("col_{}", i),
+                                    });
+                            (item.expression.clone(), alias)
+                        })
+                        .collect();
+                    plan.output_columns = projections.iter().map(|(_, a)| a.clone()).collect();
+                    plan.root = Box::new(ProjectOperator::new(plan.root, projections));
+                }
+                if let Some(skip) = query.skip {
+                    plan.root = Box::new(SkipOperator::new(plan.root, skip));
+                }
+                if let Some(limit) = query.limit {
+                    plan.root = Box::new(LimitOperator::new(plan.root, limit));
+                }
+                return Ok(plan);
             }
             if let Some(create_clause) = &query.create_clause {
-                return self.plan_create_only_multi(std::slice::from_ref(create_clause));
+                let mut plan = self.plan_create_only_multi(std::slice::from_ref(create_clause))?;
+                if let Some(rc) = &query.return_clause {
+                    let projections: Vec<(Expression, String)> = rc
+                        .items
+                        .iter()
+                        .enumerate()
+                        .map(|(i, item)| {
+                            let alias =
+                                item.alias
+                                    .clone()
+                                    .unwrap_or_else(|| match &item.expression {
+                                        Expression::Variable(v) => v.clone(),
+                                        Expression::Property { variable, property } => {
+                                            format!("{}.{}", variable, property)
+                                        }
+                                        _ => format!("col_{}", i),
+                                    });
+                            (item.expression.clone(), alias)
+                        })
+                        .collect();
+                    plan.output_columns = projections.iter().map(|(_, a)| a.clone()).collect();
+                    plan.root = Box::new(ProjectOperator::new(plan.root, projections));
+                }
+                if let Some(skip) = query.skip {
+                    plan.root = Box::new(SkipOperator::new(plan.root, skip));
+                }
+                if let Some(limit) = query.limit {
+                    plan.root = Box::new(LimitOperator::new(plan.root, limit));
+                }
+                return Ok(plan);
             }
 
             // Handle standalone RETURN (no MATCH/CREATE): e.g. RETURN 1+2 AS x
