@@ -633,9 +633,31 @@ impl QueryPlanner {
                     }
                 }
 
+                // Expand RETURN * — collect vars from UNWIND clause
+                let effective_items = if return_clause.star {
+                    let mut star_vars: Vec<String> = Vec::new();
+                    for u in &query.additional_unwinds {
+                        star_vars.push(u.variable.clone());
+                    }
+                    if let Some(u) = &query.unwind_clause {
+                        star_vars.push(u.variable.clone());
+                    }
+                    star_vars.sort();
+                    let mut items: Vec<crate::query::ast::ReturnItem> = star_vars
+                        .into_iter()
+                        .map(|v| crate::query::ast::ReturnItem {
+                            expression: Expression::Variable(v),
+                            alias: None,
+                        })
+                        .collect();
+                    items.extend(return_clause.items.iter().cloned());
+                    items
+                } else {
+                    return_clause.items.clone()
+                };
+
                 let mut output_columns = Vec::new();
-                let projections: Vec<(Expression, String)> = return_clause
-                    .items
+                let projections: Vec<(Expression, String)> = effective_items
                     .iter()
                     .enumerate()
                     .map(|(i, item)| {
@@ -1411,14 +1433,39 @@ impl QueryPlanner {
         if let Some(return_clause) = &query.return_clause {
             let mut aggregates = Vec::new();
             let mut group_by = Vec::new();
+            // Expand RETURN * to all known variables
+            let effective_return_items = if return_clause.star {
+                let mut star_items: Vec<crate::query::ast::ReturnItem> = known_vars
+                    .iter()
+                    .filter(|v| !v.starts_with("_anon_") && !v.starts_with("_create_anon_"))
+                    .map(|v| crate::query::ast::ReturnItem {
+                        expression: Expression::Variable(v.clone()),
+                        alias: None,
+                    })
+                    .collect();
+                star_items.sort_by(|a, b| {
+                    let va = match &a.expression {
+                        Expression::Variable(v) => v.clone(),
+                        _ => String::new(),
+                    };
+                    let vb = match &b.expression {
+                        Expression::Variable(v) => v.clone(),
+                        _ => String::new(),
+                    };
+                    va.cmp(&vb)
+                });
+                star_items.extend(return_clause.items.iter().cloned());
+                star_items
+            } else {
+                return_clause.items.clone()
+            };
+
             let mut projections = Vec::new();
             let mut has_aggregation = false;
             let mut agg_counter = 0usize;
-            // Post-projection items: after aggregation, compute final expressions
-            // from aggregate aliases (e.g. round(__agg_0 * 100 / __agg_1) AS strike_rate)
             let mut post_projections: Vec<(Expression, String)> = Vec::new();
 
-            for (idx, item) in return_clause.items.iter().enumerate() {
+            for (idx, item) in effective_return_items.iter().enumerate() {
                 let alias = item
                     .alias
                     .clone()
