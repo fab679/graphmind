@@ -773,55 +773,58 @@ export const ForceGraph = forwardRef<ForceGraphHandle, ForceGraphProps>(function
 
           if (isSelected) {
             const now = performance.now();
-            const angle = (now * 0.003) % (Math.PI * 2); // ~2 sec full rotation
+            const angle = (now * 0.003) % (Math.PI * 2);
             const ringRadius = node.radius + SELECTED_RING_WIDTH + 2;
+
+            // Parse node color to create transparent variants
+            // color is a hex like "#3b82f6"
+            const r = parseInt(color.slice(1, 3), 16);
+            const g = parseInt(color.slice(3, 5), 16);
+            const b = parseInt(color.slice(5, 7), 16);
 
             // Soft glow background
             ctx.beginPath();
             ctx.arc(node.x, node.y, ringRadius + 1, 0, Math.PI * 2);
-            ctx.fillStyle = "rgba(96, 165, 250, 0.12)";
+            ctx.fillStyle = `rgba(${r}, ${g}, ${b}, 0.12)`;
             ctx.fill();
 
-            // Rotating dashed arc (primary arc ~240°)
+            // Rotating primary arc (~240°)
             ctx.save();
             ctx.translate(node.x, node.y);
             ctx.rotate(angle);
             ctx.beginPath();
             ctx.arc(0, 0, ringRadius, 0, Math.PI * 1.33);
-            ctx.strokeStyle = "#60a5fa";
+            ctx.strokeStyle = color;
             ctx.lineWidth = 2.5;
             ctx.lineCap = "round";
             ctx.stroke();
 
-            // Secondary arc (opposite side, ~120°, slightly dimmer)
+            // Secondary arc (opposite side, ~120°, dimmer)
             ctx.beginPath();
             ctx.arc(0, 0, ringRadius, Math.PI * 1.5, Math.PI * 2.17);
-            ctx.strokeStyle = "rgba(96, 165, 250, 0.5)";
+            ctx.strokeStyle = `rgba(${r}, ${g}, ${b}, 0.5)`;
             ctx.lineWidth = 2;
             ctx.stroke();
 
-            // Small dot markers at arc ends
-            const dotAngle1 = 0;
-            const dotAngle2 = Math.PI * 1.33;
-            for (const da of [dotAngle1, dotAngle2]) {
+            // Dot markers at arc ends
+            for (const da of [0, Math.PI * 1.33]) {
               ctx.beginPath();
-              ctx.arc(
-                Math.cos(da) * ringRadius,
-                Math.sin(da) * ringRadius,
-                2, 0, Math.PI * 2,
-              );
-              ctx.fillStyle = "#60a5fa";
+              ctx.arc(Math.cos(da) * ringRadius, Math.sin(da) * ringRadius, 2, 0, Math.PI * 2);
+              ctx.fillStyle = color;
               ctx.fill();
             }
 
             ctx.restore();
           } else {
-            // Static ring for multi-selected
+            // Static ring for multi-selected (uses node color)
+            const r = parseInt(color.slice(1, 3), 16);
+            const g = parseInt(color.slice(3, 5), 16);
+            const b = parseInt(color.slice(5, 7), 16);
             ctx.beginPath();
             ctx.arc(node.x, node.y, node.radius + SELECTED_RING_WIDTH, 0, Math.PI * 2);
-            ctx.fillStyle = "rgba(96, 165, 250, 0.2)";
+            ctx.fillStyle = `rgba(${r}, ${g}, ${b}, 0.2)`;
             ctx.fill();
-            ctx.strokeStyle = "#60a5fa";
+            ctx.strokeStyle = color;
             ctx.lineWidth = 1.5;
             ctx.stroke();
           }
