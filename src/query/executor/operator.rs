@@ -1641,6 +1641,32 @@ fn eval_function(name: &str, args: &[Value], store: Option<&GraphStore>) -> Exec
             let is_null = matches!(&args[0], Value::Null | Value::Property(PropertyValue::Null));
             Ok(Value::Property(PropertyValue::Boolean(!is_null)))
         }
+        // Label check: WHERE n:Label → $hasLabel(n, 'Label')
+        "$haslabel" => {
+            if args.is_empty() {
+                return Ok(Value::Property(PropertyValue::Boolean(false)));
+            }
+            let node_id = args[0].node_id();
+            if let (Some(nid), Some(s)) = (node_id, store) {
+                if let Some(node) = s.get_node(nid) {
+                    // Check all label arguments
+                    let has_all = args[1..].iter().all(|arg| {
+                        if let Value::Property(PropertyValue::String(label)) = arg {
+                            node.has_label(&Label::new(label))
+                        } else {
+                            false
+                        }
+                    });
+                    Ok(Value::Property(PropertyValue::Boolean(has_all)))
+                } else {
+                    Ok(Value::Property(PropertyValue::Boolean(false)))
+                }
+            } else if matches!(&args[0], Value::Null | Value::Property(PropertyValue::Null)) {
+                Ok(Value::Null)
+            } else {
+                Ok(Value::Property(PropertyValue::Boolean(false)))
+            }
+        }
         // startNode/endNode — return source/target node of an edge
         "startnode" => match &args[0] {
             Value::Edge(_, edge) => Ok(Value::NodeRef(edge.source)),

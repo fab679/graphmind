@@ -1118,6 +1118,28 @@ fn parse_set_item(pair: pest::iterators::Pair<Rule>) -> ParseResult<SetItem> {
 
     for inner in pair.into_inner() {
         match inner.as_rule() {
+            Rule::set_label => {
+                // SET n:Label — store as a no-op SET (label addition not yet executed)
+                for si in inner.into_inner() {
+                    if si.as_rule() == Rule::variable {
+                        variable = si.as_str().to_string();
+                    }
+                }
+                // Use a sentinel value to indicate label SET
+                property = "__label__".to_string();
+                value = Some(Expression::Literal(PropertyValue::Boolean(true)));
+            }
+            Rule::set_map_merge => {
+                // SET n += {map} — store variable and expression
+                for si in inner.into_inner() {
+                    match si.as_rule() {
+                        Rule::variable => variable = si.as_str().to_string(),
+                        Rule::expression => value = Some(parse_expression(si)?),
+                        _ => {}
+                    }
+                }
+                property = "__map_merge__".to_string();
+            }
             Rule::property_access => {
                 for pa in inner.into_inner() {
                     match pa.as_rule() {
@@ -1750,18 +1772,41 @@ fn parse_term(pair: pest::iterators::Pair<Rule>) -> ParseResult<Expression> {
 
             let mut expr = parse_primary(primary_pair.unwrap())?;
 
-            // Apply postfix operator (IS NULL / IS NOT NULL)
+            // Apply postfix operator (IS NULL / IS NOT NULL / :Label)
             if let Some(postfix) = postfix_pair {
-                let text = postfix.as_str().to_uppercase();
-                let op = if text.contains("NOT") {
-                    UnaryOp::IsNotNull
-                } else {
-                    UnaryOp::IsNull
-                };
-                expr = Expression::Unary {
-                    op,
-                    expr: Box::new(expr),
-                };
+                let mut is_label_check = false;
+                for pf_inner in postfix.clone().into_inner() {
+                    if pf_inner.as_rule() == Rule::label_check {
+                        // WHERE n:Label → $hasLabel(n, 'Label')
+                        for lc in pf_inner.into_inner() {
+                            if lc.as_rule() == Rule::label {
+                                expr = Expression::Function {
+                                    name: "$hasLabel".to_string(),
+                                    args: vec![
+                                        expr.clone(),
+                                        Expression::Literal(PropertyValue::String(
+                                            lc.as_str().to_string(),
+                                        )),
+                                    ],
+                                    distinct: false,
+                                };
+                                is_label_check = true;
+                            }
+                        }
+                    }
+                }
+                if !is_label_check {
+                    let text = postfix.as_str().to_uppercase();
+                    let op = if text.contains("NOT") {
+                        UnaryOp::IsNotNull
+                    } else {
+                        UnaryOp::IsNull
+                    };
+                    expr = Expression::Unary {
+                        op,
+                        expr: Box::new(expr),
+                    };
+                }
             }
 
             // Apply index operator [expr] or slice operator [start..end]
