@@ -21,10 +21,20 @@ const CATEGORIES = [
   "Objects",
   "Tech",
   "Science",
+  "Healthcare",
+  "Education",
+  "Legal",
+  "Industry",
   "Nature",
   "Finance",
   "Media",
-  "Misc",
+  "Food",
+  "Communication",
+  "Security",
+  "Social",
+  "Transport",
+  "Vehicles",
+  "Shapes",
 ];
 
 export function IconPicker({
