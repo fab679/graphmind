@@ -3536,6 +3536,210 @@ impl PhysicalOperator for ExpandOperator {
     }
 }
 
+/// Variable-length path expand operator: MATCH (a)-[*1..5]->(b)
+/// Uses BFS to find all paths within the specified hop range.
+pub struct VarLengthExpandOperator {
+    input: OperatorBox,
+    source_var: String,
+    target_var: String,
+    edge_var: Option<String>,
+    edge_types: Vec<String>,
+    direction: Direction,
+    min_hops: usize,
+    max_hops: usize,
+    target_labels: Vec<Label>,
+    path_variable: Option<String>,
+    // Buffered results from BFS
+    results: Vec<Record>,
+    result_index: usize,
+    executed: bool,
+}
+
+impl VarLengthExpandOperator {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        input: OperatorBox,
+        source_var: String,
+        target_var: String,
+        edge_var: Option<String>,
+        edge_types: Vec<String>,
+        direction: Direction,
+        min_hops: usize,
+        max_hops: usize,
+        target_labels: Vec<Label>,
+        path_variable: Option<String>,
+    ) -> Self {
+        Self {
+            input,
+            source_var,
+            target_var,
+            edge_var,
+            edge_types,
+            direction,
+            min_hops,
+            max_hops,
+            target_labels,
+            path_variable,
+            results: Vec::new(),
+            result_index: 0,
+            executed: false,
+        }
+    }
+
+    fn bfs_expand(&self, start_id: NodeId, store: &GraphStore, record: &Record) -> Vec<Record> {
+        use std::collections::VecDeque;
+        let mut results = Vec::new();
+        // BFS: (current_node, depth, visited_edges, path_nodes, path_edges)
+        let mut queue: VecDeque<(
+            NodeId,
+            usize,
+            HashSet<crate::graph::EdgeId>,
+            Vec<NodeId>,
+            Vec<crate::graph::EdgeId>,
+        )> = VecDeque::new();
+        queue.push_back((start_id, 0, HashSet::new(), vec![start_id], Vec::new()));
+
+        while let Some((current, depth, visited, path_nodes, path_edges)) = queue.pop_front() {
+            // If we're within the valid hop range, emit a result
+            if depth >= self.min_hops {
+                // Check target labels
+                let target_ok = if self.target_labels.is_empty() {
+                    true
+                } else if let Some(node) = store.get_node(current) {
+                    self.target_labels.iter().all(|l| node.has_label(l))
+                } else {
+                    false
+                };
+
+                if target_ok {
+                    let mut new_record = record.clone();
+                    new_record.bind(self.target_var.clone(), Value::NodeRef(current));
+                    if let Some(ref ev) = self.edge_var {
+                        if let Some(&last_edge) = path_edges.last() {
+                            new_record.bind(
+                                ev.clone(),
+                                Value::EdgeRef(
+                                    last_edge,
+                                    path_nodes[path_nodes.len() - 2],
+                                    current,
+                                    EdgeType::new(""),
+                                ),
+                            );
+                        }
+                    }
+                    if let Some(ref pv) = self.path_variable {
+                        new_record.bind(
+                            pv.clone(),
+                            Value::Path {
+                                nodes: path_nodes.clone(),
+                                edges: path_edges.clone(),
+                            },
+                        );
+                    }
+                    results.push(new_record);
+                }
+            }
+
+            // Continue BFS if we haven't reached max depth
+            if depth < self.max_hops {
+                let edges = match self.direction {
+                    Direction::Outgoing => store.get_outgoing_edge_targets(current),
+                    Direction::Incoming => store.get_incoming_edge_sources(current),
+                    Direction::Both => {
+                        let mut all = store.get_outgoing_edge_targets(current);
+                        let incoming = store.get_incoming_edge_sources(current);
+                        let mut seen: HashSet<crate::graph::EdgeId> =
+                            all.iter().map(|(eid, ..)| *eid).collect();
+                        for e in incoming {
+                            if seen.insert(e.0) {
+                                all.push(e);
+                            }
+                        }
+                        all
+                    }
+                };
+
+                for (edge_id, src, tgt, edge_type) in edges {
+                    // Edge type filter
+                    if !self.edge_types.is_empty()
+                        && !self.edge_types.iter().any(|t| t == edge_type.as_str())
+                    {
+                        continue;
+                    }
+                    // Edge uniqueness
+                    if visited.contains(&edge_id) {
+                        continue;
+                    }
+
+                    let next_node = if src == current { tgt } else { src };
+                    let mut new_visited = visited.clone();
+                    new_visited.insert(edge_id);
+                    let mut new_path_nodes = path_nodes.clone();
+                    new_path_nodes.push(next_node);
+                    let mut new_path_edges = path_edges.clone();
+                    new_path_edges.push(edge_id);
+
+                    queue.push_back((
+                        next_node,
+                        depth + 1,
+                        new_visited,
+                        new_path_nodes,
+                        new_path_edges,
+                    ));
+                }
+            }
+        }
+        results
+    }
+}
+
+impl PhysicalOperator for VarLengthExpandOperator {
+    fn next(&mut self, store: &GraphStore) -> ExecutionResult<Option<Record>> {
+        loop {
+            // Return buffered results
+            if self.result_index < self.results.len() {
+                let record = self.results[self.result_index].clone();
+                self.result_index += 1;
+                return Ok(Some(record));
+            }
+
+            // Get next input record and run BFS
+            match self.input.next(store)? {
+                Some(record) => {
+                    let source_val = record
+                        .get(&self.source_var)
+                        .ok_or_else(|| ExecutionError::VariableNotFound(self.source_var.clone()))?;
+                    let node_id = source_val.node_id().ok_or_else(|| {
+                        ExecutionError::TypeError(format!("{} is not a node", self.source_var))
+                    })?;
+
+                    self.results = self.bfs_expand(node_id, store, &record);
+                    self.result_index = 0;
+                }
+                None => return Ok(None),
+            }
+        }
+    }
+
+    fn reset(&mut self) {
+        self.input.reset();
+        self.results.clear();
+        self.result_index = 0;
+        self.executed = false;
+    }
+
+    fn describe(&self) -> OperatorDescription {
+        OperatorDescription {
+            name: "VarLengthExpand".to_string(),
+            details: format!(
+                "{}→{} *{}..{}",
+                self.source_var, self.target_var, self.min_hops, self.max_hops
+            ),
+            children: vec![self.input.describe()],
+        }
+    }
+}
+
 /// Project operator: RETURN n.name, n.age
 pub struct ProjectOperator {
     /// Input operator
