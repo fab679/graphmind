@@ -304,6 +304,21 @@ fn eval_binary_op(op: &BinaryOp, left: Value, right: Value) -> ExecutionResult<V
                 seconds: s1 + s2,
                 nanos: n1 + n2,
             },
+            // List concatenation
+            (PropertyValue::Array(l), PropertyValue::Array(r)) => {
+                let mut result = l.clone();
+                result.extend(r.iter().cloned());
+                PropertyValue::Array(result)
+            }
+            // List + element = append to list
+            (PropertyValue::Array(l), _) => {
+                let mut result = l.clone();
+                result.push(right_prop);
+                PropertyValue::Array(result)
+            }
+            // String concatenation with non-string (convert to string)
+            (PropertyValue::String(l), _) => PropertyValue::String(format!("{}{}", l, right_prop)),
+            (_, PropertyValue::String(r)) => PropertyValue::String(format!("{}{}", left_prop, r)),
             _ => {
                 return Err(ExecutionError::TypeError(
                     "Add requires numeric or string operands".to_string(),
@@ -1525,6 +1540,13 @@ fn eval_function(name: &str, args: &[Value], store: Option<&GraphStore>) -> Exec
                     .collect();
                 Ok(Value::Property(PropertyValue::Array(keys)))
             }
+            // keys() on a map returns the map keys
+            Value::Property(PropertyValue::Map(m)) => {
+                let keys: Vec<PropertyValue> =
+                    m.keys().map(|k| PropertyValue::String(k.clone())).collect();
+                Ok(Value::Property(PropertyValue::Array(keys)))
+            }
+            Value::Null | Value::Property(PropertyValue::Null) => Ok(Value::Null),
             _ => Err(ExecutionError::TypeError(
                 "keys() requires node or edge".to_string(),
             )),
@@ -1563,6 +1585,10 @@ fn eval_function(name: &str, args: &[Value], store: Option<&GraphStore>) -> Exec
                 Ok(Value::Property(PropertyValue::Map(map)))
             }
             Value::Null | Value::Property(PropertyValue::Null) => Ok(Value::Null),
+            // properties() on a map returns the map itself
+            Value::Property(PropertyValue::Map(m)) => {
+                Ok(Value::Property(PropertyValue::Map(m.clone())))
+            }
             _ => Err(ExecutionError::TypeError(
                 "properties() requires node or edge".to_string(),
             )),
@@ -2341,22 +2367,37 @@ impl NodeScanOperator {
             return;
         }
 
-        // Get all nodes matching the labels
+        // Get all nodes matching the labels (nodes must have ALL specified labels)
         if self.labels.is_empty() {
             // No labels - scan all nodes
             self.node_ids = store.all_nodes().into_iter().map(|n| n.id).collect();
+        } else if self.labels.len() == 1 {
+            // Single label - simple scan
+            self.node_ids = store
+                .get_nodes_by_label(&self.labels[0])
+                .into_iter()
+                .map(|n| n.id)
+                .collect();
         } else {
-            // Get nodes for each label
-            let mut node_set = HashSet::new();
-            for label in &self.labels {
-                let nodes = store.get_nodes_by_label(label);
-                for node in nodes {
-                    node_set.insert(node.id);
-                }
+            // Multiple labels - intersection: node must have ALL labels
+            // Start with nodes matching the first label, then filter by remaining labels
+            let first_nodes: HashSet<NodeId> = store
+                .get_nodes_by_label(&self.labels[0])
+                .into_iter()
+                .map(|n| n.id)
+                .collect();
+            let mut result: HashSet<NodeId> = first_nodes;
+            for label in &self.labels[1..] {
+                let label_nodes: HashSet<NodeId> = store
+                    .get_nodes_by_label(label)
+                    .into_iter()
+                    .map(|n| n.id)
+                    .collect();
+                result = result.intersection(&label_nodes).cloned().collect();
             }
 
             // Convert to sorted vec for consistent ordering
-            let mut nodes: Vec<_> = node_set.into_iter().collect();
+            let mut nodes: Vec<_> = result.into_iter().collect();
             nodes.sort_by_key(|id| id.as_u64());
             self.node_ids = nodes;
         }

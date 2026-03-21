@@ -72,6 +72,7 @@ struct CypherParser;
 
 static PRATT_PARSER: LazyLock<PrattParser<Rule>> = LazyLock::new(|| {
     PrattParser::new()
+        .op(Op::prefix(Rule::not_op))
         .op(Op::infix(Rule::or_op, Assoc::Left))
         .op(Op::infix(Rule::xor_op, Assoc::Left))
         .op(Op::infix(Rule::and_op, Assoc::Left))
@@ -98,6 +99,34 @@ pub enum ParseError {
 }
 
 pub type ParseResult<T> = Result<T, ParseError>;
+
+/// Parse an integer literal supporting decimal, hex (0x...), and octal (0o...) formats
+fn parse_integer_literal(s: &str) -> i64 {
+    let s = s.trim();
+    let (negative, digits) = if let Some(rest) = s.strip_prefix('-') {
+        (true, rest.trim())
+    } else {
+        (false, s)
+    };
+    let value = if let Some(hex) = digits
+        .strip_prefix("0x")
+        .or_else(|| digits.strip_prefix("0X"))
+    {
+        i64::from_str_radix(hex, 16).unwrap_or(0)
+    } else if let Some(oct) = digits
+        .strip_prefix("0o")
+        .or_else(|| digits.strip_prefix("0O"))
+    {
+        i64::from_str_radix(oct, 8).unwrap_or(0)
+    } else {
+        digits.parse::<i64>().unwrap_or(0)
+    };
+    if negative {
+        -value
+    } else {
+        value
+    }
+}
 
 /// Parse a Cypher query string into an AST
 pub fn parse_query(input: &str) -> ParseResult<Query> {
@@ -556,12 +585,52 @@ fn parse_create_statement(pair: pest::iterators::Pair<Rule>, query: &mut Query) 
                 }
                 query.create_clauses.push(clause);
             }
+            Rule::create_clause => {
+                // Nested create_clause from grammar: (with_clause ~ create_clause?)*
+                for create_inner in inner.into_inner() {
+                    if create_inner.as_rule() == Rule::pattern {
+                        let clause = CreateClause {
+                            pattern: parse_pattern(create_inner)?,
+                        };
+                        if query.create_clause.is_none() {
+                            query.create_clause = Some(clause.clone());
+                        }
+                        query.create_clauses.push(clause);
+                    }
+                }
+            }
             Rule::with_clause => {
                 // WITH clause between CREATEs — parse to carry variables
                 query.with_clause = Some(parse_with_clause(inner)?);
             }
+            Rule::set_clause => {
+                query.set_clauses.push(parse_set_clause(inner)?);
+            }
+            Rule::delete_clause => {
+                query.delete_clause = Some(parse_delete_clause(inner)?);
+            }
             Rule::return_clause => {
                 query.return_clause = Some(parse_return_clause(inner)?);
+            }
+            Rule::merge_inline => {
+                query.merge_clause = Some(parse_merge_clause(inner)?);
+            }
+            Rule::order_by_clause => {
+                query.order_by = Some(parse_order_by_clause(inner)?);
+            }
+            Rule::skip_clause => {
+                for skip_inner in inner.into_inner() {
+                    if skip_inner.as_rule() == Rule::integer {
+                        query.skip = Some(skip_inner.as_str().parse().unwrap());
+                    }
+                }
+            }
+            Rule::limit_clause => {
+                for limit_inner in inner.into_inner() {
+                    if limit_inner.as_rule() == Rule::integer {
+                        query.limit = Some(limit_inner.as_str().parse().unwrap());
+                    }
+                }
             }
             _ => {}
         }
@@ -696,6 +765,28 @@ fn parse_unwind_statement(pair: pest::iterators::Pair<Rule>, query: &mut Query) 
                         .push((prev_with, prev_unwind, Vec::new(), None));
                 }
                 query.with_clause = Some(parse_with_clause(inner)?);
+            }
+            Rule::create_clause => {
+                for create_inner in inner.into_inner() {
+                    if create_inner.as_rule() == Rule::pattern {
+                        let clause = CreateClause {
+                            pattern: parse_pattern(create_inner)?,
+                        };
+                        if query.create_clause.is_none() {
+                            query.create_clause = Some(clause.clone());
+                        }
+                        query.create_clauses.push(clause);
+                    }
+                }
+            }
+            Rule::merge_inline => {
+                query.merge_clause = Some(parse_merge_clause(inner)?);
+            }
+            Rule::set_clause => {
+                query.set_clauses.push(parse_set_clause(inner)?);
+            }
+            Rule::delete_clause => {
+                query.delete_clause = Some(parse_delete_clause(inner)?);
             }
             Rule::return_clause => {
                 query.return_clause = Some(parse_return_clause(inner)?);
@@ -890,7 +981,8 @@ fn parse_unwind_clause(pair: pest::iterators::Pair<Rule>) -> ParseResult<UnwindC
 }
 
 fn parse_merge_statement(pair: pest::iterators::Pair<Rule>, query: &mut Query) -> ParseResult<()> {
-    // merge_stmt has pattern, on_create_set?, on_match_set?, return_clause?
+    // merge_stmt has pattern, on_create_set?, on_match_set?, set_clause*,
+    // (with_clause ~ merge? ~ create?)*, return_clause?, order_by?, skip?, limit?
     let mut pattern = None;
     let mut on_create_set = Vec::new();
     let mut on_match_set = Vec::new();
@@ -912,8 +1004,44 @@ fn parse_merge_statement(pair: pest::iterators::Pair<Rule>, query: &mut Query) -
                     }
                 }
             }
+            Rule::set_clause => {
+                query.set_clauses.push(parse_set_clause(inner)?);
+            }
+            Rule::with_clause => {
+                query.with_clause = Some(parse_with_clause(inner)?);
+            }
+            Rule::create_clause => {
+                for create_inner in inner.into_inner() {
+                    if create_inner.as_rule() == Rule::pattern {
+                        let clause = CreateClause {
+                            pattern: parse_pattern(create_inner)?,
+                        };
+                        if query.create_clause.is_none() {
+                            query.create_clause = Some(clause.clone());
+                        }
+                        query.create_clauses.push(clause);
+                    }
+                }
+            }
             Rule::return_clause => {
                 query.return_clause = Some(parse_return_clause(inner)?);
+            }
+            Rule::order_by_clause => {
+                query.order_by = Some(parse_order_by_clause(inner)?);
+            }
+            Rule::skip_clause => {
+                for skip_inner in inner.into_inner() {
+                    if skip_inner.as_rule() == Rule::integer {
+                        query.skip = Some(skip_inner.as_str().parse().unwrap());
+                    }
+                }
+            }
+            Rule::limit_clause => {
+                for limit_inner in inner.into_inner() {
+                    if limit_inner.as_rule() == Rule::integer {
+                        query.limit = Some(limit_inner.as_str().parse().unwrap());
+                    }
+                }
             }
             _ => {}
         }
@@ -1280,11 +1408,11 @@ fn parse_value(pair: pest::iterators::Pair<Rule>) -> ParseResult<PropertyValue> 
                 return Ok(PropertyValue::Boolean(val));
             }
             Rule::integer => {
-                let val = inner.as_str().parse().unwrap();
+                let val = parse_integer_literal(inner.as_str());
                 return Ok(PropertyValue::Integer(val));
             }
             Rule::float => {
-                let val = inner.as_str().parse().unwrap();
+                let val: f64 = inner.as_str().parse().unwrap_or(0.0);
                 return Ok(PropertyValue::Float(val));
             }
             Rule::string => {
@@ -1461,6 +1589,13 @@ fn parse_order_item(pair: pest::iterators::Pair<Rule>) -> ParseResult<OrderByIte
 fn parse_expression(pair: pest::iterators::Pair<Rule>) -> ParseResult<Expression> {
     PRATT_PARSER
         .map_primary(|primary| parse_term(primary))
+        .map_prefix(|_op, expr| {
+            let expr = expr?;
+            Ok(Expression::Unary {
+                op: UnaryOp::Not,
+                expr: Box::new(expr),
+            })
+        })
         .map_infix(|left, op, right| {
             let left = left?;
             let right = right?;

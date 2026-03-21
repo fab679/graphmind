@@ -731,10 +731,36 @@ impl QueryPlanner {
                                 as OperatorBox
                         }
                     } else {
-                        Box::new(CartesianProductOperator::new(existing, match_op)) as OperatorBox
+                        if match_clause.optional {
+                            let right_only: Vec<String> = clause_vars.iter().cloned().collect();
+                            Box::new(LeftOuterJoinOperator::new(
+                                existing,
+                                match_op,
+                                String::new(),
+                                right_only,
+                            )) as OperatorBox
+                        } else {
+                            Box::new(CartesianProductOperator::new(existing, match_op))
+                                as OperatorBox
+                        }
                     }
                 }
-                None => match_op,
+                None => {
+                    if match_clause.optional {
+                        // Standalone OPTIONAL MATCH: wrap with LeftOuterJoin so
+                        // we get a null row if nothing matches
+                        let right_only: Vec<String> = clause_vars.iter().cloned().collect();
+                        let single_row: OperatorBox = Box::new(SingleRowOperator::new());
+                        Box::new(LeftOuterJoinOperator::new(
+                            single_row,
+                            match_op,
+                            String::new(),
+                            right_only,
+                        )) as OperatorBox
+                    } else {
+                        match_op
+                    }
+                }
             });
             known_vars.extend(clause_vars);
         }
@@ -967,10 +993,34 @@ impl QueryPlanner {
                                 as OperatorBox
                         }
                     } else {
-                        Box::new(CartesianProductOperator::new(existing, match_op)) as OperatorBox
+                        if match_clause.optional {
+                            let right_only: Vec<String> = clause_vars.iter().cloned().collect();
+                            Box::new(LeftOuterJoinOperator::new(
+                                existing,
+                                match_op,
+                                String::new(),
+                                right_only,
+                            )) as OperatorBox
+                        } else {
+                            Box::new(CartesianProductOperator::new(existing, match_op))
+                                as OperatorBox
+                        }
                     }
                 }
-                None => match_op,
+                None => {
+                    if match_clause.optional {
+                        let right_only: Vec<String> = clause_vars.iter().cloned().collect();
+                        let single_row: OperatorBox = Box::new(SingleRowOperator::new());
+                        Box::new(LeftOuterJoinOperator::new(
+                            single_row,
+                            match_op,
+                            String::new(),
+                            right_only,
+                        )) as OperatorBox
+                    } else {
+                        match_op
+                    }
+                }
             });
             known_vars.extend(clause_vars);
         }
@@ -1974,6 +2024,7 @@ impl QueryPlanner {
             Option<String>,
         )> = Vec::new();
         let mut output_columns: Vec<String> = Vec::new();
+        let mut create_anon_counter = 0usize;
 
         for create_clause in create_clauses {
             let pattern = &create_clause.pattern;
@@ -1982,9 +2033,18 @@ impl QueryPlanner {
                 let labels: Vec<Label> = start.labels.clone();
                 let properties: HashMap<String, PropertyValue> =
                     start.properties.clone().unwrap_or_default();
-                let variable = start.variable.clone();
+                // Generate anonymous variable if none specified and path has edges
+                let variable = start.variable.clone().or_else(|| {
+                    if !path.segments.is_empty() {
+                        let name = format!("_create_anon_{}", create_anon_counter);
+                        create_anon_counter += 1;
+                        Some(name)
+                    } else {
+                        None
+                    }
+                });
 
-                if let Some(ref var) = variable {
+                if let Some(ref var) = start.variable {
                     // Only add to nodes if not already seen (avoid duplicate node creation)
                     if !all_nodes
                         .iter()
@@ -1997,16 +2057,21 @@ impl QueryPlanner {
                     all_nodes.push((labels, properties, variable.clone()));
                 }
 
-                let mut current_source_var = start.variable.clone();
+                let mut current_source_var = variable;
 
                 for segment in &path.segments {
                     let node = &segment.node;
                     let node_labels: Vec<Label> = node.labels.clone();
                     let node_properties: HashMap<String, PropertyValue> =
                         node.properties.clone().unwrap_or_default();
-                    let node_variable = node.variable.clone();
+                    // Generate anonymous variable if none specified (needed for edge linking)
+                    let node_variable = node.variable.clone().or_else(|| {
+                        let name = format!("_create_anon_{}", create_anon_counter);
+                        create_anon_counter += 1;
+                        Some(name)
+                    });
 
-                    if let Some(ref var) = node_variable {
+                    if let Some(ref var) = node.variable {
                         if !all_nodes
                             .iter()
                             .any(|(_, _, v)| v.as_deref() == Some(var.as_str()))
@@ -2031,9 +2096,16 @@ impl QueryPlanner {
                     if let (Some(source_var), Some(target_var)) =
                         (&current_source_var, &node_variable)
                     {
+                        // For incoming edges (<-[:R]-), swap source and target
+                        let (actual_source, actual_target) =
+                            if matches!(edge.direction, Direction::Incoming) {
+                                (target_var.clone(), source_var.clone())
+                            } else {
+                                (source_var.clone(), target_var.clone())
+                            };
                         all_edges.push((
-                            source_var.clone(),
-                            target_var.clone(),
+                            actual_source,
+                            actual_target,
                             edge_type,
                             edge_properties,
                             edge_variable,
@@ -2085,17 +2157,31 @@ impl QueryPlanner {
             Option<String>,
         )> = Vec::new();
 
+        // Counter for generating anonymous variable names for CREATE patterns
+        let mut create_anon_counter = 0usize;
+
         for path in &pattern.paths {
             // Add start node
             let start = &path.start;
             let labels: Vec<Label> = start.labels.clone();
             let properties: HashMap<String, PropertyValue> =
                 start.properties.clone().unwrap_or_default();
-            let variable = start.variable.clone();
+            // Generate anonymous variable if none specified (needed for edge linking)
+            let variable = start.variable.clone().or_else(|| {
+                if !path.segments.is_empty() {
+                    let name = format!("_create_anon_{}", create_anon_counter);
+                    create_anon_counter += 1;
+                    Some(name)
+                } else {
+                    None
+                }
+            });
 
-            // Track output column if variable exists
-            if let Some(ref var) = variable {
-                output_columns.push(var.clone());
+            // Track output column if variable exists and was user-specified
+            if start.variable.is_some() {
+                if let Some(ref var) = variable {
+                    output_columns.push(var.clone());
+                }
             }
 
             nodes_to_create.push((labels, properties, variable.clone()));
@@ -2110,10 +2196,17 @@ impl QueryPlanner {
                 let node_labels: Vec<Label> = node.labels.clone();
                 let node_properties: HashMap<String, PropertyValue> =
                     node.properties.clone().unwrap_or_default();
-                let node_variable = node.variable.clone();
+                // Generate anonymous variable if none specified (needed for edge linking)
+                let node_variable = node.variable.clone().or_else(|| {
+                    let name = format!("_create_anon_{}", create_anon_counter);
+                    create_anon_counter += 1;
+                    Some(name)
+                });
 
-                if let Some(ref var) = node_variable {
-                    output_columns.push(var.clone());
+                if node.variable.is_some() {
+                    if let Some(ref var) = node_variable {
+                        output_columns.push(var.clone());
+                    }
                 }
 
                 nodes_to_create.push((node_labels, node_properties, node_variable.clone()));
@@ -2130,12 +2223,19 @@ impl QueryPlanner {
                 let edge_variable = edge.variable.clone();
 
                 // Create edge between source and target nodes
-                // For CREATE, we need both variables to be defined
+                // Both will have variables (either user-specified or generated)
+                // For incoming edges (<-[:R]-), swap source and target
                 if let (Some(source_var), Some(target_var)) = (&current_source_var, &node_variable)
                 {
+                    let (actual_source, actual_target) =
+                        if matches!(edge.direction, Direction::Incoming) {
+                            (target_var.clone(), source_var.clone())
+                        } else {
+                            (source_var.clone(), target_var.clone())
+                        };
                     edges_to_create.push((
-                        source_var.clone(),
-                        target_var.clone(),
+                        actual_source,
+                        actual_target,
                         edge_type,
                         edge_properties,
                         edge_variable,

@@ -17,7 +17,9 @@ return_stmt = { return_clause ~ order_by_clause? ~ skip_clause? ~ limit_clause? 
 with_stmt = { with_clause ~ (unwind_clause ~ (with_clause ~ unwind_clause?)*)? ~ ((match_clause | optional_match_clause)+ ~ where_clause?)? ~ create_clause? ~ set_clause* ~ delete_clause? ~ return_clause? ~ order_by_clause? ~ skip_clause? ~ limit_clause? }
 
 // Standalone UNWIND (without MATCH): e.g. UNWIND [1,2,3] AS x RETURN x
-unwind_stmt = { unwind_clause ~ (with_clause ~ unwind_clause?)* ~ return_clause ~ order_by_clause? ~ skip_clause? ~ limit_clause? }
+// Also supports UNWIND ... CREATE ..., UNWIND ... SET/DELETE etc.
+// Supports consecutive UNWINDs: UNWIND ... UNWIND ... RETURN ...
+unwind_stmt = { unwind_clause ~ ((with_clause | unwind_clause) ~ unwind_clause?)* ~ create_clause? ~ merge_inline? ~ set_clause* ~ delete_clause? ~ return_clause? ~ order_by_clause? ~ skip_clause? ~ limit_clause? }
 
 // CREATE VECTOR INDEX statement
 create_vector_index_stmt = { ^"CREATE" ~ ^"VECTOR" ~ ^"INDEX" ~ variable? ~ ^"FOR" ~ "(" ~ variable ~ ":" ~ label ~ ")" ~ ^"ON" ~ "(" ~ variable ~ "." ~ property_key ~ ")" ~ options? }
@@ -42,12 +44,12 @@ yield_items = { yield_item ~ ("," ~ yield_item)* }
 yield_item = { variable ~ (^"AS" ~ variable)? }
 
 // MERGE statement: MERGE (n:Person {name: "Alice"}) ON CREATE SET ... ON MATCH SET ...
-merge_stmt = { ^"MERGE" ~ pattern ~ on_create_set? ~ on_match_set? ~ return_clause? }
+merge_stmt = { ^"MERGE" ~ pattern ~ on_create_set? ~ on_match_set? ~ set_clause* ~ (with_clause ~ (^"MERGE" ~ pattern ~ on_create_set? ~ on_match_set?)? ~ create_clause?)* ~ return_clause? ~ order_by_clause? ~ skip_clause? ~ limit_clause? }
 on_create_set = { ^"ON" ~ ^"CREATE" ~ ^"SET" ~ set_item ~ ("," ~ set_item)* }
 on_match_set = { ^"ON" ~ ^"MATCH" ~ ^"SET" ~ set_item ~ ("," ~ set_item)* }
 
 // MATCH statement: sequence of reading clauses, optional write, finishing with RETURN
-match_stmt = { (optional_match_clause | match_clause)+ ~ where_clause? ~ call_clause? ~ unwind_clause? ~ ((optional_match_clause | match_clause)+ ~ where_clause?)? ~ (with_clause ~ unwind_clause? ~ ((optional_match_clause | match_clause)+ ~ where_clause?)?)* ~ create_clause? ~ merge_inline? ~ delete_clause? ~ foreach_clause? ~ set_clause* ~ remove_clause* ~ return_clause? ~ order_by_clause? ~ skip_clause? ~ limit_clause? }
+match_stmt = { (optional_match_clause | match_clause)+ ~ where_clause? ~ call_clause? ~ unwind_clause? ~ ((optional_match_clause | match_clause)+ ~ where_clause?)? ~ (with_clause ~ unwind_clause? ~ ((optional_match_clause | match_clause)+ ~ where_clause?)?)* ~ create_clause? ~ (with_clause ~ create_clause?)* ~ merge_inline? ~ delete_clause? ~ foreach_clause? ~ set_clause* ~ remove_clause* ~ return_clause? ~ order_by_clause? ~ skip_clause? ~ limit_clause? }
 foreach_clause = { ^"FOREACH" ~ "(" ~ variable ~ in_op ~ expression ~ "|" ~ foreach_body+ ~ ")" }
 foreach_body = _{ set_clause | remove_clause | delete_clause | create_clause }
 unwind_clause = { ^"UNWIND" ~ expression ~ ^"AS" ~ variable }
@@ -69,7 +71,7 @@ skip_clause = { ^"SKIP" ~ integer }
 limit_clause = { ^"LIMIT" ~ integer }
 
 // Standalone CREATE clause
-create_stmt = { ^"CREATE" ~ pattern ~ (with_clause ~ ^"CREATE" ~ pattern)* ~ return_clause? }
+create_stmt = { ^"CREATE" ~ pattern ~ set_clause* ~ (with_clause ~ (create_clause | merge_inline)?)* ~ delete_clause? ~ return_clause? ~ order_by_clause? ~ skip_clause? ~ limit_clause? }
 
 // Pattern matching
 pattern = { named_path ~ ("," ~ named_path)* }
@@ -84,14 +86,17 @@ node = { "(" ~ variable? ~ labels? ~ properties? ~ ")" }
 labels = { (":" ~ label)+ }
 label = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
 
-// Edge pattern: -[:KNOWS]-> or <-[:KNOWS]- or -[:KNOWS]-
+// Edge pattern: -[:KNOWS]-> or <-[:KNOWS]- or -[:KNOWS]- or --> or <-- or --
 edge_pattern = {
     ("<-" ~ edge_detail ~ "-") |
     ("-" ~ edge_detail ~ "->") |
-    ("-" ~ edge_detail ~ "-")
+    ("-" ~ edge_detail ~ "-") |
+    ("<--") |
+    ("-->") |
+    ("--")
 }
 edge_detail = { "[" ~ variable? ~ edge_types? ~ length_pattern? ~ properties? ~ "]" }
-edge_types = { (":" ~ edge_type)+ }
+edge_types = { ":" ~ edge_type ~ ("|" ~ ":"? ~ edge_type)* }
 edge_type = @{ (ASCII_ALPHA | "_") ~ (ASCII_ALPHANUMERIC | "_")* }
 
 // Variable length: *1..5 or * or *3..
@@ -115,7 +120,7 @@ order_item = { expression ~ order_direction? }
 order_direction = { ^"ASCENDING" | ^"DESCENDING" | ^"ASC" | ^"DESC" }
 
 // Expressions
-expression = { term ~ (binary_op ~ term)* }
+expression = { not_op? ~ term ~ (binary_op ~ not_op? ~ term)* }
 term = { unary_op* ~ primary ~ postfix_op? ~ index_op? }
 postfix_op = { ^"IS" ~ ^"NOT" ~ ^"NULL" | ^"IS" ~ ^"NULL" }
 index_op = { "[" ~ (slice_op | expression) ~ "]" }
@@ -181,7 +186,8 @@ xor_op = @{ ^"XOR" ~ !(ASCII_ALPHANUMERIC | "_") }
 
 binary_op = _{ mul_div_mod_op | add_sub_op | comparison_op | in_op | and_op | xor_op | or_op }
 
-unary_op = { ^"NOT" | "-" }
+not_op = @{ ^"NOT" ~ !(ASCII_ALPHANUMERIC | "_") }
+unary_op = { "-" }
 
 // Values
 value = {
@@ -196,9 +202,9 @@ value = {
 
 null = { ^"NULL" }
 boolean = { ^"TRUE" | ^"FALSE" }
-integer = @{ "-"? ~ ASCII_DIGIT+ }
-float = @{ "-"? ~ ASCII_DIGIT+ ~ "." ~ ASCII_DIGIT+ ~ (^"e" ~ ("-" | "+")? ~ ASCII_DIGIT+)? }
-string = @{ "\"" ~ (!"\"" ~ ANY)* ~ "\"" | "'" ~ (!"'" ~ ANY)* ~ "'" }
+integer = @{ "-"? ~ ("0x" ~ ASCII_HEX_DIGIT+ | "0o" ~ ('0'..'7')+ | ASCII_DIGIT+) }
+float = @{ "-"? ~ (ASCII_DIGIT+ ~ "." ~ !("." | ASCII_ALPHA) ~ ASCII_DIGIT* | "." ~ ASCII_DIGIT+) ~ (^"e" ~ ("-" | "+")? ~ ASCII_DIGIT+)? | "-"? ~ ASCII_DIGIT+ ~ ^"e" ~ ("-" | "+")? ~ ASCII_DIGIT+ }
+string = @{ "\"" ~ ("\\\\" | "\\\"" | "\\'" | "\\n" | "\\t" | "\\r" | "\\/" | !"\"" ~ ANY)* ~ "\"" | "'" ~ ("\\\\" | "\\'" | "\\\"" | "\\n" | "\\t" | "\\r" | "\\/" | !"'" ~ ANY)* ~ "'" }
 list = { "[" ~ (value ~ ("," ~ value)*)? ~ "]" }
 map = { "{" ~ (map_entry ~ ("," ~ map_entry)*)? ~ "}" }
 map_entry = { (string | property_key) ~ ":" ~ value }

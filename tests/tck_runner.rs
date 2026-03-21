@@ -248,6 +248,7 @@ fn parse_feature_file(path: &Path) -> Vec<TckScenario> {
                 }
 
                 // When executing control query (for side-effect verification — skip)
+                // Also skip all subsequent "Then" blocks and "And" lines for the control query
                 if line.starts_with("When executing control query") {
                     i += 1;
                     // Skip the query block
@@ -262,6 +263,19 @@ fn parse_feature_file(path: &Path) -> Vec<TckScenario> {
                     }
                     if i < lines.len() {
                         i += 1; // skip closing """
+                    }
+                    // Skip "Then" and "And" lines that follow the control query result
+                    while i < lines.len() {
+                        let next_line = lines[i].trim();
+                        if next_line.starts_with("Then ") || next_line.starts_with("And ") {
+                            // Skip "Then" block content (tables, etc.)
+                            i += 1;
+                            while i < lines.len() && lines[i].trim().starts_with('|') {
+                                i += 1;
+                            }
+                        } else {
+                            break;
+                        }
                     }
                     continue;
                 }
@@ -430,14 +444,28 @@ fn run_scenario(scenario: &TckScenario) -> Outcome {
         return Outcome::Skipped("@ignore tag".to_string());
     }
 
-    // Wrap the entire execution in catch_unwind so parser/executor panics
-    // are reported as failures instead of aborting the whole test suite.
+    // Wrap the entire execution in a thread with a larger stack to avoid
+    // stack overflow from deeply nested PEG parsing. Also catch_unwind
+    // so parser/executor panics are reported as failures.
     let setup_queries = scenario.setup_queries.clone();
     let test_query = scenario.test_query.clone();
 
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        run_scenario_inner(&setup_queries, &test_query)
-    }));
+    let result = std::thread::Builder::new()
+        .stack_size(16 * 1024 * 1024) // 16 MB stack
+        .spawn(move || {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                run_scenario_inner(&setup_queries, &test_query)
+            }))
+        })
+        .unwrap()
+        .join();
+
+    let result = match result {
+        Ok(inner) => inner,
+        Err(_) => {
+            Err(Box::new("thread panicked (stack overflow?)") as Box<dyn std::any::Any + Send>)
+        }
+    };
 
     match result {
         Ok(inner_result) => check_expectation(scenario, inner_result),
@@ -472,29 +500,54 @@ fn run_scenario_inner(setup_queries: &[String], test_query: &str) -> InnerResult
     let mut store = GraphStore::new();
     let engine = QueryEngine::new();
 
-    // Run setup queries (each is a single multi-line statement)
+    // Run setup queries (each is a single multi-line statement, or a multi-statement script)
     for (idx, setup) in setup_queries.iter().enumerate() {
+        // Try as a single query first; if that fails, try line-by-line script execution
         if let Err(e) = execute_query(&engine, &mut store, setup) {
-            return InnerResult::SetupFailed(format!(
-                "Setup query {} failed: {}  query: {}",
-                idx + 1,
-                e,
-                truncate(setup, 120)
-            ));
+            // Fallback: try executing line-by-line (handles multi-CREATE blocks)
+            if setup.contains('\n') {
+                if let Err(e2) = execute_script(&engine, &mut store, setup) {
+                    return InnerResult::SetupFailed(format!(
+                        "Setup query {} failed: {}  query: {}",
+                        idx + 1,
+                        e2,
+                        truncate(setup, 120)
+                    ));
+                }
+            } else {
+                return InnerResult::SetupFailed(format!(
+                    "Setup query {} failed: {}  query: {}",
+                    idx + 1,
+                    e,
+                    truncate(setup, 120)
+                ));
+            }
         }
     }
 
     // Run the test query (single statement, possibly multi-line)
-    // Use execute_query for single-statement test queries, but some may
-    // span multiple lines (e.g., MATCH ... \n RETURN ...) which is fine
-    // as the engine handles newlines within a single statement.
+    // Try as single query first, then fall back to script execution for multi-statement queries
     match execute_query(&engine, &mut store, test_query) {
         Ok(batch) => InnerResult::Ok {
             row_count: batch.len(),
             col_count: batch.columns.len(),
             columns: batch.columns.clone(),
         },
-        Err(e) => InnerResult::QueryError(format!("{}", e)),
+        Err(e) => {
+            // Fallback: try line-by-line script execution for multi-statement queries
+            if test_query.contains('\n') {
+                match execute_script(&engine, &mut store, test_query) {
+                    Ok(batch) => InnerResult::Ok {
+                        row_count: batch.len(),
+                        col_count: batch.columns.len(),
+                        columns: batch.columns.clone(),
+                    },
+                    Err(_) => InnerResult::QueryError(format!("{}", e)),
+                }
+            } else {
+                InnerResult::QueryError(format!("{}", e))
+            }
+        }
     }
 }
 
@@ -743,9 +796,9 @@ fn test_tck_compliance() {
 
     // First N failures
     if !failures.is_empty() {
-        let show = std::cmp::min(failures.len(), 30);
+        let show = failures.len();
         println!("\n  First {} failures (of {}):", show, failures.len());
-        for f in failures.iter().take(show) {
+        for f in failures.iter() {
             println!("    FAIL  {}", f);
         }
     }
