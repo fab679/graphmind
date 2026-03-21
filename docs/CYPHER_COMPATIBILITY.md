@@ -10,7 +10,7 @@ This document tracks the compatibility of Graphmind's OpenCypher implementation 
 Graphmind provides **~90% OpenCypher coverage** with pattern matching, CRUD operations, aggregations, subqueries, and extensive function support. Features unique to Graphmind include native vector search, graph algorithms, and optimization solvers accessible via Cypher.
 
 - **Supported:** MATCH, OPTIONAL MATCH, CREATE, DELETE, SET, REMOVE, MERGE (with ON CREATE/ON MATCH SET), WITH, UNWIND, UNION/UNION ALL, RETURN DISTINCT, ORDER BY, SKIP, LIMIT, EXPLAIN, EXISTS subqueries, aggregations (COUNT/SUM/AVG/MIN/MAX/COLLECT), 30+ built-in functions, cross-type coercion, Null propagation.
-- **Remaining gaps:** list slicing, pattern comprehensions, named paths, `collect(DISTINCT x)`.
+- **Remaining gaps:** `XOR` operator, `split()` function, `nodes()`/`relationships()` path functions.
 
 ## Feature Matrix
 
@@ -46,7 +46,8 @@ Graphmind provides **~90% OpenCypher coverage** with pattern matching, CRUD oper
 | **Numeric Functions** | `abs`, `ceil`, `floor`, `round` | ✅ | ✅ | ✅ | |
 | | `sqrt`, `sign` | ✅ | ✅ | ✅ | |
 | | `toInteger`, `toFloat` | ✅ | ✅ | ✅ | |
-| | `rand`, `log`, `exp` | ❌ | ✅ | ✅ | |
+| | `rand`, `log`, `exp` | ✅ | ✅ | ✅ | |
+| | `timestamp` | ✅ | ✅ | ✅ | Epoch milliseconds |
 | **Collection Functions** | `size`, `length` | ✅ | ✅ | ✅ | |
 | | `head`, `last`, `tail` | ✅ | ✅ | ✅ | |
 | | `keys` | ✅ | ✅ | ✅ | |
@@ -60,7 +61,8 @@ Graphmind provides **~90% OpenCypher coverage** with pattern matching, CRUD oper
 | | `=~` (regex) | ✅ | ✅ | ✅ | |
 | | `IN` (list membership) | ✅ | ✅ | ✅ | |
 | | `IS NULL`, `IS NOT NULL` | ✅ | ✅ | ✅ | |
-| | `AND`, `OR`, `NOT`, `XOR` | ✅ | ✅ | ✅ | Atomic keyword rules prevent false matches |
+| | `AND`, `OR`, `NOT` | ✅ | ✅ | ✅ | Atomic keyword rules prevent false matches |
+| | `XOR` | ❌ | ✅ | ✅ | Not implemented |
 | **Type Handling** | Integer/Float coercion | ✅ | ✅ | ✅ | Automatic promotion in comparisons |
 | | Null propagation | ✅ | ✅ | ✅ | Three-valued logic (Null comparisons return Null) |
 | | String/Boolean coercion | ✅ | ❌ | ❌ | LLM-friendly: `prop = 'true'` matches Boolean |
@@ -87,14 +89,17 @@ Graphmind provides **~90% OpenCypher coverage** with pattern matching, CRUD oper
 
 ## Remaining Gaps
 
-1. **List slicing**: `list[0..3]` syntax not yet supported.
-2. **Pattern comprehensions**: `[(a)-[:KNOWS]->(b) | b.name]` not yet supported.
-3. **Named paths**: `p = (a)-[:KNOWS]->(b)` path assignment not yet supported.
-4. **Some functions**: `split`, `rand`, `log`, `exp`, `nodes()`, `relationships()`, `timestamp()`.
-5. **`collect(DISTINCT x)`**: DISTINCT modifier inside aggregate functions not yet supported.
+1. **`XOR` operator**: Boolean XOR not implemented.
+2. **`split()` function**: String splitting not yet supported.
+3. **`nodes()`, `relationships()`**: Path decomposition functions not yet supported.
 
 ## Recently Resolved (formerly listed as gaps)
 
+- ~~**List slicing**~~: `list[0..3]`, `list[..2]`, `list[3..]`, `list[-2..]` fully supported.
+- ~~**Pattern comprehensions**~~: `[(a)-[:REL]->(b) | expr]` fully supported with optional WHERE filter.
+- ~~**Named paths**~~: `p = (a)-[:KNOWS]->(b)` path assignment supported (CY-04).
+- ~~**`collect(DISTINCT x)`**~~: DISTINCT modifier inside `collect()` fully supported.
+- ~~**`rand`, `log`, `exp`, `timestamp`**~~: All implemented.
 - ~~**CASE expressions**~~: Fully supported as of v0.5.5 (simple and searched forms).
 - ~~**WITH projection barrier**~~: Fully enforced as of v0.5.10.
 - ~~**Multi-statement queries**~~: Supported as of v0.6.4 (semicolon splitting + multi-CREATE rewriting).

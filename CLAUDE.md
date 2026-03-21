@@ -172,7 +172,7 @@ npm run build              # Production build → ui/dist/
 
 **Supported functions (30+):** toUpper, toLower, trim, replace, substring, left, right, reverse, toString, toInteger, toFloat, abs, ceil, floor, round, sqrt, sign, count, sum, avg, min, max, collect, size, length, head, last, tail, keys, id, labels, type, exists, coalesce.
 
-**Remaining gaps:** list slicing, pattern comprehensions, named paths, collect(DISTINCT x).
+**Remaining gaps:** `XOR` operator, `split()` function, `nodes()`/`relationships()` path functions.
 
 ## API Patterns
 
@@ -293,3 +293,17 @@ The web visualizer at `http://localhost:8080` provides:
 - **Keyboard Shortcuts**: F5 (run), Escape (clear), Delete (remove from canvas), ? (help)
 - **Script Loader**: Upload .cypher files to execute all statements
 - **Query History**: With play/delete buttons and timeline scrubber
+
+## Security
+
+Authentication is **disabled by default**. For production deployments:
+
+```bash
+# Token auth
+GRAPHMIND_AUTH_TOKEN=your-secret cargo run
+
+# Username/password auth
+GRAPHMIND_ADMIN_USER=admin GRAPHMIND_ADMIN_PASSWORD=secret cargo run
+```
+
+Both HTTP and RESP servers require authentication when enabled. The UI shows a login screen automatically.
