@@ -583,7 +583,12 @@ fn parse_reading_clause_into_pending(
                 }
             }
             Rule::unwind => {
-                *unwind = Some(parse_unwind_clause(inner)?);
+                let new_unwind = parse_unwind_clause(inner)?;
+                if let Some(prev) = unwind.take() {
+                    // Push previous UNWIND to additional_unwinds
+                    query.additional_unwinds.push(prev);
+                }
+                *unwind = Some(new_unwind);
             }
             Rule::in_query_call => {
                 query.call_clause = Some(parse_in_query_call(inner)?);
