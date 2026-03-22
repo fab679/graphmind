@@ -445,17 +445,36 @@ impl QueryPlanner {
 
         // Validate CREATE: re-binding within same CREATE pattern
         let validate_create_rebind = |cc: &crate::query::ast::CreateClause| -> ExecutionResult<()> {
-            let mut seen_vars: HashMap<String, (Vec<Label>, bool)> = HashMap::new(); // var -> (labels, has_properties)
+            let mut seen_node_vars: HashMap<String, bool> = HashMap::new(); // var -> has_labels_or_props
             for path in &cc.pattern.paths {
+                // Check start node
                 if let Some(v) = &path.start.variable {
-                    let entry = seen_vars.entry(v.clone()).or_insert((Vec::new(), false));
-                    if !path.start.labels.is_empty() {
-                        if !entry.0.is_empty() && entry.0 != path.start.labels {
+                    let has_label_or_prop =
+                        !path.start.labels.is_empty() || path.start.properties.is_some();
+                    if let Some(&prev_had) = seen_node_vars.get(v) {
+                        // Second occurrence: BOTH must have labels/props to be a conflict
+                        // Self-referencing (a:A)-[:R]->(a) is OK (second has no labels)
+                        if has_label_or_prop && prev_had {
                             return Err(ExecutionError::PlanningError(format!(
                                 "Can't create node '{}' with labels or properties here — already declared in this CREATE", v
                             )));
                         }
-                        entry.0 = path.start.labels.clone();
+                    }
+                    seen_node_vars.insert(v.clone(), has_label_or_prop);
+                }
+                // Check segment nodes
+                for seg in &path.segments {
+                    if let Some(v) = &seg.node.variable {
+                        let has_label_or_prop =
+                            !seg.node.labels.is_empty() || seg.node.properties.is_some();
+                        if let Some(&prev_had) = seen_node_vars.get(v) {
+                            if has_label_or_prop && prev_had {
+                                return Err(ExecutionError::PlanningError(format!(
+                                    "Can't create node '{}' with labels or properties here — already declared in this CREATE", v
+                                )));
+                            }
+                        }
+                        seen_node_vars.insert(v.clone(), has_label_or_prop);
                     }
                 }
             }
@@ -616,6 +635,88 @@ impl QueryPlanner {
                     return Err(ExecutionError::PlanningError(
                         "RETURN * is not allowed when there are no variables in scope".to_string(),
                     ));
+                }
+            }
+
+            // Validate: RETURN references only defined variables
+            if !rc.star && !query.match_clauses.is_empty() {
+                let mut defined_vars: HashSet<String> = HashSet::new();
+                for mc in &query.match_clauses {
+                    for path in &mc.pattern.paths {
+                        if let Some(v) = &path.start.variable {
+                            defined_vars.insert(v.clone());
+                        }
+                        if let Some(v) = &path.path_variable {
+                            defined_vars.insert(v.clone());
+                        }
+                        for seg in &path.segments {
+                            if let Some(v) = &seg.edge.variable {
+                                defined_vars.insert(v.clone());
+                            }
+                            if let Some(v) = &seg.node.variable {
+                                defined_vars.insert(v.clone());
+                            }
+                        }
+                    }
+                }
+                if let Some(wc) = &query.with_clause {
+                    for item in &wc.items {
+                        if let Some(a) = &item.alias {
+                            defined_vars.insert(a.clone());
+                        } else if let Expression::Variable(v) = &item.expression {
+                            defined_vars.insert(v.clone());
+                        }
+                    }
+                }
+                if let Some(uc) = &query.unwind_clause {
+                    defined_vars.insert(uc.variable.clone());
+                }
+                for u in &query.additional_unwinds {
+                    defined_vars.insert(u.variable.clone());
+                }
+                if let Some(mc) = &query.merge_clause {
+                    for path in &mc.pattern.paths {
+                        if let Some(v) = &path.start.variable {
+                            defined_vars.insert(v.clone());
+                        }
+                        if let Some(v) = &path.path_variable {
+                            defined_vars.insert(v.clone());
+                        }
+                        for seg in &path.segments {
+                            if let Some(v) = &seg.edge.variable {
+                                defined_vars.insert(v.clone());
+                            }
+                            if let Some(v) = &seg.node.variable {
+                                defined_vars.insert(v.clone());
+                            }
+                        }
+                    }
+                }
+                if let Some(cc) = &query.create_clause {
+                    for path in &cc.pattern.paths {
+                        if let Some(v) = &path.start.variable {
+                            defined_vars.insert(v.clone());
+                        }
+                        for seg in &path.segments {
+                            if let Some(v) = &seg.edge.variable {
+                                defined_vars.insert(v.clone());
+                            }
+                            if let Some(v) = &seg.node.variable {
+                                defined_vars.insert(v.clone());
+                            }
+                        }
+                    }
+                }
+
+                for item in &rc.items {
+                    if let Expression::Variable(v) = &item.expression {
+                        if !defined_vars.contains(v) {
+                            return Err(ExecutionError::PlanningError(format!(
+                                "Variable `{}` not defined",
+                                v
+                            )));
+                        }
+                    }
                 }
             }
         }
