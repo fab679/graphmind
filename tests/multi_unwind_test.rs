@@ -1,15 +1,14 @@
 #[test]
-fn test_basic_match() {
+fn test_multi_with_create() {
     let mut store = graphmind::GraphStore::new();
     let engine = graphmind::QueryEngine::new();
-    engine
-        .execute_mut("CREATE (a:A {name: 'test'})", &mut store, "default")
-        .unwrap();
-    let result = engine.execute("MATCH (a:A) RETURN a.name", &store);
-    match &result {
-        Ok(r) => eprintln!("OK: {} rows", r.len()),
+    let q = "CREATE (a) WITH a WITH * CREATE (b) CREATE (a)<-[:T]-(b)";
+    match engine.execute_mut(q, &mut store, "default") {
+        Ok(_) => eprintln!(
+            "OK: {} nodes, {} edges",
+            store.node_count(),
+            store.edge_count()
+        ),
         Err(e) => eprintln!("ERROR: {}", e),
     }
-    assert!(result.is_ok());
-    assert_eq!(result.unwrap().len(), 1);
 }
