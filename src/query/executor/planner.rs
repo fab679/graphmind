@@ -1907,6 +1907,17 @@ impl QueryPlanner {
         // QP-02: Cost-based plan selection uses GraphStatistics to pick indexes over scans
         // QP-04: Early LIMIT propagation — done when NodeScanOperator gets early_limit set
 
+        // For standalone CALL without RETURN, use YIELD items as output columns
+        if output_columns.is_empty() {
+            if let Some(call_clause) = &query.call_clause {
+                output_columns = call_clause
+                    .yield_items
+                    .iter()
+                    .map(|y| y.alias.clone().unwrap_or_else(|| y.name.clone()))
+                    .collect();
+            }
+        }
+
         // Return execution plan
         Ok(ExecutionPlan {
             root: operator,
@@ -2316,14 +2327,21 @@ impl QueryPlanner {
             } else {
                 // Normal path: use ExpandOperator for each segment
                 let mut current_var = start_var.clone();
-                for segment in &path.segments {
+                for (seg_idx, segment) in path.segments.iter().enumerate() {
                     let target_var = segment.node.variable.clone().unwrap_or_else(|| {
                         let name = format!("_anon_{}", anon_counter);
                         anon_counter += 1;
                         name
                     });
 
-                    let edge_var = segment.edge.variable.clone();
+                    // Always bind edge variable (needed for edge uniqueness)
+                    let edge_var = Some(
+                        segment
+                            .edge
+                            .variable
+                            .clone()
+                            .unwrap_or_else(|| format!("__anon_edge_{}", seg_idx)),
+                    );
                     let edge_types: Vec<String> = segment
                         .edge
                         .types
@@ -2398,6 +2416,43 @@ impl QueryPlanner {
                     })
                     .unwrap();
                 path_operator = Box::new(FilterOperator::new(path_operator, filter_expr));
+            }
+
+            // Edge uniqueness: within a single path, no edge can appear twice
+            // Collect all edge variables (named and auto-generated for anonymous)
+            let named_edges: Vec<String> = path
+                .segments
+                .iter()
+                .enumerate()
+                .map(|(i, seg)| {
+                    seg.edge
+                        .variable
+                        .clone()
+                        .unwrap_or_else(|| format!("__anon_edge_{}", i))
+                })
+                .collect();
+            if named_edges.len() >= 2 {
+                let mut uniqueness_predicates = Vec::new();
+                for i in 0..named_edges.len() {
+                    for j in (i + 1)..named_edges.len() {
+                        uniqueness_predicates.push(Expression::Binary {
+                            left: Box::new(Expression::Variable(named_edges[i].clone())),
+                            op: BinaryOp::Ne,
+                            right: Box::new(Expression::Variable(named_edges[j].clone())),
+                        });
+                    }
+                }
+                if !uniqueness_predicates.is_empty() {
+                    let filter_expr = uniqueness_predicates
+                        .into_iter()
+                        .reduce(|acc, pred| Expression::Binary {
+                            left: Box::new(acc),
+                            op: BinaryOp::And,
+                            right: Box::new(pred),
+                        })
+                        .unwrap();
+                    path_operator = Box::new(FilterOperator::new(path_operator, filter_expr));
+                }
             }
 
             // Collect variables used in this path for join detection
