@@ -1817,6 +1817,37 @@ fn parse_expression(pair: pest::iterators::Pair<Rule>) -> ParseResult<Expression
                 }
             };
 
+            // Chained comparison rewriting: `1 < n.num < 3` → `1 < n.num AND n.num < 3`
+            let is_comparison = matches!(
+                op,
+                BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge
+            );
+            if is_comparison {
+                if let Expression::Binary {
+                    left: ref inner_left,
+                    op: ref inner_op,
+                    right: ref inner_right,
+                } = left
+                {
+                    if matches!(
+                        inner_op,
+                        BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge
+                    ) {
+                        // Rewrite: (a < b) < c → (a < b) AND (b < c)
+                        let middle = inner_right.clone();
+                        return Ok(Expression::Binary {
+                            left: Box::new(left),
+                            op: BinaryOp::And,
+                            right: Box::new(Expression::Binary {
+                                left: middle,
+                                op,
+                                right: Box::new(right),
+                            }),
+                        });
+                    }
+                }
+            }
+
             Ok(Expression::Binary {
                 left: Box::new(left),
                 op,

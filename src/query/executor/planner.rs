@@ -549,10 +549,22 @@ impl QueryPlanner {
                             "Variable length relationships cannot be used in MERGE".to_string(),
                         ));
                     }
-                    if matches!(seg.edge.direction, Direction::Both) {
-                        return Err(ExecutionError::PlanningError(
-                            "MERGE requires directed relationships".to_string(),
-                        ));
+                    // Undirected MERGE is valid — defaults to outgoing when creating
+                }
+            }
+        }
+
+        // Validate MERGE: no null properties
+        if let Some(mc) = &query.merge_clause {
+            for path in &mc.pattern.paths {
+                if let Some(ref props) = path.start.properties {
+                    for (k, v) in props {
+                        if matches!(v, PropertyValue::Null) {
+                            return Err(ExecutionError::PlanningError(format!(
+                                "MERGE does not support null property values (property '{}')",
+                                k
+                            )));
+                        }
                     }
                 }
             }

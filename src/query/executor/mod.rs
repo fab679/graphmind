@@ -216,8 +216,27 @@ impl<'a> QueryExecutor<'a> {
 
         // Handle UNION queries
         if !query.union_queries.is_empty() {
+            // Validate: cannot mix UNION and UNION ALL
+            let has_union = query.union_queries.iter().any(|(_, is_all)| !is_all);
+            let has_union_all = query.union_queries.iter().any(|(_, is_all)| *is_all);
+            if has_union && has_union_all {
+                return Err(ExecutionError::PlanningError(
+                    "Invalid combination of UNION and UNION ALL".to_string(),
+                ));
+            }
+
+            // Validate: all UNION branches must have same number of columns
+            let main_col_count = result.columns.len();
             for (union_query, _is_all) in &query.union_queries {
                 let union_plan = self.planner.plan(union_query, self.store)?;
+                if main_col_count > 0
+                    && union_plan.output_columns.len() > 0
+                    && main_col_count != union_plan.output_columns.len()
+                {
+                    return Err(ExecutionError::PlanningError(
+                        "All sub queries in a UNION must have the same column names".to_string(),
+                    ));
+                }
                 let union_result = self.execute_plan(union_plan)?;
                 result.records.extend(union_result.records);
             }
