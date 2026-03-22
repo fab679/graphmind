@@ -6256,6 +6256,151 @@ impl PhysicalOperator for SchemaVisualizationOperator {
     }
 }
 
+/// Per-row CREATE operator: for each input record, creates nodes with properties
+/// resolved from the input record's variable bindings. Used by UNWIND+CREATE.
+pub struct PerRowCreateOperator {
+    input: OperatorBox,
+    /// For each node: (labels, static_properties, expression_properties, variable_name)
+    node_specs: Vec<(
+        Vec<Label>,
+        HashMap<String, PropertyValue>,
+        Vec<(String, Expression)>,
+        Option<String>,
+    )>,
+    /// Edges to create: (source_var, target_var, edge_type, properties, edge_var)
+    edge_specs: Vec<(
+        String,
+        String,
+        EdgeType,
+        HashMap<String, PropertyValue>,
+        Option<String>,
+    )>,
+}
+
+impl PerRowCreateOperator {
+    pub fn new(
+        input: OperatorBox,
+        node_specs: Vec<(
+            Vec<Label>,
+            HashMap<String, PropertyValue>,
+            Vec<(String, Expression)>,
+            Option<String>,
+        )>,
+        edge_specs: Vec<(
+            String,
+            String,
+            EdgeType,
+            HashMap<String, PropertyValue>,
+            Option<String>,
+        )>,
+    ) -> Self {
+        Self {
+            input,
+            node_specs,
+            edge_specs,
+        }
+    }
+}
+
+impl PhysicalOperator for PerRowCreateOperator {
+    fn next(&mut self, _store: &GraphStore) -> ExecutionResult<Option<Record>> {
+        Err(ExecutionError::RuntimeError(
+            "PerRowCreateOperator requires mutable store access".to_string(),
+        ))
+    }
+
+    fn next_mut(
+        &mut self,
+        store: &mut GraphStore,
+        tenant_id: &str,
+    ) -> ExecutionResult<Option<Record>> {
+        // Get next input record
+        let input_record = match self.input.next_mut(store, tenant_id)? {
+            Some(r) => r,
+            None => return Ok(None),
+        };
+
+        let mut record = input_record.clone();
+        let store_ref: &GraphStore = store;
+
+        // Create nodes for this row
+        for (labels, static_props, expr_props, var_name) in &self.node_specs {
+            let primary_label = labels.first().cloned().unwrap_or_else(|| Label::new(""));
+            let node_id = store.create_node(primary_label);
+
+            // Add extra labels
+            for label in labels.iter().skip(1) {
+                let _ = store.add_label_to_node(tenant_id, node_id, label.clone());
+            }
+
+            // Set static properties
+            for (key, value) in static_props {
+                let _ = store.set_node_property(tenant_id, node_id, key.clone(), value.clone());
+            }
+
+            // Evaluate expression properties from the input record
+            for (key, expr) in expr_props {
+                let store_ref: &GraphStore = store;
+                let val = eval_expression(expr, &record, store_ref)?;
+                if let Value::Property(pv) = val {
+                    let _ = store.set_node_property(tenant_id, node_id, key.clone(), pv);
+                }
+            }
+
+            // Bind node variable
+            if let Some(var) = var_name {
+                record.bind(var.clone(), Value::NodeRef(node_id));
+            }
+        }
+
+        // Create edges for this row
+        for (source_var, target_var, edge_type, props, edge_var) in &self.edge_specs {
+            let source_id = record.get(source_var).and_then(|v| v.node_id());
+            let target_id = record.get(target_var).and_then(|v| v.node_id());
+            if let (Some(src), Some(tgt)) = (source_id, target_id) {
+                let edge_id = store
+                    .create_edge(src, tgt, edge_type.as_str())
+                    .map_err(|e| {
+                        ExecutionError::RuntimeError(format!("CREATE edge failed: {}", e))
+                    })?;
+                for (k, v) in props {
+                    if let Some(edge) = store.get_edge_mut(edge_id) {
+                        edge.set_property(k.clone(), v.clone());
+                    }
+                }
+                if let Some(ev) = edge_var {
+                    record.bind(
+                        ev.clone(),
+                        Value::EdgeRef(edge_id, src, tgt, edge_type.clone()),
+                    );
+                }
+            }
+        }
+
+        Ok(Some(record))
+    }
+
+    fn reset(&mut self) {
+        self.input.reset();
+    }
+
+    fn describe(&self) -> OperatorDescription {
+        OperatorDescription {
+            name: "PerRowCreate".to_string(),
+            details: format!(
+                "{} nodes, {} edges",
+                self.node_specs.len(),
+                self.edge_specs.len()
+            ),
+            children: vec![self.input.describe()],
+        }
+    }
+
+    fn is_mutating(&self) -> bool {
+        true
+    }
+}
+
 /// Create edge operator: `CREATE (a)-[:KNOWS]->(b)`
 pub struct CreateEdgeOperator {
     /// Input operator (provides source/target nodes from MATCH)
