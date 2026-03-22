@@ -1836,14 +1836,14 @@ fn parse_term(pair: pest::iterators::Pair<Rule>) -> ParseResult<Expression> {
             let mut prefix_ops = Vec::new();
             let mut primary_pair = None;
             let mut postfix_pair = None;
-            let mut index_pair = None;
+            let mut index_pairs: Vec<pest::iterators::Pair<Rule>> = Vec::new();
 
             for inner in pair.into_inner() {
                 match inner.as_rule() {
                     Rule::unary_op => prefix_ops.push(inner),
                     Rule::primary => primary_pair = Some(inner),
                     Rule::postfix_op => postfix_pair = Some(inner),
-                    Rule::index_op => index_pair = Some(inner),
+                    Rule::index_op => index_pairs.push(inner),
                     _ => {}
                 }
             }
@@ -1887,12 +1887,11 @@ fn parse_term(pair: pest::iterators::Pair<Rule>) -> ParseResult<Expression> {
                 }
             }
 
-            // Apply index operator [expr] or slice operator [start..end]
-            if let Some(index) = index_pair {
+            // Apply index operators [expr] or slice operators [start..end]
+            for index in index_pairs {
                 let mut handled = false;
                 for idx_inner in index.into_inner() {
                     if idx_inner.as_rule() == Rule::slice_op {
-                        // List slicing: [start..end]
                         let mut start_expr = None;
                         let mut end_expr = None;
                         for slice_inner in idx_inner.into_inner() {

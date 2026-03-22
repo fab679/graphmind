@@ -129,7 +129,7 @@ order_direction = { ^"ASCENDING" | ^"DESCENDING" | ^"ASC" | ^"DESC" }
 
 // Expressions
 expression = { not_op* ~ term ~ (binary_op ~ not_op* ~ term)* }
-term = { unary_op* ~ primary ~ postfix_op? ~ index_op? }
+term = { unary_op* ~ primary ~ postfix_op? ~ index_op* }
 postfix_op = { ^"IS" ~ ^"NOT" ~ ^"NULL" | ^"IS" ~ ^"NULL" | label_check }
 label_check = { ":" ~ label }
 index_op = { "[" ~ (slice_op | expression) ~ "]" }
