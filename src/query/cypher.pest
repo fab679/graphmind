@@ -27,10 +27,6 @@
 //     SINGLE, CALL, YIELD …) remain valid as identifiers per the spec.
 //   • Lexical rules (literals, identifiers, keywords) are atomic (@).
 //   • Purely structural aliases are silent (_).
-//
-// NOTE: All clause-level rules use non-atomic mode ({}) so that implicit
-// WHITESPACE insertion works correctly for expression sub-rules. Keyword
-// boundary enforcement is handled by the atomic kw_* rules themselves.
 // ============================================================
 
 
@@ -38,15 +34,21 @@
 // 1. ENTRY POINT
 // ============================================================
 
-cypher = { SOI ~ WHITESPACE* ~ explain_prefix? ~ top_statement ~ (";" ~ WHITESPACE*)? ~ EOI }
+// Implicit WHITESPACE* is already inserted before every token, so leading
+// whitespace works without the explicit WHITESPACE*. We spell it out anyway
+// to match the spec's [SP] at the top level and make intent unambiguous.
+// Trailing whitespace after the optional semicolon is also consumed explicitly.
+cypher = { SOI ~ explain_prefix? ~ top_statement ~ (";" ~ WHITESPACE*)? ~ EOI }
 
 top_statement = { show_indexes_stmt | show_constraints_stmt | drop_index_stmt | create_constraint_stmt | create_vector_index_stmt | create_index_stmt | query }
 statement = { query }
 
-// regular_query is tried first so that CALL...YIELD...RETURN is parsed as
-// in_query_call + return_clause (via single_part_query). standalone_call
-// handles bare CALL without RETURN.
-query = { regular_query | standalone_call }
+// standalone_call is tried first: it is strictly more specific (requires the
+// CALL keyword) and avoids deep backtracking through regular_query for CALL
+// queries. Both alternatives fully backtrack on failure in pest.
+// standalone_call must be followed by EOI or ";" — if more clauses follow
+// (e.g. RETURN), fall through to regular_query which handles CALL as in_query_call.
+query = { (standalone_call ~ &(WHITESPACE* ~ (";" | EOI))) | regular_query }
 
 
 // ============================================================
@@ -55,18 +57,42 @@ query = { regular_query | standalone_call }
 
 regular_query = { single_query ~ union* }
 
+// Compound-atomic: UNION SP ALL is required per spec.
+// sp between UNION and ALL is mandatory; without it UNION ALL`x` would parse
+// incorrectly (backtick bypasses !identifier_part guard on kw_union).
+// single_query is non-atomic and handles its own leading WHITESPACE* normally.
+// UNION ALL tried first (longer/more specific) to avoid committing to UNION-only.
+// Compound-atomic: UNION SP ALL required per spec; [SP] before SingleQuery optional.
+// sp? before single_query is explicit (single_query is non-atomic so it also
+// handles leading whitespace internally, but sp? makes the intent clear).
 union = {
     (kw_union ~ kw_all ~ single_query) |
     (kw_union ~ single_query)
 }
 
+// NOTE: multi_part_query must be tried before single_part_query because
+// multi_part_query is strictly more constrained (requires at least one WITH).
 single_query = { multi_part_query | single_part_query }
 
+// Spec: SinglePartQuery =
+//   ({ ReadingClause }, Return)
+//   | ({ ReadingClause }, UpdatingClause, { UpdatingClause }, [ Return ])
+//
+// Two distinct forms:
+//   1. reading* ~ updating+ ~ return?   (updating form — at least one update)
+//   2. reading* ~ return                (read-only form — return is mandatory)
+//
+// The updating form is tried first because it is the broader case and sharing
+// the reading_clause* prefix means the read-only form will be reached cleanly
+// when no updating clauses follow. A lone MATCH with no RETURN and no updating
+// clause correctly fails both alternatives.
 single_part_query = {
     (reading_clause* ~ updating_clause ~ updating_clause* ~ return_clause?) |
     (reading_clause* ~ return_clause)
 }
 
+// One or more (reading* ~ updating* ~ WITH) segments, followed by single_part_query.
+// Each segment must end with a WITH clause; single_part_query follows the last one.
 multi_part_query = {
     (
         reading_clause* ~
@@ -83,10 +109,21 @@ multi_part_query = {
 
 reading_clause = { match_clause | unwind | in_query_call }
 
+// Compound-atomic: enforces mandatory SP between MATCH keyword and pattern.
+// SP after OPTIONAL is required per spec (OPTIONAL SP MATCH).
+// pattern is non-atomic and handles its own internal whitespace.
+// where_clause is compound-atomic; sp? before it must be explicit here.
 match_clause = { kw_optional? ~ kw_match ~ pattern ~ where_clause? }
 
+// Compound-atomic: sp after UNWIND is mandatory; sp? before kw_as is
+// explicit because compound-atomic mode does not insert WHITESPACE* between
+// top-level tokens. expression and variable are non-atomic and still get
+// their own implicit whitespace internally.
+// Compound-atomic: sp on both sides of AS is mandatory per spec.
 unwind = { kw_unwind ~ expression ~ kw_as ~ variable }
 
+// Compound-atomic helpers enforce mandatory SP after CALL and after YIELD.
+// Prevents: CALL`proc`() and CALL p() YIELD`x` (backtick bypasses guard).
 in_query_call_yield = { kw_yield ~ yield_items }
 in_query_call = { kw_call ~ explicit_procedure_invocation ~ in_query_call_yield? }
 
@@ -97,8 +134,12 @@ in_query_call = { kw_call ~ explicit_procedure_invocation ~ in_query_call_yield?
 
 updating_clause = { create | merge | delete_clause | set_clause | remove | foreach_clause | call_subquery }
 
+// Compound-atomic: sp after CREATE is mandatory (prevents CREATE(n) without space).
+// pattern is non-atomic and handles its own internal whitespace.
 create = { kw_create ~ pattern }
 
+// Compound-atomic: sp after MERGE is mandatory (prevents MERGE(n) without space).
+// pattern_part and merge_action are non-atomic and handle their own whitespace.
 merge = { kw_merge ~ pattern_part ~ merge_action* }
 
 merge_action = {
@@ -117,8 +158,15 @@ set_item = {
     (variable            ~ node_labels)
 }
 
+// Compound-atomic: SP after DETACH required per spec; sp after DELETE enforced.
+// expression is non-atomic and handles its own internal whitespace.
+// Explicit sp? around commas needed since compound-atomic suppresses implicit WS.
 delete_clause = { kw_detach? ~ kw_delete ~ expression ~ ("," ~ expression)* }
 
+// Compound-atomic: sp after REMOVE is mandatory.
+// remove_item starts with variable (identifier, caught by !identifier_part guard)
+// OR property_expression which can start with '(' via a parenthesized atom —
+// e.g. REMOVE (n).prop is valid, REMOVE(n).prop is not. The sp enforces this.
 remove = { kw_remove ~ remove_item ~ ("," ~ remove_item)* }
 
 remove_item = {
@@ -131,8 +179,10 @@ remove_item = {
 // 5. STANDALONE CALL / YIELD
 // ============================================================
 
+// standalone_call_yield: mandatory SP between YIELD and * or items.
 standalone_call_yield = { kw_yield ~ ("*" | yield_items) }
 
+// Compound-atomic: mandatory SP after CALL prevents CALL`proc`() without space.
 standalone_call = {
     kw_call ~
     (explicit_procedure_invocation | implicit_procedure_invocation) ~
@@ -149,18 +199,28 @@ yield_item = { (procedure_result_field ~ kw_as)? ~ variable }
 // 6. PROJECTION (WITH / RETURN)
 // ============================================================
 
+// Compound-atomic: sp after WITH is mandatory. The where_clause (if present)
+// is separated by explicit sp? because compound-atomic mode does not insert
+// WHITESPACE* between top-level tokens. projection_body itself is non-atomic
+// so it gets implicit whitespace internally.
 with_clause   = { kw_with ~ projection_body ~ where_clause? }
 
+// Compound-atomic: sp after RETURN is mandatory. Prevents RETURN( being
+// accepted when the spec requires at least one whitespace character.
 return_clause = { kw_return ~ projection_body }
 
+// projection_body is non-atomic (implicit WHITESPACE works within it) but
+// uses a compound-atomic helper for the DISTINCT branch so that
+// DISTINCT( is rejected — the spec requires SP between DISTINCT and items.
+//
+// After the items, order/skip/limit are tried with normal implicit WHITESPACE.
 projection_body = {
     (projection_body_distinct | projection_items) ~
     order? ~ skip_clause? ~ limit_clause?
 }
 
-// DISTINCT is followed by projection items; kw_distinct's !identifier_part
-// guard prevents DISTINCTX from matching, and implicit WHITESPACE handles
-// the required space between DISTINCT and the items.
+// Compound-atomic helper: enforces mandatory SP between DISTINCT and items.
+// DISTINCT( correctly fails here because sp requires ≥1 whitespace character.
 projection_body_distinct = { kw_distinct ~ projection_items }
 
 projection_items = {
@@ -174,8 +234,18 @@ projection_item = {
     expression
 }
 
+// Compound-atomic: enforces SP between BY and the sort expression so that
+// ORDER BY( is correctly rejected (kw_by's !identifier_part guard passes
+// for '(' since it is not an identifier character).
+// sp? between ORDER and BY replaces the implicit WHITESPACE* suppressed by
+// compound-atomic mode (kw_by's guard already prevents ORDERBY fusion).
+// Compound-atomic: SP required after both ORDER and BY per spec.
+// (kw_order guard already prevents ORDERBY fusion since B is identifier_part,
+//  but sp makes the requirement explicit and correct.)
 order = { kw_order ~ kw_by ~ sort_item ~ ("," ~ sort_item)* }
 
+// Compound-atomic: sp after SKIP / LIMIT is mandatory so SKIP( and LIMIT(
+// are correctly rejected.
 skip_clause  = { kw_skip  ~ expression }
 limit_clause = { kw_limit ~ expression }
 
@@ -183,6 +253,8 @@ sort_item      = { expression ~ sort_direction? }
 // Try longer keywords before shorter prefixes (ASCENDING before ASC).
 sort_direction = { kw_ascending | kw_descending | kw_asc | kw_desc }
 
+// Compound-atomic: sp after WHERE is mandatory so WHERE( WHERE$ WHERE' are
+// correctly rejected. expression is non-atomic and retains implicit whitespace.
 where_clause = { kw_where ~ expression }
 
 
@@ -193,19 +265,16 @@ where_clause = { kw_where ~ expression }
 pattern = { pattern_part ~ ("," ~ pattern_part)* }
 
 pattern_part = {
-    (variable ~ "=" ~ shortest_path_pattern) |
     (variable ~ "=" ~ anonymous_pattern_part) |
     anonymous_pattern_part
 }
 
-shortest_path_pattern = {
-    (kw_all_shortest_paths ~ "(" ~ pattern_element ~ ")") |
-    (kw_shortest_path ~ "(" ~ pattern_element ~ ")")
-}
-kw_shortest_path = @{ ^"shortestPath" ~ !identifier_part }
-kw_all_shortest_paths = @{ ^"allShortestPaths" ~ !identifier_part }
+anonymous_pattern_part = _{ shortest_path_pattern | pattern_element }
 
-anonymous_pattern_part = _{ pattern_element }
+// shortestPath(...) and allShortestPaths(...) patterns
+shortest_path_pattern = { (kw_allshortestpaths | kw_shortestpath) ~ "(" ~ pattern_element ~ ")" }
+kw_shortestpath     = @{ ^"shortestPath"     ~ !identifier_part }
+kw_allshortestpaths = @{ ^"allShortestPaths" ~ !identifier_part }
 
 // Parenthesised variant allows nested grouping: ((a)-->(b)).
 pattern_element = {
@@ -216,7 +285,16 @@ pattern_element = {
 // One or more chains make a relationships pattern (used in predicates/comprehensions).
 relationships_pattern = { node_pattern ~ pattern_element_chain+ }
 
-node_pattern = { "(" ~ variable? ~ node_labels? ~ properties? ~ ")" }
+node_pattern = { "(" ~ node_pattern_body? ~ ")" }
+node_pattern_body = _{
+    (variable ~ node_labels ~ properties) |
+    (variable ~ node_labels) |
+    (variable ~ properties) |
+    variable |
+    (node_labels ~ properties) |
+    node_labels |
+    properties
+}
 
 pattern_element_chain = { relationship_pattern ~ node_pattern }
 
@@ -229,8 +307,23 @@ relationship_pattern = {
     (                  dash ~ relationship_detail? ~ dash                   )
 }
 
-relationship_detail = {
-    "[" ~ variable? ~ relationship_types? ~ range_literal? ~ properties? ~ "]"
+relationship_detail = { "[" ~ relationship_detail_body? ~ "]" }
+relationship_detail_body = _{
+    (variable ~ relationship_types ~ range_literal ~ properties) |
+    (variable ~ relationship_types ~ range_literal) |
+    (variable ~ relationship_types ~ properties) |
+    (variable ~ relationship_types) |
+    (variable ~ range_literal ~ properties) |
+    (variable ~ range_literal) |
+    (variable ~ properties) |
+    variable |
+    (relationship_types ~ range_literal ~ properties) |
+    (relationship_types ~ range_literal) |
+    (relationship_types ~ properties) |
+    relationship_types |
+    (range_literal ~ properties) |
+    range_literal |
+    properties
 }
 
 properties = { map_literal | parameter }
@@ -266,6 +359,8 @@ property_expression = { atom ~ property_lookup+ }
 
 expression = { or_expression }
 
+// Compound-atomic tail: enforces mandatory SP between OR and operand.
+// Prevents: n OR`backtick_var` (backtick bypasses !identifier_part guard).
 or_expression  = { xor_expression ~ (kw_or ~ xor_expression)* }
 xor_expression = { and_expression ~ (kw_xor ~ and_expression)* }
 and_expression = { not_expression ~ (kw_and ~ not_expression)* }
@@ -278,12 +373,12 @@ comparison_expression = {
     partial_comparison_expression*
 }
 
-// Multi-char operators (<= >= <>) must be tried before single-char (< > =).
+// Multi-char operators (<= >= <> =~) must be tried before single-char (< > =).
 partial_comparison_expression = {
+    ("=~" ~ string_list_null_predicate_expression) |
     ("<=" ~ string_list_null_predicate_expression) |
     (">=" ~ string_list_null_predicate_expression) |
     ("<>" ~ string_list_null_predicate_expression) |
-    ("=~" ~ string_list_null_predicate_expression) |
     ("="  ~ string_list_null_predicate_expression) |
     ("<"  ~ string_list_null_predicate_expression) |
     (">"  ~ string_list_null_predicate_expression)
@@ -301,6 +396,9 @@ string_predicate_expression = {
 
 list_predicate_expression = { kw_in ~ add_or_subtract_expression }
 
+// Compound-atomic: sp between IS/NOT/NULL is mandatory per spec.
+// Prevents: n IS`NULL`, n IS NOT`NULL` (backtick bypasses guard).
+// IS NOT NULL tried first (longer form) to avoid IS consuming then failing.
 null_predicate_expression = {
     (kw_is ~ kw_not ~ kw_null) |
     (kw_is ~ kw_null)
@@ -364,9 +462,7 @@ atom = {
 }
 
 // reduce(acc = init, x IN list | expr)
-reduce_expression = {
-    kw_reduce ~ "(" ~ variable ~ "=" ~ expression ~ "," ~ variable ~ kw_in ~ expression ~ "|" ~ expression ~ ")"
-}
+reduce_expression = { kw_reduce ~ "(" ~ variable ~ "=" ~ expression ~ "," ~ id_in_coll ~ "|" ~ expression ~ ")" }
 kw_reduce = @{ ^"REDUCE" ~ !identifier_part }
 
 // COUNT(*) is a special form; must come before function_invocation.
@@ -412,7 +508,7 @@ id_in_coll = { variable ~ kw_in ~ expression }
 // Compound-atomic helper: enforces mandatory SP between DISTINCT and the first
 // expression. Without this, DISTINCT( bypasses the !identifier_part guard
 // since '(' is not an identifier character.
-function_distinct = ${ kw_distinct ~ sp }
+function_distinct = { kw_distinct }
 
 function_invocation = {
     function_name ~ "(" ~ function_distinct? ~ (expression ~ ("," ~ expression)*)? ~ ")"
@@ -422,7 +518,7 @@ function_invocation = {
 function_name = { namespace ~ symbolic_name }
 
 existential_subquery = {
-    kw_exists ~ "{" ~ (match_clause | regular_query | (pattern ~ where_clause?)) ~ "}"
+    kw_exists ~ "{" ~ (regular_query | match_clause | (pattern ~ where_clause?)) ~ "}"
 }
 
 
@@ -436,14 +532,10 @@ explicit_procedure_invocation = {
 
 implicit_procedure_invocation = { procedure_name }
 procedure_result_field        = { symbolic_name }
+procedure_name                = { namespace ~ schema_name }
 
-// Procedure names allow reserved words in segments (e.g., algo.or.solve).
-procedure_name                = { procedure_namespace ~ procedure_name_part }
-procedure_name_part = { symbolic_name | reserved_word }
-procedure_namespace = { (procedure_name_part ~ ".")* }
-
-// For function names, reserved words are also allowed in namespace segments.
-namespace = { (symbolic_name ~ ".")* }
+// Zero or more "name." segments. Uses schema_name to allow reserved words (e.g. algo.or.solve).
+namespace = { (schema_name ~ ".")* }
 
 
 // ============================================================
@@ -486,7 +578,10 @@ reserved_word = @{
     !identifier_part
 }
 
-// Backtick-quoted identifiers.
+// Backtick-quoted identifiers. A backtick inside the name is escaped by
+// doubling it: `foo``bar` is the identifier foo`bar.
+// The outer + allowed multiple backtick-quoted segments but was wrong — a name
+// is a SINGLE quoted span with internal `` escapes, not multiple quoted chunks.
 escaped_symbolic_name = @{ "`" ~ ( "``" | (!"`" ~ ANY) )* ~ "`" }
 
 identifier_start = @{ LETTER | "_" }
@@ -540,7 +635,7 @@ escaped_char = @{
         "\\" | "'" | "\"" | "b" | "f" | "n" | "r" | "t" |
         ("u" ~ hex_digit{4}) |   // \uXXXX  — BMP code point
         ("U" ~ hex_digit{8}) |   // \UXXXXXXXX — supplementary code point
-        ANY                      // Any other escaped character (e.g., \. in regex)
+        ANY                      // Fallback: \. \/ etc. — pass through for regex patterns
     )
 }
 
@@ -660,8 +755,16 @@ kw_yield      = @{ ^"YIELD"      ~ !identifier_part }
 // ============================================================
 
 // Mandatory SP: one or more whitespace characters or comments.
-// Used only inside compound-atomic ($) rules (e.g., projection_body_distinct,
-// function_distinct) where implicit whitespace is disabled.
+// The openCypher spec defines whitespace as including Comment, so
+// RETURN/* comment */n is valid Cypher and sp must accept it.
+//
+// Cannot reference the special WHITESPACE/COMMENT rules here — pest
+// auto-inserts WHITESPACE* before every rule reference in non-atomic mode,
+// which would consume all whitespace before sp has a chance to run.
+// All character classes and comment patterns are therefore inlined.
+//
+// sp_unit = one whitespace character OR one complete comment block/line.
+// sp      = one or more sp_units (mandatory).
 sp_unit = _{
     " " | "\t" | "\n" | "\r" |
     "\u{000B}" | "\u{000C}" | "\u{001C}" | "\u{001D}" | "\u{001E}" | "\u{001F}" |
@@ -717,44 +820,28 @@ COMMENT = _{
 
 
 // ============================================================
-// 17. GRAPHMIND EXTENSIONS (not in OpenCypher spec)
+// 17. GRAPHMIND EXTENSIONS
 // ============================================================
-
-// EXPLAIN / PROFILE prefix
 explain_prefix = { kw_explain | kw_profile }
 kw_explain = @{ ^"EXPLAIN" ~ !identifier_part }
 kw_profile = @{ ^"PROFILE" ~ !identifier_part }
-
-// CREATE INDEX ON :Label(prop, ...)
 create_index_stmt = { kw_create ~ kw_index ~ kw_on ~ ":" ~ schema_name ~ "(" ~ property_key_name ~ ("," ~ property_key_name)* ~ ")" }
 kw_index = @{ ^"INDEX" ~ !identifier_part }
-
-// DROP INDEX ON :Label(prop)
 drop_index_stmt = { kw_drop ~ kw_index ~ kw_on ~ ":" ~ schema_name ~ "(" ~ property_key_name ~ ")" }
 kw_drop = @{ ^"DROP" ~ !identifier_part }
-
-// CREATE CONSTRAINT ON (v:Label) ASSERT v.prop IS UNIQUE
 create_constraint_stmt = { kw_create ~ kw_constraint ~ kw_on ~ "(" ~ variable ~ ":" ~ schema_name ~ ")" ~ kw_assert ~ property_expression ~ kw_is ~ kw_unique }
 kw_constraint = @{ ^"CONSTRAINT" ~ !identifier_part }
 kw_assert     = @{ ^"ASSERT"     ~ !identifier_part }
 kw_unique     = @{ ^"UNIQUE"     ~ !identifier_part }
-
-// CREATE VECTOR INDEX name FOR (n:Label) ON (n.prop) OPTIONS {map}
 create_vector_index_stmt = { kw_create ~ kw_vector ~ kw_index ~ symbolic_name ~ kw_for ~ "(" ~ variable ~ ":" ~ schema_name ~ ")" ~ kw_on ~ "(" ~ property_expression ~ ")" ~ kw_options ~ map_literal }
 kw_vector  = @{ ^"VECTOR"  ~ !identifier_part }
 kw_options = @{ ^"OPTIONS" ~ !identifier_part }
-
-// SHOW INDEXES / SHOW CONSTRAINTS
-show_indexes_stmt     = { kw_show ~ kw_indexes }
+show_indexes_stmt     = { kw_show ~ (kw_indexes | kw_index) }
 show_constraints_stmt = { kw_show ~ kw_constraints }
 kw_show        = @{ ^"SHOW"        ~ !identifier_part }
 kw_indexes     = @{ ^"INDEXES"     ~ !identifier_part }
 kw_constraints = @{ ^"CONSTRAINTS" ~ !identifier_part }
-
-// FOREACH (x IN list | SET/CREATE/DELETE ...)
 foreach_clause = { kw_foreach ~ "(" ~ variable ~ kw_in ~ expression ~ "|" ~ foreach_body+ ~ ")" }
 foreach_body   = _{ set_clause | remove | delete_clause | create }
 kw_foreach = @{ ^"FOREACH" ~ !identifier_part }
-
-// CALL { subquery }
 call_subquery = { kw_call ~ "{" ~ regular_query ~ "}" }

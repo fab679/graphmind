@@ -2646,33 +2646,72 @@ fn parse_function_invocation(pair: pest::iterators::Pair<Rule>) -> ParseResult<E
 }
 
 /// Parse reduce(acc = init, x IN list | expr) from the dedicated grammar rule.
-/// reduce_expression = { kw_reduce ~ "(" ~ variable ~ "=" ~ expression ~ "," ~ variable ~ kw_in ~ expression ~ "|" ~ expression ~ ")" }
+/// reduce_expression = { kw_reduce ~ "(" ~ variable ~ "=" ~ expression ~ "," ~ id_in_coll ~ "|" ~ expression ~ ")" }
+/// id_in_coll = { variable ~ kw_in ~ expression }
 fn parse_reduce_expression(pair: pest::iterators::Pair<Rule>) -> ParseResult<Expression> {
-    let mut variables = Vec::new();
-    let mut expressions = Vec::new();
+    let mut accumulator = None;
+    let mut init_expr = None;
+    let mut iter_variable = None;
+    let mut list_expr = None;
+    let mut body_expr = None;
 
     for inner in pair.into_inner() {
         match inner.as_rule() {
-            Rule::variable => variables.push(inner.as_str().to_string()),
-            Rule::expression => expressions.push(parse_expression(inner)?),
-            _ => {} // kw_reduce, "(", "=", ",", kw_in, "|", ")"
+            Rule::variable => {
+                if accumulator.is_none() {
+                    accumulator = Some(inner.as_str().to_string());
+                }
+            }
+            Rule::expression => {
+                if init_expr.is_none() {
+                    init_expr = Some(parse_expression(inner)?);
+                } else {
+                    body_expr = Some(parse_expression(inner)?);
+                }
+            }
+            Rule::id_in_coll => {
+                for ic in inner.into_inner() {
+                    match ic.as_rule() {
+                        Rule::variable => {
+                            iter_variable = Some(ic.as_str().to_string());
+                        }
+                        Rule::expression => {
+                            list_expr = Some(parse_expression(ic)?);
+                        }
+                        _ => {} // kw_in
+                    }
+                }
+            }
+            _ => {} // kw_reduce, "(", "=", ",", "|", ")"
         }
     }
 
-    // variables: [accumulator, iterator]
-    // expressions: [init, list, body]
-    if variables.len() < 2 || expressions.len() < 3 {
-        return Err(ParseError::SemanticError(
-            "reduce() requires (acc = init, x IN list | expr)".to_string(),
-        ));
-    }
-
     Ok(Expression::Reduce {
-        accumulator: variables[0].clone(),
-        init: Box::new(expressions[0].clone()),
-        variable: variables[1].clone(),
-        list_expr: Box::new(expressions[1].clone()),
-        expression: Box::new(expressions[2].clone()),
+        accumulator: accumulator.ok_or_else(|| {
+            ParseError::SemanticError(
+                "reduce() requires (acc = init, x IN list | expr)".to_string(),
+            )
+        })?,
+        init: Box::new(init_expr.ok_or_else(|| {
+            ParseError::SemanticError(
+                "reduce() requires (acc = init, x IN list | expr)".to_string(),
+            )
+        })?),
+        variable: iter_variable.ok_or_else(|| {
+            ParseError::SemanticError(
+                "reduce() requires (acc = init, x IN list | expr)".to_string(),
+            )
+        })?,
+        list_expr: Box::new(list_expr.ok_or_else(|| {
+            ParseError::SemanticError(
+                "reduce() requires (acc = init, x IN list | expr)".to_string(),
+            )
+        })?),
+        expression: Box::new(body_expr.ok_or_else(|| {
+            ParseError::SemanticError(
+                "reduce() requires (acc = init, x IN list | expr)".to_string(),
+            )
+        })?),
     })
 }
 
@@ -4187,5 +4226,21 @@ mod tests {
         assert_eq!(items.len(), 2);
         assert_eq!(items[0].alias, Some("personName".to_string()));
         assert_eq!(items[1].alias, Some("total".to_string()));
+    }
+
+    #[test]
+    fn test_parse_node_with_optional_parts() {
+        // Test all combinations of optional parts in node patterns
+        let cases = vec![
+            "CREATE (n:Person {name: 'Alice'})",
+            "MATCH (n:Person {name: 'Alice'}) RETURN n",
+            "MATCH (n {name: 'Alice'}) RETURN n",
+            "MATCH (n:Person) RETURN n SKIP 5 LIMIT 10",
+            "MATCH (a)-[:KNOWS {since: 2020}]->(b) RETURN b",
+        ];
+        for q in cases {
+            let r = parse_query(q);
+            assert!(r.is_ok(), "Failed to parse '{}': {:?}", q, r.err());
+        }
     }
 }
