@@ -896,12 +896,65 @@ fn parse_set_clause(pair: pest::iterators::Pair<Rule>) -> ParseResult<SetClause>
             for si in inner.into_inner() {
                 match si.as_rule() {
                     Rule::set_label => {
-                        // SET n:Label — skip for now (not handled by executor)
-                        // TODO: implement label addition in SetPropertyOperator
+                        // SET n:Label — add labels to node
+                        let mut variable = String::new();
+                        let mut labels = Vec::new();
+                        for sl in si.into_inner() {
+                            match sl.as_rule() {
+                                Rule::variable => variable = sl.as_str().to_string(),
+                                Rule::label => labels.push(sl.as_str().to_string()),
+                                _ => {}
+                            }
+                        }
+                        // Encode as special SET item with __labels__ property
+                        let label_array = labels
+                            .iter()
+                            .map(|l| PropertyValue::String(l.clone()))
+                            .collect();
+                        items.push(SetItem {
+                            variable,
+                            property: "__labels__".to_string(),
+                            value: Expression::Literal(PropertyValue::Array(label_array)),
+                        });
                     }
                     Rule::set_map_merge => {
-                        // SET n += {map} — skip for now
-                        // TODO: implement map merge
+                        // SET n += {map} — merge properties
+                        let mut variable = String::new();
+                        let mut expr = Expression::Literal(PropertyValue::Null);
+                        for sm in si.into_inner() {
+                            match sm.as_rule() {
+                                Rule::variable => variable = sm.as_str().to_string(),
+                                Rule::expression => expr = parse_expression(sm)?,
+                                _ => {
+                                    expr = parse_expression(sm)?;
+                                }
+                            }
+                        }
+                        items.push(SetItem {
+                            variable,
+                            property: "__map_merge__".to_string(),
+                            value: expr,
+                        });
+                    }
+                    Rule::set_map_replace => {
+                        // SET n = {map} — replace all properties
+                        let mut variable = String::new();
+                        let mut props = HashMap::new();
+                        for sr in si.into_inner() {
+                            match sr.as_rule() {
+                                Rule::variable => variable = sr.as_str().to_string(),
+                                Rule::map => {
+                                    props = parse_properties(sr)?;
+                                }
+                                _ => {}
+                            }
+                        }
+                        let map_val: HashMap<String, PropertyValue> = props;
+                        items.push(SetItem {
+                            variable,
+                            property: "__map_replace__".to_string(),
+                            value: Expression::Literal(PropertyValue::Map(map_val)),
+                        });
                     }
                     Rule::property_access => {
                         // Old-style: property_access = expression
@@ -1122,15 +1175,21 @@ fn parse_set_item(pair: pest::iterators::Pair<Rule>) -> ParseResult<SetItem> {
     for inner in pair.into_inner() {
         match inner.as_rule() {
             Rule::set_label => {
-                // SET n:Label — store as a no-op SET (label addition not yet executed)
+                // SET n:Label — add labels to node
+                let mut labels = Vec::new();
                 for si in inner.into_inner() {
-                    if si.as_rule() == Rule::variable {
-                        variable = si.as_str().to_string();
+                    match si.as_rule() {
+                        Rule::variable => variable = si.as_str().to_string(),
+                        Rule::label => labels.push(si.as_str().to_string()),
+                        _ => {}
                     }
                 }
-                // Use a sentinel value to indicate label SET
-                property = "__label__".to_string();
-                value = Some(Expression::Literal(PropertyValue::Boolean(true)));
+                property = "__labels__".to_string();
+                let label_array = labels
+                    .iter()
+                    .map(|l| PropertyValue::String(l.clone()))
+                    .collect();
+                value = Some(Expression::Literal(PropertyValue::Array(label_array)));
             }
             Rule::set_map_merge => {
                 // SET n += {map} — store variable and expression
@@ -1142,6 +1201,20 @@ fn parse_set_item(pair: pest::iterators::Pair<Rule>) -> ParseResult<SetItem> {
                     }
                 }
                 property = "__map_merge__".to_string();
+            }
+            Rule::set_map_replace => {
+                // SET n = {map} — replace all properties
+                for si in inner.into_inner() {
+                    match si.as_rule() {
+                        Rule::variable => variable = si.as_str().to_string(),
+                        Rule::map => {
+                            let props = parse_properties(si)?;
+                            value = Some(Expression::Literal(PropertyValue::Map(props)));
+                        }
+                        _ => {}
+                    }
+                }
+                property = "__map_replace__".to_string();
             }
             Rule::property_access => {
                 for pa in inner.into_inner() {

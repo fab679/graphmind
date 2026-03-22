@@ -7667,12 +7667,71 @@ impl PhysicalOperator for SetPropertyOperator {
                 if let Some(node_val) = record.get(var) {
                     match node_val {
                         Value::NodeRef(id) | Value::Node(id, _) => {
-                            if let Some(node) = store.get_node_mut(*id) {
+                            if prop == "__labels__" {
+                                // SET n:Label — add labels
+                                if let PropertyValue::Array(labels) = &val {
+                                    if let Some(node) = store.get_node_mut(*id) {
+                                        for l in labels {
+                                            if let PropertyValue::String(s) = l {
+                                                node.add_label(Label::new(s));
+                                            }
+                                        }
+                                    }
+                                }
+                            } else if prop == "__map_replace__" {
+                                // SET n = {map} — replace all properties
+                                if let PropertyValue::Map(map) = &val {
+                                    if let Some(node) = store.get_node_mut(*id) {
+                                        node.properties.clear();
+                                        for (k, v) in map {
+                                            if !matches!(v, PropertyValue::Null) {
+                                                node.set_property(k.clone(), v.clone());
+                                            }
+                                        }
+                                    }
+                                }
+                            } else if prop == "__map_merge__" {
+                                // SET n += {map} — merge properties
+                                if let PropertyValue::Map(map) = &val {
+                                    if let Some(node) = store.get_node_mut(*id) {
+                                        for (k, v) in map {
+                                            if matches!(v, PropertyValue::Null) {
+                                                node.properties.remove(k);
+                                            } else {
+                                                node.set_property(k.clone(), v.clone());
+                                            }
+                                        }
+                                    }
+                                }
+                            } else if let Some(node) = store.get_node_mut(*id) {
                                 node.set_property(prop, val.clone());
                             }
                         }
                         Value::EdgeRef(id, ..) | Value::Edge(id, _) => {
-                            if let Some(edge) = store.get_edge_mut(*id) {
+                            if prop == "__map_replace__" {
+                                if let PropertyValue::Map(map) = &val {
+                                    if let Some(edge) = store.get_edge_mut(*id) {
+                                        edge.properties.clear();
+                                        for (k, v) in map {
+                                            if !matches!(v, PropertyValue::Null) {
+                                                edge.set_property(k.clone(), v.clone());
+                                            }
+                                        }
+                                    }
+                                }
+                            } else if prop == "__map_merge__" {
+                                if let PropertyValue::Map(map) = &val {
+                                    if let Some(edge) = store.get_edge_mut(*id) {
+                                        for (k, v) in map {
+                                            if matches!(v, PropertyValue::Null) {
+                                                edge.properties.remove(k);
+                                            } else {
+                                                edge.set_property(k.clone(), v.clone());
+                                            }
+                                        }
+                                    }
+                                }
+                            } else if let Some(edge) = store.get_edge_mut(*id) {
                                 edge.set_property(prop, val.clone());
                             }
                         }

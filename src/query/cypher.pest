@@ -64,9 +64,10 @@ with_clause = { ^"WITH" ~ distinct? ~ return_items ~ order_by_clause? ~ skip_cla
 create_clause = { ^"CREATE" ~ pattern }
 delete_clause = { ^"DETACH"? ~ ^"DELETE" ~ expression ~ ("," ~ expression)* }
 set_clause = { ^"SET" ~ set_item ~ ("," ~ set_item)* }
-set_item = { set_label | set_map_merge | property_access ~ "=" ~ expression }
+set_item = { set_label | set_map_merge | set_map_replace | property_access ~ "=" ~ expression }
 set_label = { variable ~ labels }
 set_map_merge = { variable ~ "+=" ~ expression }
+set_map_replace = { variable ~ "=" ~ map }
 remove_clause = { ^"REMOVE" ~ remove_item ~ ("," ~ remove_item)* }
 remove_item = { property_access | variable ~ ":" ~ label }
 return_clause = { ^"RETURN" ~ distinct? ~ return_items }
