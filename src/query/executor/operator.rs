@@ -1747,6 +1747,11 @@ fn eval_function(name: &str, args: &[Value], store: Option<&GraphStore>) -> Exec
             let is_null = matches!(&args[0], Value::Null | Value::Property(PropertyValue::Null));
             Ok(Value::Property(PropertyValue::Boolean(!is_null)))
         }
+        // $patternPredicate — WHERE (n)-[:REL]->() pattern predicate
+        // Args: [source_var_name, pattern_text]
+        // Evaluated in FilterOperator context where record is available
+        // Here in eval_function (no record), just return true — the filter handles it
+        "$patternpredicate" => Ok(Value::Property(PropertyValue::Boolean(true))),
         // Label check: WHERE n:Label → $hasLabel(n, 'Label')
         "$haslabel" => {
             if args.is_empty() {

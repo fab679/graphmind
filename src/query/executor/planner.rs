@@ -2703,6 +2703,18 @@ impl QueryPlanner {
                         };
                     }
 
+                    // Add property filter for edge if properties specified AND edge has a variable
+                    if let Some(ref edge_props) = segment.edge.properties {
+                        if !edge_props.is_empty() {
+                            if let Some(ref edge_var_name) = segment.edge.variable {
+                                let filter_expr =
+                                    self.build_property_filter(edge_var_name, edge_props);
+                                path_operator =
+                                    Box::new(FilterOperator::new(path_operator, filter_expr));
+                            }
+                        }
+                    }
+
                     // Add property filter for target node if properties specified
                     if let Some(ref props) = segment.node.properties {
                         if !props.is_empty() {
