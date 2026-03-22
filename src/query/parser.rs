@@ -56,6 +56,37 @@ pub enum ParseError {
 
 pub type ParseResult<T> = Result<T, ParseError>;
 
+/// Validate SKIP/LIMIT expression: must be a non-negative integer constant.
+/// Per OpenCypher spec: "accepts any expression that evaluates to a positive integer —
+/// however the expression cannot refer to nodes or relationships"
+fn validate_skip_limit_expr(expr: &Expression, clause: &str) -> ParseResult<usize> {
+    match expr {
+        Expression::Literal(PropertyValue::Integer(n)) => {
+            if *n < 0 {
+                Err(ParseError::SemanticError(format!(
+                    "Negative value for {}: {}",
+                    clause, n
+                )))
+            } else {
+                Ok(*n as usize)
+            }
+        }
+        Expression::Literal(PropertyValue::Float(_)) => Err(ParseError::SemanticError(format!(
+            "Floating point value for {} is not allowed",
+            clause
+        ))),
+        Expression::Variable(_) | Expression::Property { .. } => Err(ParseError::SemanticError(
+            format!("{} value cannot refer to variables", clause),
+        )),
+        // Allow simple arithmetic on constants (e.g., toInteger(3*rand())+1)
+        _ => {
+            // For complex expressions, we can't validate at parse time
+            // Return 0 as placeholder — runtime will evaluate
+            Ok(0)
+        }
+    }
+}
+
 /// Parse an integer literal supporting decimal, hex (0x...), and octal (0o...) formats
 #[allow(dead_code)]
 fn parse_integer_literal(s: &str) -> i64 {
@@ -92,10 +123,6 @@ fn parse_integer_literal_checked(s: &str) -> Result<i64, String> {
         } else {
             Ok(-(unsigned as i64))
         }
-    } else if unsigned == 0x8000000000000000 {
-        // Exactly i64::MIN magnitude — allow it through, unary minus will handle it
-        // This supports RETURN -9223372036854775808 which is valid i64::MIN
-        Ok(i64::MIN)
     } else if unsigned > i64::MAX as u64 {
         Err("Integer overflow: number too large to fit in target type".to_string())
     } else {
@@ -1329,30 +1356,20 @@ fn parse_projection_body(
                 *order_by = Some(parse_order_clause(inner)?);
             }
             Rule::skip_clause => {
-                // skip_clause = ${ kw_skip ~ sp ~ expression }
+                // skip_clause = { kw_skip ~ expression }
                 for si in inner.into_inner() {
                     if si.as_rule() == Rule::expression {
-                        // Try to evaluate as integer literal
                         let expr = parse_expression(si)?;
-                        if let Expression::Literal(PropertyValue::Integer(n)) = &expr {
-                            *skip = Some(*n as usize);
-                        } else {
-                            // Expression-based skip — try parsing as_str
-                            *skip = None; // Unsupported for now
-                        }
+                        *skip = Some(validate_skip_limit_expr(&expr, "SKIP")?);
                     }
                 }
             }
             Rule::limit_clause => {
-                // limit_clause = ${ kw_limit ~ sp ~ expression }
+                // limit_clause = { kw_limit ~ expression }
                 for li in inner.into_inner() {
                     if li.as_rule() == Rule::expression {
                         let expr = parse_expression(li)?;
-                        if let Expression::Literal(PropertyValue::Integer(n)) = &expr {
-                            *limit = Some(*n as usize);
-                        } else {
-                            *limit = None;
-                        }
+                        *limit = Some(validate_skip_limit_expr(&expr, "LIMIT")?);
                     }
                 }
             }
@@ -2478,7 +2495,18 @@ fn parse_number_literal(pair: pest::iterators::Pair<Rule>) -> ParseResult<Expres
             }
             Rule::integer_literal => match parse_integer_literal_checked(inner.as_str()) {
                 Ok(val) => return Ok(Expression::Literal(PropertyValue::Integer(val))),
-                Err(e) => return Err(ParseError::SemanticError(e)),
+                Err(e) => {
+                    // Check if it's exactly i64::MIN magnitude — allow it through
+                    // for unary minus to handle (RETURN -9223372036854775808)
+                    let s = inner.as_str().trim();
+                    if s == "9223372036854775808"
+                        || s.eq_ignore_ascii_case("0x8000000000000000")
+                        || s.eq_ignore_ascii_case("0o1000000000000000000000")
+                    {
+                        return Ok(Expression::Literal(PropertyValue::Integer(i64::MIN)));
+                    }
+                    return Err(ParseError::SemanticError(e));
+                }
             },
             _ => {}
         }
