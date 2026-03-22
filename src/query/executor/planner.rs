@@ -67,11 +67,12 @@ use crate::query::executor::{
         CreateEdgeOperator, CreateIndexOperator, CreateNodeOperator, CreateNodesAndEdgesOperator,
         CreateVectorIndexOperator, DeleteOperator, DropIndexOperator, ExpandOperator,
         FilterOperator, ForeachOperator, IndexScanOperator, JoinOperator, LeftOuterJoinOperator,
-        LimitOperator, MergeOperator, NodeScanOperator, ProjectOperator, RemovePropertyOperator,
-        SchemaVisualizationOperator, SetPropertyOperator, ShortestPathOperator,
-        ShowConstraintsOperator, ShowIndexesOperator, ShowLabelsOperator, ShowPropertyKeysOperator,
-        ShowRelationshipTypesOperator, SingleRowOperator, SkipOperator, SortOperator,
-        UnwindOperator, VarLengthExpandOperator, VectorSearchOperator, WithBarrierOperator,
+        LimitOperator, MergeOperator, MockProcedureOperator, NodeScanOperator, ProjectOperator,
+        RemovePropertyOperator, SchemaVisualizationOperator, SetPropertyOperator,
+        ShortestPathOperator, ShowConstraintsOperator, ShowIndexesOperator, ShowLabelsOperator,
+        ShowPropertyKeysOperator, ShowRelationshipTypesOperator, SingleRowOperator, SkipOperator,
+        SortOperator, UnwindOperator, VarLengthExpandOperator, VectorSearchOperator,
+        WithBarrierOperator,
     },
     ExecutionError,
     ExecutionResult,
@@ -1836,6 +1837,17 @@ impl QueryPlanner {
             Ok(Box::new(AlgorithmOperator::new(
                 call_clause.procedure_name.clone(),
                 call_clause.arguments.clone(),
+            )))
+        } else if call_clause.procedure_name.starts_with("test.") {
+            // TCK mock procedures
+            Ok(Box::new(MockProcedureOperator::new(
+                call_clause.procedure_name.clone(),
+                call_clause.arguments.clone(),
+                call_clause
+                    .yield_items
+                    .iter()
+                    .map(|y| y.name.clone())
+                    .collect(),
             )))
         } else {
             Err(ExecutionError::PlanningError(format!(

@@ -113,22 +113,35 @@ fn parse_integer_literal_checked(s: &str) -> Result<i64, String> {
     } else {
         (false, s)
     };
-    let value = if let Some(hex) = digits
+    // Parse as u64 first to handle i64::MIN correctly
+    let unsigned = if let Some(hex) = digits
         .strip_prefix("0x")
         .or_else(|| digits.strip_prefix("0X"))
     {
-        i64::from_str_radix(hex, 16).map_err(|e| format!("Integer overflow: {}", e))?
+        u64::from_str_radix(hex, 16).map_err(|e| format!("Integer overflow: {}", e))?
     } else if let Some(oct) = digits
         .strip_prefix("0o")
         .or_else(|| digits.strip_prefix("0O"))
     {
-        i64::from_str_radix(oct, 8).map_err(|e| format!("Integer overflow: {}", e))?
+        u64::from_str_radix(oct, 8).map_err(|e| format!("Integer overflow: {}", e))?
     } else {
         digits
-            .parse::<i64>()
+            .parse::<u64>()
             .map_err(|e| format!("Integer overflow: {}", e))?
     };
-    Ok(if negative { -value } else { value })
+    if negative {
+        if unsigned == 0x8000000000000000 {
+            Ok(i64::MIN) // Exact i64::MIN
+        } else if unsigned > i64::MAX as u64 {
+            Err("Integer overflow: number too large to fit in target type".to_string())
+        } else {
+            Ok(-(unsigned as i64))
+        }
+    } else if unsigned > i64::MAX as u64 {
+        Err("Integer overflow: number too large to fit in target type".to_string())
+    } else {
+        Ok(unsigned as i64)
+    }
 }
 
 /// Parse a Cypher query string into an AST
@@ -1013,20 +1026,22 @@ fn parse_remove_clause(pair: pest::iterators::Pair<Rule>) -> ParseResult<RemoveC
                 }
                 items.push(RemoveItem::Property { variable, property });
             } else {
-                // variable : label
+                // variable :Label1:Label2 — one or more labels
                 let mut variable = String::new();
-                let mut label = String::new();
+                let mut labels = Vec::new();
                 for child in children {
                     match child.as_rule() {
                         Rule::variable => variable = child.as_str().to_string(),
-                        Rule::label => label = child.as_str().to_string(),
+                        Rule::label => labels.push(child.as_str().to_string()),
                         _ => {}
                     }
                 }
-                items.push(RemoveItem::Label {
-                    variable,
-                    label: Label::new(&label),
-                });
+                for label in labels {
+                    items.push(RemoveItem::Label {
+                        variable: variable.clone(),
+                        label: Label::new(&label),
+                    });
+                }
             }
         }
     }

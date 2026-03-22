@@ -69,7 +69,7 @@ set_label = { variable ~ labels }
 set_map_merge = { variable ~ "+=" ~ expression }
 set_map_replace = { variable ~ "=" ~ map }
 remove_clause = { ^"REMOVE" ~ remove_item ~ ("," ~ remove_item)* }
-remove_item = { property_access | variable ~ ":" ~ label }
+remove_item = { property_access | variable ~ labels }
 return_clause = { ^"RETURN" ~ distinct? ~ return_items }
 distinct = { ^"DISTINCT" }
 order_by_clause = { ^"ORDER" ~ ^"BY" ~ order_items }

@@ -497,6 +497,7 @@ fn eval_binary_op(op: &BinaryOp, left: Value, right: Value) -> ExecutionResult<V
             (PropertyValue::String(l), PropertyValue::String(r)) => {
                 PropertyValue::Boolean(l.starts_with(r.as_str()))
             }
+            (PropertyValue::Null, _) | (_, PropertyValue::Null) => PropertyValue::Null,
             _ => {
                 return Err(ExecutionError::TypeError(
                     "STARTS WITH requires strings".to_string(),
@@ -507,6 +508,7 @@ fn eval_binary_op(op: &BinaryOp, left: Value, right: Value) -> ExecutionResult<V
             (PropertyValue::String(l), PropertyValue::String(r)) => {
                 PropertyValue::Boolean(l.ends_with(r.as_str()))
             }
+            (PropertyValue::Null, _) | (_, PropertyValue::Null) => PropertyValue::Null,
             _ => {
                 return Err(ExecutionError::TypeError(
                     "ENDS WITH requires strings".to_string(),
@@ -517,6 +519,7 @@ fn eval_binary_op(op: &BinaryOp, left: Value, right: Value) -> ExecutionResult<V
             (PropertyValue::String(l), PropertyValue::String(r)) => {
                 PropertyValue::Boolean(l.contains(r.as_str()))
             }
+            (PropertyValue::Null, _) | (_, PropertyValue::Null) => PropertyValue::Null,
             _ => {
                 return Err(ExecutionError::TypeError(
                     "CONTAINS requires strings".to_string(),
