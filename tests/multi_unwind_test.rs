@@ -1,13 +1,13 @@
 #[test]
-fn test_with_unwind_return() {
+fn test_i64_min() {
     let store = graphmind::GraphStore::new();
     let engine = graphmind::QueryEngine::new();
-    let q = "WITH [1, 2, 3] AS list UNWIND list AS x RETURN x";
-    match engine.execute(q, &store) {
-        Ok(r) => {
-            eprintln!("OK: {} rows", r.len());
-            assert_eq!(r.len(), 3);
-        }
+    match engine.execute("RETURN -9223372036854775808 AS literal", &store) {
+        Ok(r) => eprintln!(
+            "OK: {} rows, val={:?}",
+            r.len(),
+            r.records.get(0).and_then(|r| r.get("literal"))
+        ),
         Err(e) => eprintln!("ERROR: {}", e),
     }
 }

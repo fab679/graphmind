@@ -92,6 +92,10 @@ fn parse_integer_literal_checked(s: &str) -> Result<i64, String> {
         } else {
             Ok(-(unsigned as i64))
         }
+    } else if unsigned == 0x8000000000000000 {
+        // Exactly i64::MIN magnitude — allow it through, unary minus will handle it
+        // This supports RETURN -9223372036854775808 which is valid i64::MIN
+        Ok(i64::MIN)
     } else if unsigned > i64::MAX as u64 {
         Err("Integer overflow: number too large to fit in target type".to_string())
     } else {
