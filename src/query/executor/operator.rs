@@ -1944,6 +1944,65 @@ fn eval_function(name: &str, args: &[Value], store: Option<&GraphStore>) -> Exec
                 }
             }
         }
+        // localdatetime — same as datetime but without timezone
+        "localdatetime" => {
+            if args.is_empty() {
+                let now = chrono::Utc::now().timestamp_millis();
+                Ok(Value::Property(PropertyValue::DateTime(now)))
+            } else {
+                // Delegate to datetime — localdatetime uses same map/string args
+                eval_function("datetime", args, store)
+            }
+        }
+        // localtime — time without timezone, stored as millis since midnight
+        "localtime" => {
+            if args.is_empty() {
+                let now = chrono::Utc::now();
+                let millis =
+                    (now.timestamp() % 86400) * 1000 + (now.timestamp_subsec_millis() as i64);
+                Ok(Value::Property(PropertyValue::DateTime(millis)))
+            } else if let Some(Value::Property(PropertyValue::Map(map))) = args.first() {
+                let hour = map.get("hour").and_then(|v| v.as_integer()).unwrap_or(0);
+                let minute = map.get("minute").and_then(|v| v.as_integer()).unwrap_or(0);
+                let second = map.get("second").and_then(|v| v.as_integer()).unwrap_or(0);
+                let nano = map
+                    .get("nanosecond")
+                    .and_then(|v| v.as_integer())
+                    .unwrap_or(0);
+                let millis = hour * 3_600_000 + minute * 60_000 + second * 1000 + nano / 1_000_000;
+                Ok(Value::Property(PropertyValue::DateTime(millis)))
+            } else {
+                eval_function("datetime", args, store)
+            }
+        }
+        // time — time with timezone, same as localtime for our purposes
+        "time" => eval_function("localtime", args, store),
+        // datetime.fromepoch — construct from epoch seconds/millis
+        "datetime.fromepoch" => {
+            if args.len() >= 2 {
+                let seconds = match &args[0] {
+                    Value::Property(PropertyValue::Integer(s)) => *s,
+                    _ => 0,
+                };
+                let nanos = match &args[1] {
+                    Value::Property(PropertyValue::Integer(n)) => *n,
+                    _ => 0,
+                };
+                Ok(Value::Property(PropertyValue::DateTime(
+                    seconds * 1000 + nanos / 1_000_000,
+                )))
+            } else if args.len() == 1 {
+                let seconds = match &args[0] {
+                    Value::Property(PropertyValue::Integer(s)) => *s,
+                    _ => 0,
+                };
+                Ok(Value::Property(PropertyValue::DateTime(seconds * 1000)))
+            } else {
+                Err(ExecutionError::RuntimeError(
+                    "datetime.fromepoch requires arguments".to_string(),
+                ))
+            }
+        }
         "duration" => {
             if args.is_empty() {
                 return Err(ExecutionError::RuntimeError(
@@ -6893,9 +6952,22 @@ impl PhysicalOperator for MockProcedureOperator {
             return Ok(None);
         }
 
-        // Return one record mapping arguments to yield columns
+        // Determine yield columns — use provided or default based on arg count
+        let yield_cols = if self.yield_vars.is_empty() {
+            // Standalone call without YIELD — use default columns
+            // test.my.proc with 2 args returns (city, country_code)
+            // test.my.proc with 1 arg returns (out)
+            if self.args.len() == 2 {
+                vec!["city".to_string(), "country_code".to_string()]
+            } else {
+                vec!["out".to_string()]
+            }
+        } else {
+            self.yield_vars.clone()
+        };
+
         let mut record = Record::new();
-        for (i, yield_var) in self.yield_vars.iter().enumerate() {
+        for (i, yield_var) in yield_cols.iter().enumerate() {
             if i < self.args.len() {
                 let val = eval_expression(&self.args[i], &Record::new(), store)?;
                 record.bind(yield_var.clone(), val);

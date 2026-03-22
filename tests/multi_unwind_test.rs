@@ -1,13 +1,17 @@
 #[test]
-fn test_i64_min() {
-    let store = graphmind::GraphStore::new();
-    let engine = graphmind::QueryEngine::new();
-    match engine.execute("RETURN -9223372036854775808 AS literal", &store) {
-        Ok(r) => eprintln!(
-            "OK: {} rows, val={:?}",
-            r.len(),
-            r.records.get(0).and_then(|r| r.get("literal"))
-        ),
-        Err(e) => eprintln!("ERROR: {}", e),
+fn test_create_rebind() {
+    let q = "CREATE (n:Foo) CREATE (n:Bar)-[:OWNS]->(:Dog)";
+    let query = graphmind::query::parser::parse_query(q).unwrap();
+    eprintln!("create_clause: {:?}", query.create_clause.is_some());
+    eprintln!("create_clauses: {}", query.create_clauses.len());
+    if let Some(cc) = &query.create_clause {
+        for path in &cc.pattern.paths {
+            eprintln!("  path: start={:?}", path.start.variable);
+        }
+    }
+    for (i, cc) in query.create_clauses.iter().enumerate() {
+        for path in &cc.pattern.paths {
+            eprintln!("  clauses[{}]: start={:?}", i, path.start.variable);
+        }
     }
 }

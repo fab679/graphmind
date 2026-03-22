@@ -226,12 +226,14 @@ impl<'a> QueryExecutor<'a> {
             }
 
             // Validate: all UNION branches must have same number of columns
-            let main_col_count = result.columns.len();
+            // Per spec: "The number and the names of the fields must be identical"
+            let main_cols = &result.columns;
             for (union_query, _is_all) in &query.union_queries {
                 let union_plan = self.planner.plan(union_query, self.store)?;
-                if main_col_count > 0
-                    && union_plan.output_columns.len() > 0
-                    && main_col_count != union_plan.output_columns.len()
+                let union_cols = &union_plan.output_columns;
+                if !main_cols.is_empty()
+                    && !union_cols.is_empty()
+                    && main_cols.len() != union_cols.len()
                 {
                     return Err(ExecutionError::PlanningError(
                         "All sub queries in a UNION must have the same column names".to_string(),
