@@ -176,6 +176,44 @@ fn parse_feature_file(path: &Path) -> Vec<TckScenario> {
     let mut scenarios = Vec::new();
     let mut i = 0;
 
+    // Parse Background block (shared setup for all scenarios)
+    let mut background_queries: Vec<String> = Vec::new();
+    {
+        let mut bi = 0;
+        while bi < lines.len() {
+            let line = lines[bi].trim();
+            if line.starts_with("Background:") {
+                bi += 1;
+                while bi < lines.len() {
+                    let bline = lines[bi].trim();
+                    if bline.starts_with("Scenario:")
+                        || bline.starts_with("Scenario Outline:")
+                        || bline.starts_with("@")
+                    {
+                        break;
+                    }
+                    if bline == "And having executed:"
+                        || bline == "Given having executed:"
+                        || bline.starts_with("And having executed")
+                    {
+                        bi += 1;
+                        if let Some(q) = extract_query_block(&lines, &mut bi) {
+                            background_queries.push(q);
+                        }
+                        continue;
+                    }
+                    if bline == "Given an empty graph" {
+                        bi += 1;
+                        continue;
+                    }
+                    bi += 1;
+                }
+                break;
+            }
+            bi += 1;
+        }
+    }
+
     while i < lines.len() {
         // Collect tags on lines immediately before a Scenario
         let mut tags = Vec::new();
@@ -195,7 +233,7 @@ fn parse_feature_file(path: &Path) -> Vec<TckScenario> {
         let is_outline = line.starts_with("Scenario Outline:");
         if line.starts_with("Scenario:") || is_outline {
             let name = line.splitn(2, ':').nth(1).unwrap_or("").trim().to_string();
-            let mut setup_queries = Vec::new();
+            let mut setup_queries = background_queries.clone();
             let mut test_query = String::new();
             let mut expected = TckExpected::AnyResult;
             let mut has_parameters = false;
