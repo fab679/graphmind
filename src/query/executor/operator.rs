@@ -4423,18 +4423,34 @@ impl AggregateOperator {
 
         // Generate results
         let mut output_records = Vec::new();
-        for (key, states) in groups {
+
+        // If no input rows and this is a pure aggregation (no GROUP BY),
+        // return one row with default aggregate values (count=0, sum=null, etc.)
+        if groups.is_empty() && self.group_by.is_empty() && !self.aggregates.is_empty() {
             let mut record = Record::new();
-
-            for (i, (_, alias)) in self.group_by.iter().enumerate() {
-                record.bind(alias.clone(), key[i].clone());
-            }
-
+            let default_states: Vec<AggregatorState> = self
+                .aggregates
+                .iter()
+                .map(|agg| AggregatorState::new(&agg.func, agg.distinct))
+                .collect();
             for (i, agg) in self.aggregates.iter().enumerate() {
-                record.bind(agg.alias.clone(), states[i].result());
+                record.bind(agg.alias.clone(), default_states[i].result());
             }
-
             output_records.push(record);
+        } else {
+            for (key, states) in groups {
+                let mut record = Record::new();
+
+                for (i, (_, alias)) in self.group_by.iter().enumerate() {
+                    record.bind(alias.clone(), key[i].clone());
+                }
+
+                for (i, agg) in self.aggregates.iter().enumerate() {
+                    record.bind(agg.alias.clone(), states[i].result());
+                }
+
+                output_records.push(record);
+            }
         }
 
         self.results = output_records.into_iter();
