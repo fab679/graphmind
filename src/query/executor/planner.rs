@@ -573,8 +573,23 @@ impl QueryPlanner {
             }
         }
 
-        // Note: MERGE null property validation is done at runtime, not compile time,
-        // because properties may reference variables (e.g., MERGE (n {prop: var}))
+        // Validate MERGE: reject literal null in edge properties
+        if let Some(mc) = &query.merge_clause {
+            for path in &mc.pattern.paths {
+                for seg in &path.segments {
+                    if let Some(ref props) = seg.edge.properties {
+                        for (k, v) in props {
+                            if matches!(v, PropertyValue::Null) {
+                                return Err(ExecutionError::RuntimeError(format!(
+                                    "MERGE does not support null property value for '{}'",
+                                    k
+                                )));
+                            }
+                        }
+                    }
+                }
+            }
+        }
 
         // Validate MERGE re-binding: MATCH (a) MERGE (a) should fail
         if let Some(mc) = &query.merge_clause {
@@ -2284,23 +2299,7 @@ impl QueryPlanner {
                 call_clause.arguments.clone(),
             )))
         } else if call_clause.procedure_name.starts_with("test.") {
-            // TCK mock procedures — validate argument count
-            if call_clause.procedure_name == "test.my.proc" {
-                // Signature: test.my.proc(name :: STRING?, id :: INTEGER?) :: (out :: STRING?)
-                // Accepts exactly 1 or 2 arguments
-                if call_clause.arguments.is_empty() {
-                    return Err(ExecutionError::PlanningError(
-                        "Procedure call does not provide the required number of arguments"
-                            .to_string(),
-                    ));
-                }
-                if call_clause.arguments.len() > 2 {
-                    return Err(ExecutionError::PlanningError(
-                        "Too many arguments for procedure test.my.proc".to_string(),
-                    ));
-                }
-            }
-
+            // TCK mock procedures
             let yield_vars: Vec<String> = if call_clause.yield_items.is_empty() {
                 // Default output columns based on procedure name
                 if call_clause.procedure_name == "test.my.proc" {
