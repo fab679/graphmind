@@ -342,10 +342,29 @@ fn eval_binary_op(op: &BinaryOp, left: Value, right: Value) -> ExecutionResult<V
                 seconds: s1 + s2,
                 nanos: n1 + n2,
             },
-            // List concatenation
+            // List concatenation (Array + Array)
             (PropertyValue::Array(l), PropertyValue::Array(r)) => {
                 let mut result = l.clone();
                 result.extend(r.iter().cloned());
+                PropertyValue::Array(result)
+            }
+            // Vector + Vector (numeric lists)
+            (PropertyValue::Vector(l), PropertyValue::Vector(r)) => {
+                let mut result: Vec<PropertyValue> =
+                    l.iter().map(|f| PropertyValue::Float(*f as f64)).collect();
+                result.extend(r.iter().map(|f| PropertyValue::Float(*f as f64)));
+                PropertyValue::Array(result)
+            }
+            // Vector + Array or Array + Vector
+            (PropertyValue::Vector(l), PropertyValue::Array(r)) => {
+                let mut result: Vec<PropertyValue> =
+                    l.iter().map(|f| PropertyValue::Float(*f as f64)).collect();
+                result.extend(r.iter().cloned());
+                PropertyValue::Array(result)
+            }
+            (PropertyValue::Array(l), PropertyValue::Vector(r)) => {
+                let mut result = l.clone();
+                result.extend(r.iter().map(|f| PropertyValue::Float(*f as f64)));
                 PropertyValue::Array(result)
             }
             // List + element = append to list
@@ -354,10 +373,21 @@ fn eval_binary_op(op: &BinaryOp, left: Value, right: Value) -> ExecutionResult<V
                 result.push(right_prop);
                 PropertyValue::Array(result)
             }
+            (PropertyValue::Vector(l), _) => {
+                let mut result: Vec<PropertyValue> =
+                    l.iter().map(|f| PropertyValue::Float(*f as f64)).collect();
+                result.push(right_prop);
+                PropertyValue::Array(result)
+            }
             // element + List = prepend to list
             (_, PropertyValue::Array(r)) => {
                 let mut result = vec![left_prop];
                 result.extend(r.iter().cloned());
+                PropertyValue::Array(result)
+            }
+            (_, PropertyValue::Vector(r)) => {
+                let mut result = vec![left_prop];
+                result.extend(r.iter().map(|f| PropertyValue::Float(*f as f64)));
                 PropertyValue::Array(result)
             }
             // String concatenation with non-string (convert to string)
@@ -536,6 +566,20 @@ fn eval_binary_op(op: &BinaryOp, left: Value, right: Value) -> ExecutionResult<V
                 } else if arr.iter().any(|v| matches!(v, PropertyValue::Null)) {
                     // If any element is null and left wasn't found, result is null
                     PropertyValue::Null
+                } else {
+                    PropertyValue::Boolean(false)
+                }
+            }
+            PropertyValue::Vector(vec) => {
+                // Convert vector to array for IN check
+                let arr: Vec<PropertyValue> = vec
+                    .iter()
+                    .map(|f| PropertyValue::Float(*f as f64))
+                    .collect();
+                if matches!(left_prop, PropertyValue::Null) {
+                    PropertyValue::Null
+                } else if arr.iter().any(|v| coerced_eq(&left_prop, v)) {
+                    PropertyValue::Boolean(true)
                 } else {
                     PropertyValue::Boolean(false)
                 }
@@ -1727,6 +1771,17 @@ fn eval_function(name: &str, args: &[Value], store: Option<&GraphStore>) -> Exec
                 Ok(Value::Null)
             } else {
                 Ok(Value::Property(PropertyValue::Boolean(false)))
+            }
+        }
+        // $singleNodePath — create a path with just one node (for zero-length named paths)
+        "$singlenodepath" => {
+            if let Some(nid) = args[0].node_id() {
+                Ok(Value::Path {
+                    nodes: vec![nid],
+                    edges: vec![],
+                })
+            } else {
+                Ok(Value::Null)
             }
         }
         // startNode/endNode — return source/target node of an edge

@@ -2770,6 +2770,24 @@ impl QueryPlanner {
                 }
             }
 
+            // Zero-length path: p = (a) — bind path variable to single-node path
+            if path.segments.is_empty() {
+                if let (Some(pv), Some(sv)) = (&path.path_variable, &path.start.variable) {
+                    // Create a projection that adds the path variable binding
+                    let mut projections = vec![(Expression::Variable(sv.clone()), sv.clone())];
+                    // Use a function expression that creates a single-node path
+                    projections.push((
+                        Expression::Function {
+                            name: "$singleNodePath".to_string(),
+                            args: vec![Expression::Variable(sv.clone())],
+                            distinct: false,
+                        },
+                        pv.clone(),
+                    ));
+                    path_operator = Box::new(ProjectOperator::new(path_operator, projections));
+                }
+            }
+
             // Collect variables used in this path for join detection
             let mut vars = HashSet::new();
             if let Some(v) = &path.start.variable {
