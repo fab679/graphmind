@@ -806,6 +806,31 @@ impl QueryPlanner {
                             .collect();
                         operator = Box::new(ProjectOperator::new(operator, with_projections));
                     }
+
+                    // Apply WITH WHERE clause as a filter
+                    if let Some(wc) = &with_cl.where_clause {
+                        operator = Box::new(FilterOperator::new(operator, wc.predicate.clone()));
+                    }
+
+                    // Apply WITH ORDER BY
+                    if let Some(ob) = &with_cl.order_by {
+                        let sort_items: Vec<(Expression, bool)> = ob
+                            .items
+                            .iter()
+                            .map(|si| (si.expression.clone(), si.ascending))
+                            .collect();
+                        operator = Box::new(SortOperator::new(operator, sort_items));
+                    }
+
+                    // Apply WITH SKIP
+                    if let Some(skip) = with_cl.skip {
+                        operator = Box::new(SkipOperator::new(operator, skip));
+                    }
+
+                    // Apply WITH LIMIT
+                    if let Some(limit) = with_cl.limit {
+                        operator = Box::new(LimitOperator::new(operator, limit));
+                    }
                 }
 
                 // Expand RETURN * — collect vars from UNWIND clause
