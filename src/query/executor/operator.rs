@@ -253,6 +253,12 @@ fn eval_binary_op(op: &BinaryOp, left: Value, right: Value) -> ExecutionResult<V
             (PropertyValue::Boolean(l), PropertyValue::Boolean(r)) => {
                 PropertyValue::Boolean(*l && *r)
             }
+            // Three-valued logic: false AND null = false, true AND null = null
+            (PropertyValue::Boolean(false), PropertyValue::Null)
+            | (PropertyValue::Null, PropertyValue::Boolean(false)) => PropertyValue::Boolean(false),
+            (PropertyValue::Boolean(true), PropertyValue::Null)
+            | (PropertyValue::Null, PropertyValue::Boolean(true))
+            | (PropertyValue::Null, PropertyValue::Null) => PropertyValue::Null,
             _ => {
                 return Err(ExecutionError::TypeError(
                     "AND requires booleans".to_string(),
@@ -263,6 +269,12 @@ fn eval_binary_op(op: &BinaryOp, left: Value, right: Value) -> ExecutionResult<V
             (PropertyValue::Boolean(l), PropertyValue::Boolean(r)) => {
                 PropertyValue::Boolean(*l || *r)
             }
+            // Three-valued logic: true OR null = true, false OR null = null
+            (PropertyValue::Boolean(true), PropertyValue::Null)
+            | (PropertyValue::Null, PropertyValue::Boolean(true)) => PropertyValue::Boolean(true),
+            (PropertyValue::Boolean(false), PropertyValue::Null)
+            | (PropertyValue::Null, PropertyValue::Boolean(false))
+            | (PropertyValue::Null, PropertyValue::Null) => PropertyValue::Null,
             _ => {
                 return Err(ExecutionError::TypeError(
                     "OR requires booleans".to_string(),
@@ -340,6 +352,12 @@ fn eval_binary_op(op: &BinaryOp, left: Value, right: Value) -> ExecutionResult<V
             (PropertyValue::Array(l), _) => {
                 let mut result = l.clone();
                 result.push(right_prop);
+                PropertyValue::Array(result)
+            }
+            // element + List = prepend to list
+            (_, PropertyValue::Array(r)) => {
+                let mut result = vec![left_prop];
+                result.extend(r.iter().cloned());
                 PropertyValue::Array(result)
             }
             // String concatenation with non-string (convert to string)
@@ -506,12 +524,21 @@ fn eval_binary_op(op: &BinaryOp, left: Value, right: Value) -> ExecutionResult<V
             }
         },
         BinaryOp::In => match &right_prop {
-            PropertyValue::Array(arr) => PropertyValue::Boolean(arr.contains(&left_prop)),
-            _ => {
-                return Err(ExecutionError::TypeError(
-                    "IN requires a list on the right".to_string(),
-                ))
+            PropertyValue::Array(arr) => {
+                // If left is null, result is null
+                if matches!(left_prop, PropertyValue::Null) {
+                    PropertyValue::Null
+                } else if arr.iter().any(|v| coerced_eq(&left_prop, v)) {
+                    PropertyValue::Boolean(true)
+                } else if arr.iter().any(|v| matches!(v, PropertyValue::Null)) {
+                    // If any element is null and left wasn't found, result is null
+                    PropertyValue::Null
+                } else {
+                    PropertyValue::Boolean(false)
+                }
             }
+            PropertyValue::Null => PropertyValue::Null,
+            _ => PropertyValue::Boolean(false),
         },
         BinaryOp::RegexMatch => match (&left_prop, &right_prop) {
             (PropertyValue::String(text), PropertyValue::String(pattern)) => {
@@ -1120,6 +1147,21 @@ fn eval_function(name: &str, args: &[Value], store: Option<&GraphStore>) -> Exec
             if matches!(arg, Value::Null | Value::Property(PropertyValue::Null)) {
                 return Ok(Value::Null);
             }
+        }
+    }
+
+    // Null propagation: most functions return null if any argument is null
+    let has_null_arg = args
+        .iter()
+        .any(|a| matches!(a, Value::Null | Value::Property(PropertyValue::Null)));
+    if has_null_arg {
+        // Functions that should NOT return null on null input
+        let null_safe = matches!(
+            lower_name.as_str(),
+            "coalesce" | "count" | "collect" | "exists" | "isnull"
+        );
+        if !null_safe {
+            return Ok(Value::Null);
         }
     }
 
@@ -10659,13 +10701,18 @@ mod tests {
     }
 
     #[test]
-    fn test_binary_op_in_type_error() {
+    fn test_binary_op_in_non_list() {
+        // Per OpenCypher TCK: x IN non-list returns false, not error
         let result = eval_binary_op(
             &BinaryOp::In,
             Value::Property(PropertyValue::Integer(1)),
             Value::Property(PropertyValue::Integer(2)),
         );
-        assert!(result.is_err());
+        assert!(result.is_ok());
+        assert_eq!(
+            result.unwrap().as_property().unwrap(),
+            &PropertyValue::Boolean(false)
+        );
     }
 
     #[test]
