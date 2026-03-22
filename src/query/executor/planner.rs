@@ -2424,11 +2424,15 @@ impl QueryPlanner {
                 .segments
                 .iter()
                 .enumerate()
-                .map(|(i, seg)| {
-                    seg.edge
-                        .variable
-                        .clone()
-                        .unwrap_or_else(|| format!("__anon_edge_{}", i))
+                .filter_map(|(i, seg)| {
+                    if seg.edge.variable.is_some() {
+                        seg.edge.variable.clone()
+                    } else if seg.edge.length.is_none() {
+                        // Anonymous fixed-length edge — use internal name
+                        Some(format!("__anon_edge_{}", i))
+                    } else {
+                        None // Skip VLP anonymous edges
+                    }
                 })
                 .collect();
             if named_edges.len() >= 2 {
