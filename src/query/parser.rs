@@ -1592,11 +1592,12 @@ fn parse_value(pair: pest::iterators::Pair<Rule>) -> ParseResult<PropertyValue> 
                 let val = inner.as_str().eq_ignore_ascii_case("true");
                 return Ok(PropertyValue::Boolean(val));
             }
-            Rule::integer => {
-                let val = parse_integer_literal_checked(inner.as_str())
-                    .map_err(ParseError::SemanticError)?;
-                return Ok(PropertyValue::Integer(val));
-            }
+            Rule::integer => match parse_integer_literal_checked(inner.as_str()) {
+                Ok(val) => return Ok(PropertyValue::Integer(val)),
+                Err(e) => {
+                    return Err(ParseError::SemanticError(e));
+                }
+            },
             Rule::float => {
                 let val: f64 = inner.as_str().parse().unwrap_or(0.0);
                 if val.is_infinite() {
@@ -1871,7 +1872,26 @@ fn parse_term(pair: pest::iterators::Pair<Rule>) -> ParseResult<Expression> {
                 }
             }
 
-            let mut expr = parse_primary(primary_pair.unwrap())?;
+            let mut expr = match parse_primary(primary_pair.clone().unwrap()) {
+                Ok(e) => e,
+                Err(ParseError::SemanticError(ref msg)) if msg.contains("Integer overflow") => {
+                    // If we have a minus prefix, try parsing as negative integer (handles i64::MIN)
+                    if prefix_ops.len() == 1 && prefix_ops[0].as_str().trim() == "-" {
+                        let primary_str = primary_pair.unwrap().as_str().trim();
+                        let combined = format!("-{}", primary_str);
+                        match parse_integer_literal_checked(&combined) {
+                            Ok(val) => {
+                                prefix_ops.clear(); // consume the minus
+                                Expression::Literal(PropertyValue::Integer(val))
+                            }
+                            Err(_) => return Err(ParseError::SemanticError(msg.clone())),
+                        }
+                    } else {
+                        return Err(ParseError::SemanticError(msg.clone()));
+                    }
+                }
+                Err(e) => return Err(e),
+            };
 
             // Apply postfix operator (IS NULL / IS NOT NULL / :Label)
             if let Some(postfix) = postfix_pair {
@@ -1953,15 +1973,35 @@ fn parse_term(pair: pest::iterators::Pair<Rule>) -> ParseResult<Expression> {
             // Apply prefix operators in reverse order (innermost first)
             for prefix in prefix_ops.into_iter().rev() {
                 let op_str = prefix.as_str().trim();
-                let op = if op_str == "-" {
-                    UnaryOp::Minus
+                if op_str == "-" {
+                    // Optimize: directly negate literals (handles i64::MIN)
+                    match &expr {
+                        Expression::Literal(PropertyValue::Integer(i)) => {
+                            if let Some(neg) = i.checked_neg() {
+                                expr = Expression::Literal(PropertyValue::Integer(neg));
+                            } else {
+                                expr = Expression::Unary {
+                                    op: UnaryOp::Minus,
+                                    expr: Box::new(expr),
+                                };
+                            }
+                        }
+                        Expression::Literal(PropertyValue::Float(f)) => {
+                            expr = Expression::Literal(PropertyValue::Float(-f));
+                        }
+                        _ => {
+                            expr = Expression::Unary {
+                                op: UnaryOp::Minus,
+                                expr: Box::new(expr),
+                            };
+                        }
+                    }
                 } else {
-                    UnaryOp::Not
-                };
-                expr = Expression::Unary {
-                    op,
-                    expr: Box::new(expr),
-                };
+                    expr = Expression::Unary {
+                        op: UnaryOp::Not,
+                        expr: Box::new(expr),
+                    };
+                }
             }
 
             Ok(expr)
