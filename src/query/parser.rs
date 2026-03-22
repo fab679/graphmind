@@ -703,6 +703,9 @@ fn parse_with_statement(pair: pest::iterators::Pair<Rule>, query: &mut Query) ->
                     }
                 }
             }
+            Rule::merge_inline => {
+                parse_merge_statement(inner, query)?;
+            }
             Rule::set_clause => {
                 query.set_clauses.push(parse_set_clause(inner)?);
             }
