@@ -2223,9 +2223,20 @@ fn parse_unary_add_or_subtract_expression(
         // Optimize: directly negate literals
         match &expr {
             Expression::Literal(PropertyValue::Integer(i)) => {
+                // Check for i64::MIN case: the positive form overflowed to 0
+                if *i == 0 {
+                    let digits = text.trim_start_matches('-').trim();
+                    if digits == "9223372036854775808"
+                        || digits.eq_ignore_ascii_case("0x8000000000000000")
+                        || digits.eq_ignore_ascii_case("0o1000000000000000000000")
+                    {
+                        return Ok(Expression::Literal(PropertyValue::Integer(i64::MIN)));
+                    }
+                }
                 if let Some(neg) = i.checked_neg() {
                     return Ok(Expression::Literal(PropertyValue::Integer(neg)));
                 }
+                return Ok(Expression::Literal(PropertyValue::Integer(i64::MIN)));
             }
             Expression::Literal(PropertyValue::Float(f)) => {
                 return Ok(Expression::Literal(PropertyValue::Float(-f)));

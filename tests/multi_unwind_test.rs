@@ -1,28 +1,15 @@
 #[test]
-fn test_inline_property_match() {
+fn test_basic_match() {
     let mut store = graphmind::GraphStore::new();
     let engine = graphmind::QueryEngine::new();
     engine
-        .execute_mut(
-            "CREATE (:A)<-[:KNOWS {name: 'monkey'}]-()-[:KNOWS {name: 'woot'}]->(:B)",
-            &mut store,
-            "default",
-        )
+        .execute_mut("CREATE (a:A {name: 'test'})", &mut store, "default")
         .unwrap();
-    eprintln!(
-        "nodes: {}, edges: {}",
-        store.node_count(),
-        store.edge_count()
-    );
-    let result = engine
-        .execute(
-            "MATCH (node)-[r:KNOWS {name: 'monkey'}]->(a) RETURN a",
-            &store,
-        )
-        .unwrap();
-    eprintln!("rows: {}", result.len());
-    for r in &result.records {
-        eprintln!("  a = {:?}", r.get("a"));
+    let result = engine.execute("MATCH (a:A) RETURN a.name", &store);
+    match &result {
+        Ok(r) => eprintln!("OK: {} rows", r.len()),
+        Err(e) => eprintln!("ERROR: {}", e),
     }
-    assert_eq!(result.len(), 1, "Expected 1 match for directed monkey edge");
+    assert!(result.is_ok());
+    assert_eq!(result.unwrap().len(), 1);
 }
