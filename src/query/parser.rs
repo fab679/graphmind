@@ -1599,6 +1599,11 @@ fn parse_value(pair: pest::iterators::Pair<Rule>) -> ParseResult<PropertyValue> 
             }
             Rule::float => {
                 let val: f64 = inner.as_str().parse().unwrap_or(0.0);
+                if val.is_infinite() {
+                    return Err(ParseError::SemanticError(
+                        "Floating point number is too large".to_string(),
+                    ));
+                }
                 return Ok(PropertyValue::Float(val));
             }
             Rule::string => {

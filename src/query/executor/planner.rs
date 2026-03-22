@@ -85,6 +85,24 @@ use std::sync::Mutex; // Added for CREATE properties and JOIN logic
 /// from an expression tree, replacing each with a `Variable("__agg_N")` reference.
 ///
 /// Returns the rewritten expression and the list of extracted aggregates.
+/// Check if an expression contains any aggregation function call
+fn contains_aggregation(expr: &Expression) -> bool {
+    match expr {
+        Expression::Function { name, args, .. } => {
+            let agg_names = ["count", "sum", "avg", "min", "max", "collect"];
+            if agg_names.contains(&name.to_lowercase().as_str()) {
+                return true;
+            }
+            args.iter().any(contains_aggregation)
+        }
+        Expression::Binary { left, right, .. } => {
+            contains_aggregation(left) || contains_aggregation(right)
+        }
+        Expression::Unary { expr, .. } => contains_aggregation(expr),
+        _ => false,
+    }
+}
+
 /// This enables expressions like `round(sum(b.runs) * 100 / sum(b.balls))` where
 /// aggregate calls are nested inside arithmetic or scalar function calls.
 fn extract_nested_aggregates(
@@ -536,6 +554,56 @@ impl QueryPlanner {
                             "MERGE requires directed relationships".to_string(),
                         ));
                     }
+                }
+            }
+        }
+
+        // Validate MERGE re-binding: MATCH (a) MERGE (a) should fail
+        if let Some(mc) = &query.merge_clause {
+            let m_node_vars: HashSet<String> = query
+                .match_clauses
+                .iter()
+                .flat_map(|m| m.pattern.paths.iter())
+                .filter_map(|p| p.start.variable.clone())
+                .collect();
+            for path in &mc.pattern.paths {
+                if let Some(v) = &path.start.variable {
+                    if m_node_vars.contains(v) && path.segments.is_empty() {
+                        return Err(ExecutionError::PlanningError(format!(
+                            "Variable '{}' already declared in MATCH",
+                            v
+                        )));
+                    }
+                }
+            }
+        }
+
+        // Validate: aggregation in WHERE clause
+        if let Some(wc) = &query.where_clause {
+            if contains_aggregation(&wc.predicate) {
+                return Err(ExecutionError::PlanningError(
+                    "Aggregation expressions are not allowed in WHERE".to_string(),
+                ));
+            }
+        }
+
+        // Validate: RETURN * without named variables in scope
+        if let Some(rc) = &query.return_clause {
+            if rc.star {
+                let has_named_vars = query.match_clauses.iter().any(|mc| {
+                    mc.pattern.paths.iter().any(|p| {
+                        p.start.variable.is_some()
+                            || p.segments
+                                .iter()
+                                .any(|s| s.edge.variable.is_some() || s.node.variable.is_some())
+                    })
+                }) || query.with_clause.is_some()
+                    || query.unwind_clause.is_some()
+                    || query.create_clause.is_some();
+                if !has_named_vars && !query.match_clauses.is_empty() {
+                    return Err(ExecutionError::PlanningError(
+                        "RETURN * is not allowed when there are no variables in scope".to_string(),
+                    ));
                 }
             }
         }
