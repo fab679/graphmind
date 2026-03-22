@@ -231,6 +231,137 @@ impl QueryEngine {
     /// Rewrite multi-CREATE statements by inserting WITH clauses to carry variables forward.
     /// E.g.: `CREATE (a:Person) CREATE (b:Person) CREATE (a)-[:KNOWS]->(b)`
     /// becomes: `CREATE (a:Person) WITH a CREATE (b:Person) WITH a, b CREATE (a)-[:KNOWS]->(b)`
+    /// Expand `UNWIND [1,2,3] AS x CREATE ({num: x})` into individual CREATEs.
+    /// Returns None if the query is not an UNWIND+CREATE pattern.
+    fn expand_unwind_create(input: &str) -> Option<Vec<String>> {
+        let trimmed = input.trim();
+        let upper = trimmed.to_uppercase();
+
+        // Must start with UNWIND and contain CREATE but not MATCH/RETURN/WITH
+        if !upper.starts_with("UNWIND") || !upper.contains("CREATE") {
+            return None;
+        }
+        if upper.contains("MATCH")
+            || upper.contains("RETURN")
+            || upper.contains("WITH")
+            || upper.contains("MERGE")
+        {
+            return None;
+        }
+
+        // Extract the list and variable: UNWIND [...] AS var
+        // Find the list literal [...]
+        let list_start = trimmed.find('[')?;
+        let mut depth = 0;
+        let mut list_end = None;
+        for (i, ch) in trimmed[list_start..].char_indices() {
+            match ch {
+                '[' => depth += 1,
+                ']' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        list_end = Some(list_start + i + 1);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let list_end = list_end?;
+        let list_str = &trimmed[list_start..list_end];
+
+        // Find AS variable
+        let after_list = &trimmed[list_end..];
+        let as_pos = after_list.to_uppercase().find(" AS ")?;
+        let after_as = &after_list[as_pos + 4..].trim();
+        let var_end = after_as
+            .find(|c: char| !c.is_alphanumeric() && c != '_')
+            .unwrap_or(after_as.len());
+        let var_name = &after_as[..var_end].trim();
+
+        // Find CREATE clause
+        let create_pos = upper.find("CREATE")?;
+        let create_clause = &trimmed[create_pos..];
+
+        // Parse the list values (simple: split by comma, handle nested)
+        let inner = &list_str[1..list_str.len() - 1]; // strip [ ]
+        let mut elements = Vec::new();
+        let mut current = String::new();
+        let mut nest = 0;
+        let mut in_str = false;
+        let mut str_char = ' ';
+        for ch in inner.chars() {
+            match ch {
+                '\'' | '"' if !in_str => {
+                    in_str = true;
+                    str_char = ch;
+                    current.push(ch);
+                }
+                c if in_str && c == str_char => {
+                    in_str = false;
+                    current.push(ch);
+                }
+                '[' | '{' if !in_str => {
+                    nest += 1;
+                    current.push(ch);
+                }
+                ']' | '}' if !in_str => {
+                    nest -= 1;
+                    current.push(ch);
+                }
+                ',' if !in_str && nest == 0 => {
+                    elements.push(current.trim().to_string());
+                    current.clear();
+                }
+                _ => current.push(ch),
+            }
+        }
+        if !current.trim().is_empty() {
+            elements.push(current.trim().to_string());
+        }
+
+        // Generate one CREATE per element, substituting the variable
+        let mut result = Vec::new();
+        for element in &elements {
+            // Replace occurrences of the variable in the CREATE clause with the literal value
+            let mut create = create_clause.to_string();
+            // Simple replacement: replace `: var}` and `: var,` patterns
+            // Also handle `{prop: var}` and `{prop: var,`
+            // Use word-boundary replacement
+            let mut new_create = String::new();
+            let var_bytes = var_name.as_bytes();
+            let create_bytes = create.as_bytes();
+            let mut i = 0;
+            while i < create_bytes.len() {
+                if i + var_bytes.len() <= create_bytes.len()
+                    && &create_bytes[i..i + var_bytes.len()] == var_bytes
+                {
+                    // Check word boundaries
+                    let before_ok = i == 0
+                        || !create_bytes[i - 1].is_ascii_alphanumeric()
+                            && create_bytes[i - 1] != b'_';
+                    let after_ok = i + var_bytes.len() >= create_bytes.len()
+                        || !create_bytes[i + var_bytes.len()].is_ascii_alphanumeric()
+                            && create_bytes[i + var_bytes.len()] != b'_';
+                    if before_ok && after_ok {
+                        new_create.push_str(element);
+                        i += var_bytes.len();
+                        continue;
+                    }
+                }
+                new_create.push(create_bytes[i] as char);
+                i += 1;
+            }
+            result.push(new_create);
+        }
+
+        if result.is_empty() {
+            None
+        } else {
+            Some(result)
+        }
+    }
+
     fn rewrite_multi_create(input: &str) -> String {
         // Regex-free approach: split on CREATE keyword boundaries (not inside quotes)
         let upper = input.to_uppercase();
@@ -383,6 +514,17 @@ impl QueryEngine {
         for stmt in &statements {
             // Rewrite multi-CREATE to use WITH for variable sharing
             let rewritten = Self::rewrite_multi_create(stmt);
+
+            // Handle UNWIND+CREATE: expand UNWIND list into per-element CREATEs
+            if let Some(expanded) = Self::expand_unwind_create(&rewritten) {
+                for create_stmt in &expanded {
+                    let query = self.cached_parse(create_stmt)?;
+                    let mut executor = MutQueryExecutor::new(store, tenant_id.to_string());
+                    last_result = executor.execute(&query)?;
+                }
+                continue;
+            }
+
             let query = self.cached_parse(&rewritten)?;
             let mut executor = MutQueryExecutor::new(store, tenant_id.to_string());
             last_result = executor.execute(&query)?;
