@@ -1,14 +1,12 @@
 #[test]
-fn test_multi_with_create() {
+fn test_multi_with_stages() {
     let mut store = graphmind::GraphStore::new();
     let engine = graphmind::QueryEngine::new();
-    let q = "CREATE (a) WITH a WITH * CREATE (b) CREATE (a)<-[:T]-(b)";
-    match engine.execute_mut(q, &mut store, "default") {
-        Ok(_) => eprintln!(
-            "OK: {} nodes, {} edges",
-            store.node_count(),
-            store.edge_count()
-        ),
-        Err(e) => eprintln!("ERROR: {}", e),
-    }
+    engine
+        .execute_mut("CREATE (a:A {name: 'Alice'})", &mut store, "default")
+        .unwrap();
+    let q = "MATCH (a:A) WITH a WITH a.name AS name RETURN name";
+    let r = engine.execute(q, &store).unwrap();
+    assert_eq!(r.len(), 1);
+    eprintln!("Multi-WITH fixed: {} rows", r.len());
 }

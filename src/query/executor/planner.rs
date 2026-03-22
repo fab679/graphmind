@@ -1903,6 +1903,28 @@ impl QueryPlanner {
             }
         }
 
+        // Process main WITH clause (last WITH before RETURN in multi-part queries)
+        if let Some(with_cl) = &query.with_clause {
+            if !query.extra_with_stages.is_empty() {
+                // This is a multi-WITH query — process the final WITH as a barrier
+                operator = self.build_with_barrier(operator, with_cl, store)?;
+                known_vars.clear();
+                for item in &with_cl.items {
+                    let alias = item
+                        .alias
+                        .clone()
+                        .unwrap_or_else(|| match &item.expression {
+                            Expression::Variable(v) => v.clone(),
+                            Expression::Property { variable, property } => {
+                                format!("{}.{}", variable, property)
+                            }
+                            _ => "?".to_string(),
+                        });
+                    known_vars.insert(alias);
+                }
+            }
+        }
+
         // Add UNWIND clause if present
         if let Some(unwind_clause) = &query.unwind_clause {
             operator = Box::new(UnwindOperator::new(
