@@ -2059,6 +2059,32 @@ fn parse_primary(pair: pest::iterators::Pair<Rule>) -> ParseResult<Expression> {
                 let name = inner.as_str()[1..].to_string();
                 return Ok(Expression::Parameter(name));
             }
+            Rule::pattern_predicate => {
+                // WHERE (n)-[:REL]->() — pattern as boolean predicate
+                // Convert to EXISTS subquery: exists { MATCH pattern }
+                let pattern_str = inner.as_str();
+                // Parse as a exists-check: build a function call
+                let mut source_var = String::new();
+                for pp in inner.into_inner() {
+                    match pp.as_rule() {
+                        Rule::variable => {
+                            if source_var.is_empty() {
+                                source_var = pp.as_str().to_string();
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                // Use the full pattern text to create an EXISTS-like check
+                return Ok(Expression::Function {
+                    name: "$patternPredicate".to_string(),
+                    args: vec![
+                        Expression::Literal(PropertyValue::String(source_var)),
+                        Expression::Literal(PropertyValue::String(pattern_str.to_string())),
+                    ],
+                    distinct: false,
+                });
+            }
             Rule::variable => {
                 return Ok(Expression::Variable(inner.as_str().to_string()));
             }
