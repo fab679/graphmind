@@ -239,6 +239,9 @@ fn parse_statement(pair: pest::iterators::Pair<Rule>, query: &mut Query) -> Pars
             Rule::unwind_stmt => {
                 parse_unwind_statement(inner, query)?;
             }
+            Rule::oc_multi_part => {
+                parse_oc_multi_part(inner, query)?;
+            }
             _ => {}
         }
     }
@@ -480,6 +483,113 @@ fn parse_yield_item(pair: pest::iterators::Pair<Rule>) -> ParseResult<YieldItem>
     }
 
     Ok(YieldItem { name, alias })
+}
+
+/// Parse OpenCypher MultiPartQuery fallback
+/// Handles complex clause combos: WITH...MATCH...CREATE...WITH...RETURN etc.
+fn parse_oc_multi_part(pair: pest::iterators::Pair<Rule>, query: &mut Query) -> ParseResult<()> {
+    for inner in pair.into_inner() {
+        match inner.as_rule() {
+            Rule::match_clause => {
+                for mc_inner in inner.into_inner() {
+                    if mc_inner.as_rule() == Rule::pattern {
+                        query.match_clauses.push(MatchClause {
+                            pattern: parse_pattern(mc_inner)?,
+                            optional: false,
+                        });
+                    }
+                }
+            }
+            Rule::optional_match_clause => {
+                for mc_inner in inner.into_inner() {
+                    if mc_inner.as_rule() == Rule::pattern {
+                        query.match_clauses.push(MatchClause {
+                            pattern: parse_pattern(mc_inner)?,
+                            optional: true,
+                        });
+                    }
+                }
+            }
+            Rule::unwind_clause => {
+                if let Some(prev) = query.unwind_clause.take() {
+                    query.additional_unwinds.push(prev);
+                }
+                query.unwind_clause = Some(parse_unwind_clause(inner)?);
+            }
+            Rule::call_clause => {
+                query.call_clause = Some(parse_call_clause(inner)?);
+            }
+            Rule::where_clause => {
+                // WHERE after WITH goes to post_with_where, otherwise to main where
+                if query.with_clause.is_some() {
+                    query.post_with_where_clause = Some(parse_where_clause(inner)?);
+                } else {
+                    query.where_clause = Some(parse_where_clause(inner)?);
+                }
+            }
+            Rule::with_clause => {
+                if query.with_clause.is_some() {
+                    let prev_with = query.with_clause.take().unwrap();
+                    let prev_unwind = query.unwind_clause.take();
+                    query
+                        .extra_with_stages
+                        .push((prev_with, prev_unwind, Vec::new(), None));
+                }
+                query.with_clause = Some(parse_with_clause(inner)?);
+            }
+            Rule::create_clause => {
+                for ci in inner.into_inner() {
+                    if ci.as_rule() == Rule::pattern {
+                        if query.create_clause.is_some() {
+                            query
+                                .create_clauses
+                                .push(query.create_clause.take().unwrap());
+                        }
+                        query.create_clause = Some(CreateClause {
+                            pattern: parse_pattern(ci)?,
+                        });
+                    }
+                }
+            }
+            Rule::merge_inline => {
+                query.merge_clause = Some(parse_merge_clause(inner)?);
+            }
+            Rule::delete_clause => {
+                query.delete_clause = Some(parse_delete_clause(inner)?);
+            }
+            Rule::set_clause => {
+                query.set_clauses.push(parse_set_clause(inner)?);
+            }
+            Rule::remove_clause => {
+                query.remove_clauses.push(parse_remove_clause(inner)?);
+            }
+            Rule::foreach_clause => {
+                query.foreach_clause = Some(parse_foreach_clause(inner)?);
+            }
+            Rule::return_clause => {
+                query.return_clause = Some(parse_return_clause(inner)?);
+            }
+            Rule::order_by_clause => {
+                query.order_by = Some(parse_order_by_clause(inner)?);
+            }
+            Rule::skip_clause => {
+                for si in inner.into_inner() {
+                    if si.as_rule() == Rule::integer {
+                        query.skip = Some(si.as_str().parse().unwrap_or(0));
+                    }
+                }
+            }
+            Rule::limit_clause => {
+                for li in inner.into_inner() {
+                    if li.as_rule() == Rule::integer {
+                        query.limit = Some(li.as_str().parse().unwrap_or(0));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 fn parse_match_statement(pair: pest::iterators::Pair<Rule>, query: &mut Query) -> ParseResult<()> {
@@ -953,23 +1063,28 @@ fn parse_set_clause(pair: pest::iterators::Pair<Rule>) -> ParseResult<SetClause>
                         });
                     }
                     Rule::set_map_replace => {
-                        // SET n = {map} — replace all properties
+                        // SET n = expr — replace all properties
                         let mut variable = String::new();
-                        let mut props = HashMap::new();
+                        let mut expr_val = None;
                         for sr in si.into_inner() {
                             match sr.as_rule() {
-                                Rule::variable => variable = sr.as_str().to_string(),
-                                Rule::map => {
-                                    props = parse_properties(sr)?;
+                                Rule::variable if variable.is_empty() => {
+                                    variable = sr.as_str().to_string()
                                 }
-                                _ => {}
+                                Rule::expression => expr_val = Some(parse_expression(sr)?),
+                                Rule::map => {
+                                    let props = parse_properties(sr)?;
+                                    expr_val = Some(Expression::Literal(PropertyValue::Map(props)));
+                                }
+                                _ => {
+                                    expr_val = Some(parse_expression(sr)?);
+                                }
                             }
                         }
-                        let map_val: HashMap<String, PropertyValue> = props;
                         items.push(SetItem {
                             variable,
                             property: "__map_replace__".to_string(),
-                            value: Expression::Literal(PropertyValue::Map(map_val)),
+                            value: expr_val.unwrap_or(Expression::Literal(PropertyValue::Null)),
                         });
                     }
                     Rule::property_access => {
@@ -1221,15 +1336,25 @@ fn parse_set_item(pair: pest::iterators::Pair<Rule>) -> ParseResult<SetItem> {
                 property = "__map_merge__".to_string();
             }
             Rule::set_map_replace => {
-                // SET n = {map} — replace all properties
+                // SET n = expr — replace all properties with expression result
                 for si in inner.into_inner() {
                     match si.as_rule() {
-                        Rule::variable => variable = si.as_str().to_string(),
+                        Rule::variable => {
+                            if variable.is_empty() {
+                                variable = si.as_str().to_string();
+                            }
+                        }
+                        Rule::expression => {
+                            value = Some(parse_expression(si)?);
+                        }
                         Rule::map => {
                             let props = parse_properties(si)?;
                             value = Some(Expression::Literal(PropertyValue::Map(props)));
                         }
-                        _ => {}
+                        _ => {
+                            // Fallback: try parsing as expression
+                            value = Some(parse_expression(si)?);
+                        }
                     }
                 }
                 property = "__map_replace__".to_string();
