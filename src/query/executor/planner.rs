@@ -450,6 +450,67 @@ impl QueryPlanner {
             validate_create_rebind(cc)?;
         }
 
+        // Validate WITH: no duplicate aliases
+        if let Some(wc) = &query.with_clause {
+            let mut aliases = HashSet::new();
+            for item in &wc.items {
+                let alias = item
+                    .alias
+                    .clone()
+                    .unwrap_or_else(|| match &item.expression {
+                        Expression::Variable(v) => v.clone(),
+                        _ => String::new(),
+                    });
+                if !alias.is_empty() && !aliases.insert(alias.clone()) {
+                    return Err(ExecutionError::PlanningError(format!(
+                        "Multiple result columns with the same name '{}' are not supported",
+                        alias
+                    )));
+                }
+            }
+        }
+
+        // Validate RETURN: no duplicate aliases
+        if let Some(rc) = &query.return_clause {
+            let mut aliases = HashSet::new();
+            for item in &rc.items {
+                let alias = item
+                    .alias
+                    .clone()
+                    .unwrap_or_else(|| match &item.expression {
+                        Expression::Variable(v) => v.clone(),
+                        Expression::Property { variable, property } => {
+                            format!("{}.{}", variable, property)
+                        }
+                        _ => String::new(),
+                    });
+                if !alias.is_empty() && !aliases.insert(alias.clone()) {
+                    return Err(ExecutionError::PlanningError(format!(
+                        "Multiple result columns with the same name '{}' are not supported",
+                        alias
+                    )));
+                }
+            }
+        }
+
+        // Validate DELETE expressions
+        if let Some(dc) = &query.delete_clause {
+            for expr in &dc.expressions {
+                match expr {
+                    Expression::Variable(_v) => {
+                        // Variable validation is complex (path vars, CREATE vars, WITH aliases)
+                        // Skip for now — runtime will catch undefined vars
+                    }
+                    Expression::Function { name, .. } if name == "$hasLabel" => {
+                        return Err(ExecutionError::PlanningError(
+                            "Invalid DELETE of label — use REMOVE instead".to_string(),
+                        ));
+                    }
+                    _ => {}
+                }
+            }
+        }
+
         // Validate MERGE: relationship constraints
         if let Some(mc) = &query.merge_clause {
             for path in &mc.pattern.paths {
