@@ -254,6 +254,29 @@ let graphs = client.list_graphs().await?;
 client.delete_graph("tenant_acme").await?;
 ```
 
+### TenantStoreManager (Embedded Only)
+
+For direct access to isolated graph stores in embedded mode, use `TenantStoreManager`:
+
+```rust
+use graphmind::TenantStoreManager;
+
+let mgr = TenantStoreManager::new();
+
+// Create isolated graph stores (created on first access)
+let production = mgr.get_store("production").await;
+let staging = mgr.get_store("staging").await;
+
+// Each has its own data
+{
+    let mut store = production.write().await;
+    engine.execute_mut("CREATE (n:User {name: 'Alice'})", &mut store, "production")?;
+}
+
+// List all tenants
+let graphs = mgr.list_graphs().await; // ["default", "production", "staging"]
+```
+
 ## Extension: Graph Algorithms (Embedded Only)
 
 The `AlgorithmClient` trait adds algorithm methods to `EmbeddedClient`:

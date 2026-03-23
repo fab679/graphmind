@@ -79,7 +79,7 @@ print(result.records[0][0])  # total node count
 | `profile(cypher, graph="default")` | Execute with profiling stats |
 | `execute_script(script, graph="default")` | Run multi-statement script |
 | `schema(graph="default")` | Get schema summary |
-| `status()` | Server health and stats |
+| `status()` | Server health, stats, and version |
 | `ping()` | Connectivity check |
 | `list_graphs()` | List graph namespaces |
 | `delete_graph(graph="default")` | Delete a graph |
@@ -223,6 +223,13 @@ results = client.execute_script('''
 ''')
 
 print(f"Executed {len(results)} statements")
+```
+
+## Server Version
+
+```python
+status = client.status()
+print(status.version)  # e.g. "0.7.0-beta"
 ```
 
 ## Multi-tenancy

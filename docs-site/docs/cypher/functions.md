@@ -101,8 +101,11 @@ RETURN i, i * i AS square
 | `type(r)` | Relationship type | `type(r)` -> `"KNOWS"` |
 | `exists(expr)` | Check if property exists | `exists(n.email)` -> `true` |
 | `coalesce(a, b, ...)` | First non-null value | `coalesce(n.nick, n.name)` -> `"Alice"` |
+| `properties(n)` | All properties as a map | `properties(n)` -> `{name: "Alice", age: 30}` |
 | `nodes(path)` | List of nodes in a path | `nodes(p)` -> `[node1, node2]` |
 | `relationships(path)` | List of relationships in a path | `relationships(p)` -> `[rel1]` |
+| `shortestPath(pattern)` | Find shortest path between nodes | See below |
+| `allShortestPaths(pattern)` | Find all shortest paths | See below |
 
 ### Node function examples
 
@@ -124,6 +127,43 @@ RETURN p.name
 -- Display name with fallback
 MATCH (p:Person)
 RETURN coalesce(p.nickname, p.name) AS display_name
+```
+
+### Shortest Path
+
+```cypher
+-- Find the shortest path between two nodes
+MATCH p = shortestPath((a:Person {name: "Alice"})-[*..10]-(b:Person {name: "Dave"}))
+RETURN p
+
+-- Find all shortest paths (may return multiple equal-length paths)
+MATCH p = allShortestPaths((a:Person {name: "Alice"})-[*]-(b:Person {name: "Dave"}))
+RETURN p
+```
+
+### Properties Function
+
+```cypher
+-- Return all properties of a node as a map
+MATCH (p:Person {name: "Alice"})
+RETURN properties(p)
+-- {name: "Alice", age: 30, active: true}
+```
+
+## Reduce
+
+Fold a list into a single value with an accumulator:
+
+```cypher
+WITH [1, 2, 3, 4, 5] AS numbers
+RETURN reduce(total = 0, x IN numbers | total + x) AS sum
+-- 15
+```
+
+```cypher
+MATCH (p:Person {name: "Alice"})-[:KNOWS]->(f)
+WITH collect(f.name) AS friends
+RETURN reduce(s = "", name IN friends | s + name + ", ") AS all_friends
 ```
 
 ## Aggregate Functions
@@ -152,6 +192,19 @@ See [Aggregations](aggregations) for detailed examples and grouping behavior.
 | `duration(map)` | Construct a duration | `duration({days: 14, hours: 3})` |
 | `duration(string)` | Parse ISO 8601 duration | `duration("P14DT3H")` |
 | `timestamp()` | Current time as epoch milliseconds | `timestamp()` -> `1710936000000` |
+| `localdatetime()` | Current local datetime (no timezone) | `localdatetime()` -> `2026-03-20T14:30:00` |
+| `localdatetime(string)` | Parse local datetime from string | `localdatetime("2024-01-15T10:30:00")` |
+| `localdatetime(map)` | Construct from components | `localdatetime({year: 2024, month: 1, day: 15})` |
+| `localtime()` | Current local time (no timezone) | `localtime()` -> `14:30:00` |
+| `localtime(string)` | Parse local time from string | `localtime("10:30:00")` |
+| `localtime(map)` | Construct from components | `localtime({hour: 10, minute: 30})` |
+| `time()` | Current time (with timezone) | `time()` -> `14:30:00Z` |
+| `time(string)` | Parse time from string | `time("10:30:00")` |
+| `time(map)` | Construct from components | `time({hour: 10, minute: 30})` |
+
+:::note
+`localdatetime()`, `localtime()`, and `time()` are implemented but internally store values as epoch milliseconds, same as `datetime()`. They are provided for OpenCypher compatibility.
+:::
 
 ### Temporal function examples
 
@@ -199,7 +252,6 @@ These OpenCypher functions are not yet implemented:
 - `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2` -- trigonometric functions
 - `degrees(n)`, `radians(n)` -- angle conversion
 - `elementId(n)` -- element identifier (use `id(n)` instead)
-- `properties(n)` -- return all properties as map (use `keys(n)` + property access)
 - `startNode(r)`, `endNode(r)` -- start/end node of a relationship
 - `point(map)`, `distance(p1, p2)` -- spatial functions
 - `collect(DISTINCT x)` -- distinct aggregation

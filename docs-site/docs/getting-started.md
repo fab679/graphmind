@@ -42,6 +42,8 @@ CREATE (bob)-[:KNOWS {since: 2022}]->(carol)
 CREATE (alice)-[:KNOWS {since: 2021}]->(carol)
 ```
 
+This uses multi-CREATE with shared variables -- Graphmind automatically carries variables between consecutive CREATE statements.
+
 Then query the data:
 
 ```cypher
@@ -56,6 +58,8 @@ Expected output:
 | Alice  | Bob         |
 | Alice  | Carol       |
 | Bob    | Carol       |
+
+Query responses include `duration_ms` showing server-side execution time.
 
 ## 4. Load Demo Data
 
@@ -72,6 +76,8 @@ curl -X POST http://localhost:8080/api/script \
   -H 'Content-Type: application/json' \
   --data-binary @scripts/social_network_demo.cypher
 ```
+
+The script endpoint returns a summary: `{"status":"ok","executed":N,"errors":[],"storage":{"nodes":52,"edges":142}}`
 
 **Option C: Via redis-cli**
 

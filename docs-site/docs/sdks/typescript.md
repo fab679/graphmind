@@ -271,6 +271,22 @@ console.log(`Sampled ${sample.sampled_nodes}/${sample.total_nodes} nodes`);
 console.log(`Sampled ${sample.sampled_edges}/${sample.total_edges} edges`);
 ```
 
+## Server Version
+
+```typescript
+const status = await client.status();
+console.log(status.version);  // e.g. "0.7.0-beta"
+```
+
+## Query Duration
+
+Query responses include server-side execution time:
+
+```typescript
+const result = await client.query('MATCH (n) RETURN n');
+console.log(result.duration_ms);  // execution time in milliseconds from server
+```
+
 ## Multi-tenancy
 
 ```typescript
@@ -371,7 +387,7 @@ The SDK exports the following interfaces:
 | Type | Description |
 |------|-------------|
 | `ClientOptions` | Constructor options (url, graph, token) |
-| `QueryResult` | Query response (columns, records, nodes, edges) |
+| `QueryResult` | Query response (columns, records, nodes, edges, duration_ms) |
 | `SdkNode` | Node with id, labels, properties |
 | `SdkEdge` | Edge with id, source, target, type, properties |
 | `ServerStatus` | Health status, version, storage counts |

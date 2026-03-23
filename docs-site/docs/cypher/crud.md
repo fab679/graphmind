@@ -34,6 +34,25 @@ CREATE (a)-[:KNOWS]->(b)
 ```
 :::
 
+### Multi-CREATE with Shared Variables
+
+You can use consecutive CREATE statements that share variables without semicolons. Graphmind automatically inserts `WITH` clauses to carry variables between CREATE statements:
+
+```cypher
+CREATE (a:Person {name: 'Alice', age: 30})
+CREATE (b:Person {name: 'Bob', age: 25})
+CREATE (a)-[:KNOWS {since: 2020}]->(b)
+```
+
+### CREATE with RETURN
+
+Return newly created nodes or relationships:
+
+```cypher
+CREATE (p:Person {name: 'Carol', age: 28})
+RETURN p.name, p.age
+```
+
 ### Create Relationships
 
 Relationships are created between existing or newly created nodes:
@@ -98,6 +117,24 @@ MATCH (p:Person {name: "Alice"})
 SET p:Employee
 ```
 
+### Replace all properties (map replace)
+
+Replace all properties on a node with a new map. Existing properties not in the map are removed:
+
+```cypher
+MATCH (p:Person {name: "Alice"})
+SET p = {name: "Alice", age: 31, title: "Engineer"}
+```
+
+### Merge properties (map merge)
+
+Add or update properties without removing existing ones:
+
+```cypher
+MATCH (p:Person {name: "Alice"})
+SET p += {title: "Engineer", department: "R&D"}
+```
+
 ### Update relationship properties
 
 ```cypher
@@ -119,6 +156,13 @@ REMOVE p.title
 ```cypher
 MATCH (p:Person {name: "Alice"})
 REMOVE p:Employee
+```
+
+### Remove multiple labels
+
+```cypher
+MATCH (p:Person {name: "Alice"})
+REMOVE p:Employee:Contractor
 ```
 
 ## DELETE

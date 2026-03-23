@@ -129,6 +129,47 @@ OK
 client.delete_graph("marketing")
 ```
 
+## Embedded Mode (Rust)
+
+In embedded mode, you can use `TenantStoreManager` for direct access to isolated graph stores:
+
+```rust
+use graphmind::TenantStoreManager;
+
+let mgr = TenantStoreManager::new();
+
+// Stores are created automatically on first access
+let production = mgr.get_store("production").await;
+let staging = mgr.get_store("staging").await;
+
+// Each store is fully isolated
+{
+    let mut store = production.write().await;
+    engine.execute_mut("CREATE (n:User {name: 'Alice'})", &mut store, "production")?;
+}
+
+// List all tenant graphs
+let graphs = mgr.list_graphs().await; // ["default", "production", "staging"]
+```
+
+## Embedded Mode (Python)
+
+The Python SDK supports multi-tenancy in both embedded and remote modes:
+
+```python
+client = GraphmindClient.embedded()
+
+# Write to isolated graphs
+client.query('CREATE (n:User {name: "Alice"})', graph="production")
+client.query('CREATE (n:User {name: "Bob"})', graph="staging")
+
+# Read-only queries scoped to a graph
+result = client.query_readonly("MATCH (n) RETURN n", graph="staging")
+
+# List all graphs
+graphs = client.list_graphs()  # ["default", "production", "staging"]
+```
+
 ## Isolation Guarantees
 
 - Each graph has its own node ID space, label indexes, and property indexes
