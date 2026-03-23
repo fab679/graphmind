@@ -193,6 +193,54 @@ impl QueryEngine {
 
     /// Split a query string on semicolons, respecting quoted strings.
     /// Returns individual statement strings (trimmed, non-empty).
+    /// Strip `// ...` line comments (not inside strings).
+    /// Returns a new string with comments removed.
+    fn strip_line_comments(input: &str) -> String {
+        let mut result = String::with_capacity(input.len());
+        let mut in_single = false;
+        let mut in_double = false;
+        let mut chars = input.chars().peekable();
+
+        while let Some(c) = chars.next() {
+            match c {
+                '\'' if !in_double => {
+                    in_single = !in_single;
+                    result.push(c);
+                }
+                '"' if !in_single => {
+                    in_double = !in_double;
+                    result.push(c);
+                }
+                '/' if !in_single && !in_double => {
+                    if chars.peek() == Some(&'/') {
+                        // Line comment — skip to end of line
+                        for remaining in chars.by_ref() {
+                            if remaining == '\n' {
+                                result.push('\n');
+                                break;
+                            }
+                        }
+                    } else if chars.peek() == Some(&'*') {
+                        // Block comment — skip to */
+                        chars.next(); // consume *
+                        let mut prev = ' ';
+                        for remaining in chars.by_ref() {
+                            if prev == '*' && remaining == '/' {
+                                break;
+                            }
+                            prev = remaining;
+                        }
+                        result.push(' '); // replace block comment with space
+                    } else {
+                        result.push(c);
+                    }
+                }
+                _ => result.push(c),
+            }
+        }
+        result
+    }
+
     fn split_statements(input: &str) -> Vec<&str> {
         let mut statements = Vec::new();
         let mut start = 0;
@@ -474,7 +522,8 @@ impl QueryEngine {
         query_str: &str,
         store: &crate::graph::GraphStore,
     ) -> Result<RecordBatch, Box<dyn std::error::Error>> {
-        let statements = Self::split_statements(query_str);
+        let cleaned = Self::strip_line_comments(query_str);
+        let statements = Self::split_statements(&cleaned);
         let mut last_result = RecordBatch {
             records: Vec::new(),
             columns: Vec::new(),
@@ -505,7 +554,8 @@ impl QueryEngine {
         store: &mut crate::graph::GraphStore,
         tenant_id: &str,
     ) -> Result<RecordBatch, Box<dyn std::error::Error>> {
-        let statements = Self::split_statements(query_str);
+        let cleaned = Self::strip_line_comments(query_str);
+        let statements = Self::split_statements(&cleaned);
         let mut last_result = RecordBatch {
             records: Vec::new(),
             columns: Vec::new(),
