@@ -381,7 +381,7 @@ impl QueryEngine {
                 b'\'' if !in_double => in_single = !in_single,
                 b'"' if !in_single => in_double = !in_double,
                 _ if !in_single && !in_double && i + 6 <= upper_bytes.len() => {
-                    if &upper[i..i + 6] == "CREATE" {
+                    if upper_bytes[i..i + 6] == *b"CREATE" {
                         // Make sure it's a keyword boundary (not part of another word)
                         let before_ok = i == 0 || !bytes[i - 1].is_ascii_alphanumeric();
                         let after_ok =
