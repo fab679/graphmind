@@ -8371,6 +8371,121 @@ impl PhysicalOperator for MergeOperator {
             }
         }
 
+        // Handle relationship segments: (start)-[:TYPE]->(end)
+        for seg in &path.segments {
+            let edge_types = &seg.edge.types;
+            let edge_type = edge_types.first().map(|t| t.as_str()).unwrap_or("RELATED");
+            let edge_var = seg.edge.variable.clone();
+            let target = &seg.node;
+            let target_var = target.variable.clone().unwrap_or_else(|| "m".to_string());
+            let target_labels = &target.labels;
+            let target_props = target.properties.as_ref();
+            let direction = &seg.edge.direction;
+
+            // Try to find the target node
+            let mut target_node_id = None;
+
+            // If target node is already bound in record (from MATCH), use it
+            if let Some(ref tv) = target.variable {
+                if let Some(val) = record.get(tv) {
+                    target_node_id = val.node_id();
+                }
+            }
+
+            // If not bound, search by labels + properties
+            if target_node_id.is_none() {
+                if let Some(first_label) = target_labels.first() {
+                    let candidates = store.get_nodes_by_label(first_label);
+                    for candidate in candidates {
+                        let has_labels = target_labels.iter().all(|l| candidate.labels.contains(l));
+                        if !has_labels {
+                            continue;
+                        }
+                        if let Some(req_props) = target_props {
+                            let props_match = req_props
+                                .iter()
+                                .all(|(k, v)| candidate.properties.get(k) == Some(v));
+                            if !props_match {
+                                continue;
+                            }
+                        }
+                        target_node_id = Some(candidate.id);
+                        break;
+                    }
+                }
+            }
+
+            // If target doesn't exist, create it
+            let target_id = if let Some(tid) = target_node_id {
+                tid
+            } else {
+                let label_str = target_labels.first().map(|l| l.as_str()).unwrap_or("Node");
+                let tid = store.create_node(label_str);
+                for label in target_labels.iter().skip(1) {
+                    if let Some(node) = store.get_node_mut(tid) {
+                        node.labels.insert(label.clone());
+                    }
+                }
+                if let Some(req_props) = target_props {
+                    for (k, v) in req_props {
+                        if let Some(node) = store.get_node_mut(tid) {
+                            node.set_property(k.clone(), v.clone());
+                        }
+                    }
+                }
+                tid
+            };
+
+            record.bind(target_var, Value::NodeRef(target_id));
+
+            // Check if relationship already exists
+            let (source_id, dest_id) = match direction {
+                Direction::Incoming => (target_id, node_id),
+                _ => (node_id, target_id),
+            };
+
+            let mut edge_exists = false;
+            let outgoing = store.get_outgoing_edges(source_id);
+            for existing_edge in &outgoing {
+                if existing_edge.target == dest_id && existing_edge.edge_type.as_str() == edge_type
+                {
+                    edge_exists = true;
+                    if let Some(ref ev) = edge_var {
+                        record.bind(
+                            ev.clone(),
+                            Value::EdgeRef(
+                                existing_edge.id,
+                                source_id,
+                                dest_id,
+                                existing_edge.edge_type.clone(),
+                            ),
+                        );
+                    }
+                    break;
+                }
+            }
+
+            // Create relationship if it doesn't exist
+            if !edge_exists {
+                if let Ok(edge_id) = store.create_edge(source_id, dest_id, edge_type) {
+                    // Set edge properties if any
+                    if let Some(edge_props) = seg.edge.properties.as_ref() {
+                        if let Some(edge) = store.get_edge_mut(edge_id) {
+                            for (k, v) in edge_props {
+                                edge.set_property(k.clone(), v.clone());
+                            }
+                        }
+                    }
+                    if let Some(ref ev) = edge_var {
+                        record.bind(
+                            ev.clone(),
+                            Value::EdgeRef(edge_id, source_id, dest_id, EdgeType::new(edge_type)),
+                        );
+                    }
+                }
+            }
+        }
+
         Ok(Some(record))
     }
 

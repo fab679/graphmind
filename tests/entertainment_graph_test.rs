@@ -22,7 +22,9 @@ CREATE CONSTRAINT tag_name    IF NOT EXISTS FOR (t:Tag)     REQUIRE t.name IS UN
 CREATE INDEX person_name IF NOT EXISTS FOR (p:Person) ON (p.name);
 CREATE INDEX movie_year  IF NOT EXISTS FOR (m:Movie)  ON (m.year)
 "#;
-    engine.execute_mut(constraints, &mut store, "default").unwrap();
+    engine
+        .execute_mut(constraints, &mut store, "default")
+        .unwrap();
 
     // ─── Block 2: People ─────────────────────────────────────────────
     let people = r#"
@@ -49,46 +51,82 @@ CREATE (:Movie {id:'m1', title:'Echoes of Tomorrow',  year:2021, runtime:118, ra
     engine.execute_mut(movies, &mut store, "default").unwrap();
 
     // ─── Block 4: Genres, Cities, Companies, Tags, Awards ────────────
-    engine.execute_mut(r#"
+    engine
+        .execute_mut(
+            r#"
 CREATE (:Genre {name:'Sci-Fi'}),   (:Genre {name:'Drama'}),
        (:Genre {name:'Thriller'}), (:Genre {name:'Mystery'})
-"#, &mut store, "default").unwrap();
+"#,
+            &mut store,
+            "default",
+        )
+        .unwrap();
 
-    engine.execute_mut(r#"
+    engine
+        .execute_mut(
+            r#"
 CREATE (:City {name:'Nairobi',  country:'Kenya',  population:4400000}),
        (:City {name:'Berlin',   country:'Germany',population:3700000}),
        (:City {name:'Tokyo',    country:'Japan',  population:13960000}),
        (:City {name:'Mumbai',   country:'India',  population:20700000})
-"#, &mut store, "default").unwrap();
+"#,
+            &mut store,
+            "default",
+        )
+        .unwrap();
 
-    engine.execute_mut(r#"
+    engine
+        .execute_mut(
+            r#"
 CREATE (:Company {id:'c1', name:'Stellar Films',  founded:2010, employees:320}),
        (:Company {id:'c2', name:'NovaCinema',     founded:2005, employees:850}),
        (:Company {id:'c3', name:'Apex Studios',   founded:2015, employees:210})
-"#, &mut store, "default").unwrap();
+"#,
+            &mut store,
+            "default",
+        )
+        .unwrap();
 
-    engine.execute_mut(r#"
+    engine
+        .execute_mut(
+            r#"
 CREATE (:Tag {name:'mind-bending'}), (:Tag {name:'visually-stunning'}),
        (:Tag {name:'slow-burn'}),    (:Tag {name:'cult-classic'}),
        (:Tag {name:'thought-provoking'})
-"#, &mut store, "default").unwrap();
+"#,
+            &mut store,
+            "default",
+        )
+        .unwrap();
 
-    engine.execute_mut(r#"
+    engine
+        .execute_mut(
+            r#"
 CREATE (:Award {id:'a1', name:'Golden Lens',       category:'Best Director',    year:2022}),
        (:Award {id:'a2', name:'Aurora Prize',       category:'Best Actress',     year:2021}),
        (:Award {id:'a3', name:'Nebula Film Award',  category:'Best Picture',     year:2023}),
        (:Award {id:'a4', name:'Meridian Award',     category:'Best Screenplay',  year:2020})
-"#, &mut store, "default").unwrap();
+"#,
+            &mut store,
+            "default",
+        )
+        .unwrap();
 
     // ─── Block 5: Reviews ────────────────────────────────────────────
-    engine.execute_mut(r#"
+    engine
+        .execute_mut(
+            r#"
 CREATE (:Review {id:'r1', score:9,   body:'A masterpiece.',     date:'2021-11-01'}),
        (:Review {id:'r2', score:7,   body:'Slow but rewarding.', date:'2019-05-14'}),
        (:Review {id:'r3', score:10,  body:'Absolutely epic.',    date:'2023-03-22'}),
        (:Review {id:'r4', score:6,   body:'Forgettable.',        date:'2020-08-09'}),
        (:Review {id:'r5', score:8,   body:'Deeply moving.',      date:'2022-07-31'}),
        (:Review {id:'r6', score:9,   body:'Criminally underrated.', date:'2018-12-05'})
-"#, &mut store, "default").unwrap();
+"#,
+            &mut store,
+            "default",
+        )
+        .unwrap();
 
     // ─── Block 6: Social graph (FOLLOWS) ─────────────────────────────
     let follows = r#"
@@ -153,7 +191,9 @@ MATCH (m:Movie {id:'m3'}), (co:Company {id:'c2'}) CREATE (m)-[:PRODUCED_BY]->(co
 MATCH (m:Movie {id:'m5'}), (co:Company {id:'c1'}) CREATE (m)-[:PRODUCED_BY]->(co);
 MATCH (m:Movie {id:'m6'}), (co:Company {id:'c3'}) CREATE (m)-[:PRODUCED_BY]->(co)
 "#;
-    engine.execute_mut(locations, &mut store, "default").unwrap();
+    engine
+        .execute_mut(locations, &mut store, "default")
+        .unwrap();
 
     // ─── Block 11: Tags & Awards ─────────────────────────────────────
     let tags = r#"
@@ -181,15 +221,31 @@ MATCH (m:Movie {id:'m5'}), (t:Tag {name:'thought-provoking'}) CREATE (m)-[:TAGGE
 fn test_data_creation_counts() {
     let (store, engine) = setup_graph();
     // 8 persons + 6 movies + 4 genres + 4 cities + 3 companies + 5 tags + 4 awards + 6 reviews = 40
-    eprintln!("Nodes: {}, Edges: {}", store.node_count(), store.edge_count());
-    assert!(store.node_count() >= 36, "Expected at least 36 nodes, got {}", store.node_count());
-    assert!(store.edge_count() >= 40, "Expected at least 40 edges, got {}", store.edge_count());
+    eprintln!(
+        "Nodes: {}, Edges: {}",
+        store.node_count(),
+        store.edge_count()
+    );
+    assert!(
+        store.node_count() >= 36,
+        "Expected at least 36 nodes, got {}",
+        store.node_count()
+    );
+    assert!(
+        store.edge_count() >= 40,
+        "Expected at least 40 edges, got {}",
+        store.edge_count()
+    );
 }
 
 #[test]
 fn test_constraint_prevents_duplicates() {
     let (mut store, engine) = setup_graph();
-    let result = engine.execute_mut("CREATE (:Person {id:'p1', name:'Duplicate'})", &mut store, "default");
+    let result = engine.execute_mut(
+        "CREATE (:Person {id:'p1', name:'Duplicate'})",
+        &mut store,
+        "default",
+    );
     assert!(result.is_err(), "Should fail: duplicate p1");
 }
 
@@ -204,7 +260,11 @@ fn test_actors_and_roles() {
         "MATCH (p:Person)-[r:ACTED_IN]->(m:Movie) RETURN p.name, r.role, m.title ORDER BY m.year DESC",
         &store,
     ).unwrap();
-    assert!(r.len() >= 7, "Expected at least 7 ACTED_IN relationships, got {}", r.len());
+    assert!(
+        r.len() >= 7,
+        "Expected at least 7 ACTED_IN relationships, got {}",
+        r.len()
+    );
 }
 
 #[test]
@@ -230,10 +290,12 @@ fn test_top_rated_with_genres() {
 #[test]
 fn test_follows_exist() {
     let (store, engine) = setup_graph();
-    let r = engine.execute(
-        "MATCH (a:Person)-[:FOLLOWS]->(b:Person) RETURN count(*)",
-        &store,
-    ).unwrap();
+    let r = engine
+        .execute(
+            "MATCH (a:Person)-[:FOLLOWS]->(b:Person) RETURN count(*)",
+            &store,
+        )
+        .unwrap();
     assert_eq!(r.len(), 1);
 }
 
@@ -254,20 +316,39 @@ fn test_production_companies() {
 #[test]
 fn test_update_follower_count() {
     let (mut store, engine) = setup_graph();
-    engine.execute_mut(
-        "MATCH (p:Person {id:'p1'}) SET p.verified = true",
-        &mut store, "default",
-    ).unwrap();
+    engine
+        .execute_mut(
+            "MATCH (p:Person {id:'p1'}) SET p.verified = true",
+            &mut store,
+            "default",
+        )
+        .unwrap();
     // Verify via store
     let nodes = store.get_nodes_by_label(&graphmind::Label::new("Person"));
-    let p1 = nodes.iter().find(|n| n.properties.get("id").and_then(|v| v.as_string()) == Some("p1")).unwrap();
-    assert_eq!(p1.properties.get("verified"), Some(&graphmind::PropertyValue::Boolean(true)));
+    let p1 = nodes
+        .iter()
+        .find(|n| n.properties.get("id").and_then(|v| v.as_string()) == Some("p1"))
+        .unwrap();
+    assert_eq!(
+        p1.properties.get("verified"),
+        Some(&graphmind::PropertyValue::Boolean(true))
+    );
 }
 
 #[test]
 fn test_delete_review() {
     let (mut store, engine) = setup_graph();
     let before = store.node_count();
-    engine.execute_mut("MATCH (r:Review {id:'r4'}) DETACH DELETE r", &mut store, "default").unwrap();
-    assert_eq!(store.node_count(), before - 1, "One review should be deleted");
+    engine
+        .execute_mut(
+            "MATCH (r:Review {id:'r4'}) DETACH DELETE r",
+            &mut store,
+            "default",
+        )
+        .unwrap();
+    assert_eq!(
+        store.node_count(),
+        before - 1,
+        "One review should be deleted"
+    );
 }
