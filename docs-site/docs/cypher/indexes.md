@@ -12,7 +12,13 @@ Indexes speed up `MATCH` queries that filter on specific properties.
 
 ### Create Index
 
+Both modern (Neo4j 4.x/5.x) and classic (openCypher 9) syntax are supported:
+
 ```cypher
+-- Modern syntax (recommended)
+CREATE INDEX person_name IF NOT EXISTS FOR (p:Person) ON (p.name)
+
+-- Classic syntax
 CREATE INDEX ON :Person(name)
 ```
 
@@ -23,12 +29,20 @@ After creating this index, queries like `MATCH (p:Person {name: 'Alice'})` will 
 Index multiple properties together:
 
 ```cypher
+-- Modern syntax
+CREATE INDEX person_name_age IF NOT EXISTS FOR (p:Person) ON (p.name, p.age)
+
+-- Classic syntax
 CREATE INDEX ON :Person(name, age)
 ```
 
 ### Drop Index
 
 ```cypher
+-- Modern syntax (by name)
+DROP INDEX person_name IF EXISTS
+
+-- Classic syntax
 DROP INDEX ON :Person(name)
 ```
 
@@ -45,10 +59,26 @@ Constraints enforce data rules at the database level.
 ### Create Unique Constraint
 
 ```cypher
+-- Modern syntax (recommended)
+CREATE CONSTRAINT person_email IF NOT EXISTS FOR (p:Person) REQUIRE p.email IS UNIQUE
+
+-- Classic syntax
 CREATE CONSTRAINT ON (p:Person) ASSERT p.email IS UNIQUE
 ```
 
 After this, attempting to create two Person nodes with the same email will fail.
+
+### Create NOT NULL Constraint
+
+```cypher
+CREATE CONSTRAINT person_name_required IF NOT EXISTS FOR (p:Person) REQUIRE p.name IS NOT NULL
+```
+
+### Drop Constraint
+
+```cypher
+DROP CONSTRAINT person_email IF EXISTS
+```
 
 ### Show Constraints
 
