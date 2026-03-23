@@ -131,6 +131,9 @@ pub enum GraphError {
 
     #[error("Invalid edge: target node {0} does not exist")]
     InvalidEdgeTarget(NodeId),
+
+    #[error("Constraint violation: {0}")]
+    ConstraintViolation(String),
 }
 
 pub type GraphResult<T> = Result<T, GraphError>;
@@ -785,6 +788,31 @@ impl GraphStore {
         let key_str = key.into();
         let val = value.into();
         let idx = node_id.as_u64() as usize;
+
+        // Enforce UNIQUE constraints: check if this label+property+value already exists
+        if let Some(node_versions) = self.nodes.get(idx) {
+            if let Some(node) = node_versions.last() {
+                for label in &node.labels {
+                    if self.property_index.has_unique_constraint(label, &key_str) {
+                        // Check if another node already has this value
+                        if let Some(existing_ids) =
+                            self.property_index.lookup(label, &key_str, &val)
+                        {
+                            for existing_id in existing_ids {
+                                if existing_id != node_id {
+                                    return Err(GraphError::ConstraintViolation(format!(
+                                        "Node already exists with label '{}' and {} = {:?}",
+                                        label.as_str(),
+                                        key_str,
+                                        val
+                                    )));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
 
         // Update columnar storage (always latest)
         self.node_columns.set_property(idx, &key_str, val.clone());

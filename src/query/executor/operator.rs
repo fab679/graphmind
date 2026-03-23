@@ -5637,9 +5637,15 @@ impl PhysicalOperator for CreateNodeOperator {
                     let _ = store.add_label_to_node(tenant_id, node_id, label.clone());
                 }
 
-                // Set properties using store.set_node_property to trigger indexing
+                // Set properties using store.set_node_property to trigger indexing + constraint checks
                 for (key, value) in properties {
-                    let _ = store.set_node_property(tenant_id, node_id, key.clone(), value.clone());
+                    if let Err(e) =
+                        store.set_node_property(tenant_id, node_id, key.clone(), value.clone())
+                    {
+                        // Rollback: remove the just-created node on constraint violation
+                        let _ = store.delete_node(tenant_id, node_id);
+                        return Err(ExecutionError::RuntimeError(e.to_string()));
+                    }
                 }
 
                 self.created_nodes.push((node_id, variable.clone()));

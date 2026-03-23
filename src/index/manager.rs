@@ -63,6 +63,47 @@ impl IndexManager {
         label_props.into_iter().collect()
     }
 
+    /// Check if a unique constraint exists for a label+property
+    pub fn has_unique_constraint(&self, label: &Label, property: &str) -> bool {
+        let key = PropertyIndexKey {
+            label: label.clone(),
+            property: property.to_string(),
+        };
+        let constraints = self.unique_constraints.read().unwrap();
+        constraints.contains_key(&key)
+    }
+
+    /// Lookup nodes that have a specific value for a label+property index
+    pub fn lookup(
+        &self,
+        label: &Label,
+        property: &str,
+        value: &crate::graph::PropertyValue,
+    ) -> Option<Vec<crate::graph::types::NodeId>> {
+        let key = PropertyIndexKey {
+            label: label.clone(),
+            property: property.to_string(),
+        };
+        // Check unique constraints first, then regular indices
+        let constraints = self.unique_constraints.read().unwrap();
+        if let Some(idx) = constraints.get(&key) {
+            let guard = idx.read().unwrap();
+            let results = guard.get(value);
+            if !results.is_empty() {
+                return Some(results);
+            }
+        }
+        let indices = self.indices.read().unwrap();
+        if let Some(idx) = indices.get(&key) {
+            let guard = idx.read().unwrap();
+            let results = guard.get(value);
+            if !results.is_empty() {
+                return Some(results);
+            }
+        }
+        None
+    }
+
     /// Drop an index
     pub fn drop_index(&self, label: &Label, property: &str) {
         let key = PropertyIndexKey {
@@ -151,14 +192,7 @@ impl IndexManager {
         self.create_index(label, property);
     }
 
-    /// Check if a unique constraint exists
-    pub fn has_unique_constraint(&self, label: &Label, property: &str) -> bool {
-        let key = PropertyIndexKey {
-            label: label.clone(),
-            property: property.to_string(),
-        };
-        self.unique_constraints.read().unwrap().contains_key(&key)
-    }
+    // has_unique_constraint is defined above (line 67)
 
     /// Check unique constraint before insert. Returns Ok if unique or no constraint.
     pub fn check_unique_constraint(

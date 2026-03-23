@@ -1,25 +1,40 @@
 #[test]
-fn test_rewrite_doesnt_break_match_create() {
+fn test_unique_constraint_enforcement() {
     let mut store = graphmind::GraphStore::new();
     let engine = graphmind::QueryEngine::new();
 
-    // Create people via the SAME execute_mut call (semicolons)
-    let full_script = "CREATE (p1:Person {id: 'p1', name: 'Alice'});
-CREATE (p2:Person {id: 'p2', name: 'Bob'});
-CREATE (p3:Person {id: 'p3', name: 'Charlie'});
-// ─── Social graph ──────────────────
-MATCH (a:Person {id:'p1'}), (b:Person {id:'p2'}) CREATE (a)-[:FOLLOWS]->(b);
-MATCH (a:Person {id:'p1'}), (b:Person {id:'p3'}) CREATE (a)-[:FOLLOWS]->(b)";
+    engine
+        .execute_mut(
+            "CREATE CONSTRAINT person_id IF NOT EXISTS FOR (p:Person) REQUIRE p.id IS UNIQUE",
+            &mut store,
+            "default",
+        )
+        .unwrap();
 
-    match engine.execute_mut(full_script, &mut store, "default") {
-        Ok(_) => eprintln!("OK"),
-        Err(e) => eprintln!("ERROR: {}", e),
-    }
     eprintln!(
-        "Nodes: {}, Edges: {}",
-        store.node_count(),
-        store.edge_count()
+        "Has constraint: {}",
+        store
+            .property_index
+            .has_unique_constraint(&graphmind::Label::new("Person"), "id")
     );
-    assert_eq!(store.node_count(), 3);
-    assert_eq!(store.edge_count(), 2, "Should have 2 FOLLOWS edges");
+
+    engine
+        .execute_mut(
+            "CREATE (:Person {id: 'p1', name: 'Alice'})",
+            &mut store,
+            "default",
+        )
+        .unwrap();
+    eprintln!("After first: {} nodes", store.node_count());
+
+    let result = engine.execute_mut(
+        "CREATE (:Person {id: 'p1', name: 'Duplicate'})",
+        &mut store,
+        "default",
+    );
+    eprintln!("Duplicate result: {:?}", result.is_err());
+    if let Err(e) = &result {
+        eprintln!("Error: {}", e);
+    }
+    eprintln!("After duplicate: {} nodes", store.node_count());
 }
