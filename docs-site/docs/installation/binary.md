@@ -10,25 +10,58 @@ description: Install Graphmind from a pre-built binary or cargo install
 
 Download the latest release for your platform from [GitHub Releases](https://github.com/fab679/graphmind/releases).
 
+### Linux (x86_64)
+
 ```bash
-# Linux (x86_64)
 curl -LO https://github.com/fab679/graphmind/releases/download/v0.7.0-beta/graphmind-v0.7.0-beta-x86_64-unknown-linux-gnu.tar.gz
 tar xzf graphmind-v0.7.0-beta-x86_64-unknown-linux-gnu.tar.gz
-sudo mv graphmind /usr/local/bin/
-
-# macOS (Apple Silicon)
-curl -LO https://github.com/fab679/graphmind/releases/download/v0.7.0-beta/graphmind-v0.7.0-beta-aarch64-apple-darwin.tar.gz
-tar xzf graphmind-v0.7.0-aarch64-apple-darwin.tar.gz
-sudo mv graphmind /usr/local/bin/
-
-# macOS (Intel)
-curl -LO https://github.com/fab679/graphmind/releases/download/v0.7.0-beta/graphmind-v0.7.0-beta-x86_64-apple-darwin.tar.gz
-tar xzf graphmind-v0.7.0-x86_64-apple-darwin.tar.gz
-sudo mv graphmind /usr/local/bin/
-
-# Windows (x86_64) — download and extract the zip
-# https://github.com/fab679/graphmind/releases/download/v0.7.0-beta/graphmind-v0.7.0-beta-x86_64-pc-windows-msvc.zip
+sudo install -m 755 graphmind /usr/local/bin/graphmind
 ```
+
+### macOS (Apple Silicon)
+
+```bash
+curl -LO https://github.com/fab679/graphmind/releases/download/v0.7.0-beta/graphmind-v0.7.0-beta-aarch64-apple-darwin.tar.gz
+tar xzf graphmind-v0.7.0-beta-aarch64-apple-darwin.tar.gz
+sudo install -m 755 graphmind /usr/local/bin/graphmind
+```
+
+### macOS (Intel)
+
+```bash
+curl -LO https://github.com/fab679/graphmind/releases/download/v0.7.0-beta/graphmind-v0.7.0-beta-x86_64-apple-darwin.tar.gz
+tar xzf graphmind-v0.7.0-beta-x86_64-apple-darwin.tar.gz
+sudo install -m 755 graphmind /usr/local/bin/graphmind
+```
+
+### Windows (x86_64)
+
+Download and extract the zip from [GitHub Releases](https://github.com/fab679/graphmind/releases/download/v0.7.0-beta/graphmind-v0.7.0-beta-x86_64-pc-windows-msvc.zip), then add the `graphmind.exe` to your PATH.
+
+### What's in the archive
+
+The tarball/zip contains:
+
+| File | Description |
+|------|-------------|
+| `graphmind` | The database binary |
+| `config.toml` | Example configuration file |
+| `install.sh` | Automated install script (Linux/macOS) |
+| `graphmind.service` | systemd service file for Linux |
+| `LICENSE` | Apache 2.0 license |
+| `README.md` | Quick start guide |
+
+### Quick install script
+
+You can also use the included install script:
+
+```bash
+# After extracting the archive
+chmod +x install.sh
+sudo ./install.sh
+```
+
+This installs the binary to `/usr/local/bin/`, creates config at `/etc/graphmind/`, and optionally sets up the systemd service.
 
 ## Install with Cargo
 
