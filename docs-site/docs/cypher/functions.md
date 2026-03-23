@@ -50,6 +50,7 @@ RETURN p.name
 | `sqrt(n)` | Square root | `sqrt(16)` -> `4.0` |
 | `sign(n)` | Sign (-1, 0, 1) | `sign(-5)` -> `-1` |
 | `rand()` | Random float between 0 and 1 | `rand()` -> `0.7231...` |
+| `randomUUID()` | Generate a random UUID v4 string | `randomUUID()` -> `"550e8400-e29b-..."` |
 | `log(n)` | Natural logarithm | `log(2.718)` -> `~1.0` |
 | `exp(n)` | Euler's number raised to power | `exp(1)` -> `2.718...` |
 | `toInteger(v)` | Convert to integer | `toInteger("42")` -> `42` |
@@ -66,6 +67,16 @@ ORDER BY distance_from_30
 ```cypher
 MATCH (p:Person)
 RETURN round(avg(p.age)) AS rounded_avg
+```
+
+```cypher
+-- Generate UUIDs
+RETURN randomUUID() AS id1, randomUUID() AS id2
+
+-- Use UUID when creating nodes (via SDK)
+-- Python: db.query(f"CREATE (n:Person {{id: '{uuid.uuid4()}', name: 'Alice'}})")
+-- Note: randomUUID() in CREATE properties requires WITH pattern:
+-- WITH randomUUID() AS uid CREATE (n:Person {id: uid, name: 'Alice'})
 ```
 
 ## List Functions

@@ -1555,6 +1555,24 @@ fn eval_function(name: &str, args: &[Value], store: Option<&GraphStore>) -> Exec
             let val = rand::thread_rng().gen::<f64>();
             Ok(Value::Property(PropertyValue::Float(val)))
         }
+        "randomuuid" => {
+            use rand::Rng;
+            let mut rng = rand::thread_rng();
+            let mut bytes = [0u8; 16];
+            rng.fill(&mut bytes);
+            // Set version 4 (random) and variant 1
+            bytes[6] = (bytes[6] & 0x0f) | 0x40; // version 4
+            bytes[8] = (bytes[8] & 0x3f) | 0x80; // variant 1
+            let uuid = format!(
+                "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+                bytes[0], bytes[1], bytes[2], bytes[3],
+                bytes[4], bytes[5],
+                bytes[6], bytes[7],
+                bytes[8], bytes[9],
+                bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15]
+            );
+            Ok(Value::Property(PropertyValue::String(uuid)))
+        }
         "timestamp" => {
             let ts = chrono::Utc::now().timestamp_millis();
             Ok(Value::Property(PropertyValue::Integer(ts)))
