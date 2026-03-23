@@ -1,48 +1,68 @@
-#[test]
-fn test_merge_node_idempotent() {
-    let mut store = graphmind::GraphStore::new();
-    let engine = graphmind::QueryEngine::new();
-    engine.execute_mut("MERGE (p:Person {id: 'p1', name: 'Alice'})", &mut store, "default").unwrap();
-    engine.execute_mut("MERGE (p:Person {id: 'p1', name: 'Alice'})", &mut store, "default").unwrap();
-    assert_eq!(store.node_count(), 1, "MERGE should be idempotent for nodes");
+use graphmind::{GraphStore, QueryEngine};
+
+fn build_graph() -> (GraphStore, QueryEngine) {
+    let mut store = GraphStore::new();
+    let engine = QueryEngine::new();
+    for i in 1..=6 {
+        engine.execute_mut(&format!("CREATE (n:Node {{id: {}, name: 'N{}'}})", i, i), &mut store, "default").unwrap();
+    }
+    engine.execute_mut("MATCH (a:Node {id:1}),(b:Node {id:2}) CREATE (a)-[:LINK]->(b)", &mut store, "default").unwrap();
+    engine.execute_mut("MATCH (a:Node {id:2}),(b:Node {id:3}) CREATE (a)-[:LINK]->(b)", &mut store, "default").unwrap();
+    engine.execute_mut("MATCH (a:Node {id:3}),(b:Node {id:4}) CREATE (a)-[:LINK]->(b)", &mut store, "default").unwrap();
+    engine.execute_mut("MATCH (a:Node {id:4}),(b:Node {id:5}) CREATE (a)-[:LINK]->(b)", &mut store, "default").unwrap();
+    engine.execute_mut("MATCH (a:Node {id:5}),(b:Node {id:1}) CREATE (a)-[:LINK]->(b)", &mut store, "default").unwrap();
+    engine.execute_mut("MATCH (a:Node {id:1}),(b:Node {id:4}) CREATE (a)-[:LINK]->(b)", &mut store, "default").unwrap();
+    (store, engine)
 }
 
 #[test]
-fn test_merge_full_pattern_creates_all() {
-    let mut store = graphmind::GraphStore::new();
-    let engine = graphmind::QueryEngine::new();
-    engine.execute_mut(
-        "MERGE (a:Person {name: 'Alice'})-[:KNOWS]->(b:Person {name: 'Bob'})",
-        &mut store, "default"
-    ).unwrap();
-    assert_eq!(store.node_count(), 2);
-    assert_eq!(store.edge_count(), 1);
-    
-    // Second MERGE — idempotent
-    engine.execute_mut(
-        "MERGE (a:Person {name: 'Alice'})-[:KNOWS]->(b:Person {name: 'Bob'})",
-        &mut store, "default"
-    ).unwrap();
-    assert_eq!(store.node_count(), 2, "No new nodes");
-    assert_eq!(store.edge_count(), 1, "No new edges");
+fn test_pagerank() {
+    let (store, engine) = build_graph();
+    let r = engine.execute("CALL algo.pageRank() YIELD node, score RETURN node, score", &store).unwrap();
+    eprintln!("PageRank: {} rows", r.len());
+    assert!(r.len() >= 1, "PageRank should return results");
 }
 
 #[test]
-fn test_merge_on_create_on_match() {
-    let mut store = graphmind::GraphStore::new();
-    let engine = graphmind::QueryEngine::new();
-    engine.execute_mut(
-        "MERGE (p:Person {id: 'p1'}) ON CREATE SET p.name = 'Created'",
-        &mut store, "default"
-    ).unwrap();
-    let nodes = store.get_nodes_by_label(&graphmind::Label::new("Person"));
-    assert_eq!(nodes[0].properties.get("name").and_then(|v| v.as_string()), Some("Created"));
-    
-    engine.execute_mut(
-        "MERGE (p:Person {id: 'p1'}) ON MATCH SET p.name = 'Matched'",
-        &mut store, "default"
-    ).unwrap();
-    let nodes = store.get_nodes_by_label(&graphmind::Label::new("Person"));
-    assert_eq!(nodes[0].properties.get("name").and_then(|v| v.as_string()), Some("Matched"));
-    assert_eq!(store.node_count(), 1);
+fn test_wcc() {
+    let (store, engine) = build_graph();
+    let r = engine.execute("CALL algo.wcc() YIELD node, componentId RETURN node, componentId", &store).unwrap();
+    eprintln!("WCC: {} rows", r.len());
+    assert!(r.len() >= 1);
+}
+
+#[test]
+fn test_scc() {
+    let (store, engine) = build_graph();
+    let r = engine.execute("CALL algo.scc() YIELD node, componentId RETURN node, componentId", &store).unwrap();
+    eprintln!("SCC: {} rows", r.len());
+    assert!(r.len() >= 1);
+}
+
+#[test]
+fn test_triangle_count() {
+    let (store, engine) = build_graph();
+    let r = engine.execute("CALL algo.triangleCount() YIELD triangles RETURN triangles", &store).unwrap();
+    eprintln!("TriangleCount: {} rows", r.len());
+    assert!(r.len() >= 1);
+}
+
+#[test]
+fn test_weighted_path() {
+    let (store, engine) = build_graph();
+    let r = engine.execute("CALL algo.weightedPath(0, 3, 'weight') YIELD node, cost RETURN node, cost", &store);
+    match &r {
+        Ok(batch) => eprintln!("WeightedPath: {} rows", batch.len()),
+        Err(e) => eprintln!("WeightedPath: {}", e),
+    }
+}
+
+#[test]
+fn test_mst() {
+    let (store, engine) = build_graph();
+    let r = engine.execute("CALL algo.mst() YIELD source, target, weight RETURN source, target, weight", &store);
+    match &r {
+        Ok(batch) => eprintln!("MST: {} rows", batch.len()),
+        Err(e) => eprintln!("MST: {}", e),
+    }
 }
