@@ -46,21 +46,26 @@ export function QueryTab() {
   const [showSaved, setShowSaved] = useState(false);
   const [forceView, setForceView] = useState<'auto' | 'graph' | 'table'>('auto');
   const [scriptResult, setScriptResult] = useState<ScriptResult | null>(null);
+  const [lastExecutedQuery, setLastExecutedQuery] = useState("");
 
   // Determine result type
   const hasGraphResult = nodes.length > 0;
   const hasTableResult = columns.length > 0 && records.length > 0;
   const isWriteQuery = /\b(CREATE|DELETE|SET|MERGE|REMOVE|DETACH)\b/.test(
-    currentQuery.toUpperCase(),
+    lastExecutedQuery.toUpperCase(),
   );
   const hasError = !!error;
   const hasNoResult =
-    !hasGraphResult && !hasTableResult && !hasError && !isExecuting;
+    !hasGraphResult && !hasTableResult && !hasError && !isExecuting && !lastExecutedQuery;
 
-  // Write result: show success message
-  const writeSuccess = isWriteQuery && !hasError && records.length === 0 && columns.length === 0 && !isExecuting && nodes.length === 0;
+  // Write result: show success message (only after actual execution)
+  const writeSuccess = isWriteQuery && !hasError && records.length === 0 && columns.length === 0 && !isExecuting && nodes.length === 0 && lastExecutedQuery.length > 0;
 
-  const handleRun = () => executeQuery(currentQuery);
+  const handleRun = () => {
+    setLastExecutedQuery(currentQuery);
+    setScriptResult(null);
+    executeQuery(currentQuery);
+  };
 
   const handleUpload = () => {
     const input = document.createElement("input");
