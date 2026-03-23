@@ -107,6 +107,12 @@ export class GraphmindClient {
     return this.http.status(graph || this.defaultGraph);
   }
 
+  /** Get the database server version */
+  async version(): Promise<string> {
+    const s = await this.status();
+    return s.version;
+  }
+
   /** Get graph schema (node types, edge types, indexes, constraints, statistics) */
   async schema(graph?: string): Promise<GraphSchema> {
     return this.http.schema(graph || this.defaultGraph);

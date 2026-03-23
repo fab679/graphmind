@@ -77,8 +77,15 @@ export function QueryTab() {
         } else {
           setScriptResult({ success: true, executed: result.executed, errors: [] });
         }
-        // Refresh
-        executeQuery("MATCH (n) RETURN n LIMIT 100");
+        // Refresh schema and stats (don't load nodes into canvas)
+        try {
+          const { getSchema, getStatus } = await import("@/api/client");
+          const graph = useUiStore.getState().activeGraph;
+          const schema = await getSchema(graph);
+          useUiStore.getState().setSchema(schema);
+          const status = await getStatus(graph);
+          useUiStore.getState().setServerInfo(status.version, status.storage.nodes, status.storage.edges);
+        } catch { /* ignore refresh errors */ }
       }
     };
     input.click();

@@ -155,6 +155,7 @@ pub async fn query_handler(
                 "edges": edges.values().collect::<Vec<_>>(),
                 "columns": batch.columns,
                 "records": records,
+                "duration_ms": duration,
             }))
             .into_response()
         }
