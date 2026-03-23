@@ -64,10 +64,10 @@ pub async fn query_handler(
         let na = store_guard.node_count();
         let ea = store_guard.edge_count();
         let stats = json!({
-            "nodes_created": if na > nb { na - nb } else { 0 },
-            "nodes_deleted": if nb > na { nb - na } else { 0 },
-            "edges_created": if ea > eb { ea - eb } else { 0 },
-            "edges_deleted": if eb > ea { eb - ea } else { 0 },
+            "nodes_created": na.saturating_sub(nb),
+            "nodes_deleted": nb.saturating_sub(na),
+            "edges_created": ea.saturating_sub(eb),
+            "edges_deleted": eb.saturating_sub(ea),
             "total_nodes": na,
             "total_edges": ea,
         });
