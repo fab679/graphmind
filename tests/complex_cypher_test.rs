@@ -518,7 +518,7 @@ fn test_with_aggregation_then_order() {
 }
 
 // ===========================================================================
-// 6. Multi-CREATE with shared variables (v0.6.5 feature)
+// 6. Multi-CREATE with shared variables (v0.6.5+ feature)
 // ===========================================================================
 
 #[test]

@@ -1,6 +1,6 @@
 # Graphmind Graph Database
 
-![Version](https://img.shields.io/badge/version-0.6.5-blue)
+![Version](https://img.shields.io/badge/version-0.7.0-blue)
 ![Rust](https://img.shields.io/badge/rust-1.85-orange)
 ![License](https://img.shields.io/badge/license-Apache_2.0-blue)
 
@@ -27,9 +27,9 @@ curl -sSL https://raw.githubusercontent.com/fab679/graphmind/main/dist/install.s
 
 # Or download directly from GitHub Releases:
 # https://github.com/fab679/graphmind/releases/latest
-# Linux:  graphmind-v0.6.5-x86_64-unknown-linux-gnu.tar.gz
-# macOS:  graphmind-v0.6.5-aarch64-apple-darwin.tar.gz
-# Intel:  graphmind-v0.6.5-x86_64-apple-darwin.tar.gz
+# Linux:  graphmind-v0.7.0-x86_64-unknown-linux-gnu.tar.gz
+# macOS:  graphmind-v0.7.0-aarch64-apple-darwin.tar.gz
+# Intel:  graphmind-v0.7.0-x86_64-apple-darwin.tar.gz
 ```
 
 ### Cargo
@@ -129,7 +129,7 @@ const result = await client.query('MATCH (n:Person) RETURN n.name, n.age');
 
 ```toml
 [dependencies]
-graphmind-sdk = "0.6.5"
+graphmind-sdk = "0.7.0"
 ```
 
 ```rust
