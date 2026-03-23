@@ -8,6 +8,50 @@ description: Built-in graph exploration UI
 
 Graphmind includes a built-in web-based graph explorer at `http://localhost:8080`.
 
+## Gallery
+
+### Graph Explorer
+Force-directed graph with colored nodes, edge labels, and floating legend.
+
+![Graph Explorer](/img/screenshots/graph-explorer.png)
+
+### Shortest Path Visualization
+Click two nodes to find and highlight the shortest path between them.
+
+![Shortest Path](/img/screenshots/shortest-path.png)
+
+### Node Inspector
+Click any node to see its properties, labels, and connections.
+
+![Node Inspector](/img/screenshots/node-inspector.png)
+
+### Graph Layouts
+Switch between force-directed, circular, hierarchical, and grid layouts.
+
+| Circular | Hierarchical |
+|:-:|:-:|
+| ![Circular](/img/screenshots/circular-layout.png) | ![Hierarchical](/img/screenshots/hierarchical-layout.png) |
+
+### Query Editor
+Full Cypher editor with syntax highlighting, autocomplete, and execution stats.
+
+![Query Editor](/img/screenshots/query-editor.png)
+
+### Schema Browser
+Browse node labels, edge types, properties, and customize colors and icons.
+
+![Schema Browser](/img/screenshots/schema-browser.png)
+
+### Database Administration
+Manage graphs (multi-tenancy), view server stats, import/export data.
+
+![Admin Panel](/img/screenshots/admin-panel.png)
+
+### Settings
+Customize node colors, icons, caption properties, and edge colors.
+
+![Settings](/img/screenshots/settings.png)
+
 ## Opening the Visualizer
 
 Start the Graphmind server, then open [http://localhost:8080](http://localhost:8080) in your browser.

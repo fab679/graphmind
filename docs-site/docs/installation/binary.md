@@ -12,22 +12,22 @@ Download the latest release for your platform from [GitHub Releases](https://git
 
 ```bash
 # Linux (x86_64)
-curl -LO https://github.com/fab679/graphmind/releases/latest/download/graphmind-v0.7.0-x86_64-unknown-linux-gnu.tar.gz
-tar xzf graphmind-v0.7.0-x86_64-unknown-linux-gnu.tar.gz
+curl -LO https://github.com/fab679/graphmind/releases/download/v0.7.0-beta/graphmind-v0.7.0-beta-x86_64-unknown-linux-gnu.tar.gz
+tar xzf graphmind-v0.7.0-beta-x86_64-unknown-linux-gnu.tar.gz
 sudo mv graphmind /usr/local/bin/
 
 # macOS (Apple Silicon)
-curl -LO https://github.com/fab679/graphmind/releases/latest/download/graphmind-v0.7.0-aarch64-apple-darwin.tar.gz
+curl -LO https://github.com/fab679/graphmind/releases/download/v0.7.0-beta/graphmind-v0.7.0-beta-aarch64-apple-darwin.tar.gz
 tar xzf graphmind-v0.7.0-aarch64-apple-darwin.tar.gz
 sudo mv graphmind /usr/local/bin/
 
 # macOS (Intel)
-curl -LO https://github.com/fab679/graphmind/releases/latest/download/graphmind-v0.7.0-x86_64-apple-darwin.tar.gz
+curl -LO https://github.com/fab679/graphmind/releases/download/v0.7.0-beta/graphmind-v0.7.0-beta-x86_64-apple-darwin.tar.gz
 tar xzf graphmind-v0.7.0-x86_64-apple-darwin.tar.gz
 sudo mv graphmind /usr/local/bin/
 
 # Windows (x86_64) — download and extract the zip
-# https://github.com/fab679/graphmind/releases/latest/download/graphmind-v0.7.0-x86_64-pc-windows-msvc.zip
+# https://github.com/fab679/graphmind/releases/download/v0.7.0-beta/graphmind-v0.7.0-beta-x86_64-pc-windows-msvc.zip
 ```
 
 ## Install with Cargo
@@ -80,15 +80,15 @@ graphmind --demo social
 
 ## CLI Flags
 
-| Flag | Description | Default |
-|------|-------------|---------|
-| `--config <path>` | Path to TOML config file | `graphmind.toml` |
-| `--host <addr>` | Bind address | `127.0.0.1` |
-| `--port <port>` | RESP server port | `6379` |
-| `--http-port <port>` | HTTP server port | `8080` |
-| `--data-dir <path>` | Data storage directory | `./graphmind_data` |
-| `--log-level <level>` | Log level | `info` |
-| `--demo <mode>` | Load demo data (`social` or `large`) | (none) |
+| Flag                  | Description                          | Default            |
+| --------------------- | ------------------------------------ | ------------------ |
+| `--config <path>`     | Path to TOML config file             | `graphmind.toml`   |
+| `--host <addr>`       | Bind address                         | `127.0.0.1`        |
+| `--port <port>`       | RESP server port                     | `6379`             |
+| `--http-port <port>`  | HTTP server port                     | `8080`             |
+| `--data-dir <path>`   | Data storage directory               | `./graphmind_data` |
+| `--log-level <level>` | Log level                            | `info`             |
+| `--demo <mode>`       | Load demo data (`social` or `large`) | (none)             |
 
 See [Configuration](configuration) for the full config file reference.
 

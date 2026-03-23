@@ -6,7 +6,19 @@
 
 **Graphmind** is a high-performance, distributed graph database written in Rust with ~90% OpenCypher support, Redis protocol compatibility, and a built-in web visualizer. It combines property graph storage, vector search, graph algorithms, and natural language querying in a single binary.
 
-[![Graphmind Graph Simulation](https://github.com/fab679/graphmind/releases/download/kg-snapshots-v2/simulation-preview.gif)](https://github.com/fab679/graphmind/releases/download/kg-snapshots-v2/graphmind-cricket-demo.mp4)
+## Screenshots
+
+| Graph Explorer | Shortest Path | Node Inspector |
+|:-:|:-:|:-:|
+| ![Graph Explorer](screenshots/graph-explorer.png) | ![Shortest Path](screenshots/shortest-path.png) | ![Node Inspector](screenshots/node-inspector.png) |
+
+| Circular Layout | Hierarchical Layout | Query Editor |
+|:-:|:-:|:-:|
+| ![Circular](screenshots/circular-layout.png) | ![Hierarchical](screenshots/hierarchical-layout.png) | ![Query Editor](screenshots/query-editor.png) |
+
+| Schema Browser | Admin Panel | Settings |
+|:-:|:-:|:-:|
+| ![Schema](screenshots/schema-browser.png) | ![Admin](screenshots/admin-panel.png) | ![Settings](screenshots/settings.png) |
 
 ## Install
 
