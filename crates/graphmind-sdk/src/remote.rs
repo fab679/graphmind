@@ -68,9 +68,11 @@ impl GraphmindClient for RemoteClient {
     }
 
     async fn delete_graph(&self, graph: &str) -> GraphmindResult<()> {
-        // The HTTP API doesn't expose GRAPH.DELETE directly.
-        // We can execute a Cypher that deletes all nodes/edges.
-        self.post_query(graph, "MATCH (n) DELETE n").await?;
+        // First detach-delete all nodes and edges
+        let _ = self.post_query(graph, "MATCH (n) DETACH DELETE n").await;
+        // Then remove the graph from the tenant store via the API
+        let url = format!("{}/api/graphs/{}", self.http_base_url, graph);
+        let _ = self.http_client.delete(&url).send().await;
         Ok(())
     }
 

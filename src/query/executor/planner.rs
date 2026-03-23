@@ -67,12 +67,12 @@ use crate::query::executor::{
         CreateEdgeOperator, CreateIndexOperator, CreateNodeOperator, CreateNodesAndEdgesOperator,
         CreateVectorIndexOperator, DeleteOperator, DropIndexOperator, ExpandOperator,
         FilterOperator, ForeachOperator, IndexScanOperator, JoinOperator, LeftOuterJoinOperator,
-        LimitOperator, MergeOperator, MockProcedureOperator, NodeScanOperator,
-        PerRowCreateOperator, ProjectOperator, RemovePropertyOperator, SchemaVisualizationOperator,
-        SetPropertyOperator, ShortestPathOperator, ShowConstraintsOperator, ShowIndexesOperator,
-        ShowLabelsOperator, ShowPropertyKeysOperator, ShowRelationshipTypesOperator,
-        SingleRowOperator, SkipOperator, SortOperator, UnwindOperator, VarLengthExpandOperator,
-        VectorSearchOperator, WithBarrierOperator,
+        LimitOperator, MatchCreateEdgeOperator, MergeOperator, MockProcedureOperator,
+        NodeScanOperator, PerRowCreateOperator, ProjectOperator, RemovePropertyOperator,
+        SchemaVisualizationOperator, SetPropertyOperator, ShortestPathOperator,
+        ShowConstraintsOperator, ShowIndexesOperator, ShowLabelsOperator, ShowPropertyKeysOperator,
+        ShowRelationshipTypesOperator, SingleRowOperator, SkipOperator, SortOperator,
+        UnwindOperator, VarLengthExpandOperator, VectorSearchOperator, WithBarrierOperator,
     },
     ExecutionError,
     ExecutionResult,
@@ -836,6 +836,54 @@ impl QueryPlanner {
                     on_create,
                     on_match,
                 ));
+
+                // Apply CREATE clauses after MERGE (Bug 8 fix)
+                if query.create_clause.is_some() || !query.create_clauses.is_empty() {
+                    let mut edges = Vec::new();
+                    for cc in query
+                        .create_clause
+                        .iter()
+                        .chain(query.create_clauses.iter())
+                    {
+                        for path in &cc.pattern.paths {
+                            for seg in &path.segments {
+                                let sv = path.start.variable.clone().unwrap_or_default();
+                                let tv = seg.node.variable.clone().unwrap_or_default();
+                                let et = seg
+                                    .edge
+                                    .types
+                                    .first()
+                                    .cloned()
+                                    .unwrap_or_else(|| EdgeType::new("RELATED"));
+                                let ep = seg.edge.properties.clone().unwrap_or_default();
+                                let ev = seg.edge.variable.clone();
+                                let (s, t) = match seg.edge.direction {
+                                    Direction::Incoming => (tv, sv),
+                                    _ => (sv, tv),
+                                };
+                                edges.push((s, t, et, ep, ev));
+                            }
+                        }
+                    }
+                    if !edges.is_empty() {
+                        operator = Box::new(MatchCreateEdgeOperator::new(operator, edges));
+                    }
+                }
+
+                // Apply SET clauses after MERGE (Bug 6 fix)
+                if !query.set_clauses.is_empty() {
+                    let mut items = Vec::new();
+                    for set_clause in &query.set_clauses {
+                        for item in &set_clause.items {
+                            items.push((
+                                item.variable.clone(),
+                                item.property.clone(),
+                                item.value.clone(),
+                            ));
+                        }
+                    }
+                    operator = Box::new(SetPropertyOperator::new(operator, items));
+                }
 
                 let mut output_columns = Vec::new();
                 if let Some(return_clause) = &query.return_clause {
