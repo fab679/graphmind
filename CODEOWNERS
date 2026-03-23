@@ -1,9 +1,13 @@
 # Code Owners for Graphmind Graph
+
 # This file defines who owns the code and who should review changes.
 
 # Global owner (matches everything)
-*       @sandeepkunkunuru
+
+-       @fab679
 
 # Specific component owners (examples for future)
-# /crates/graphmind-optimization/  @expert-optimizer
-# /docs/                         @tech-writer
+
+# /crates/graphmind-optimization/ @expert-optimizer
+
+# /docs/ @tech-writer

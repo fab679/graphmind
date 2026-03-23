@@ -41,21 +41,27 @@ fn test_random_uuid() {
 }
 
 #[test]
-fn test_uuid_with_create() {
-    let mut store = GraphStore::new();
+fn test_uuid_uniqueness() {
+    let store = GraphStore::new();
     let engine = QueryEngine::new();
 
-    // Use WITH to pass UUID into CREATE
-    engine
-        .execute_mut(
-            "WITH randomUUID() AS uid CREATE (n:Person {id: uid, name: 'Alice'})",
-            &mut store,
-            "default",
-        )
-        .unwrap();
-
-    let nodes = store.get_nodes_by_label(&Label::new("Person"));
-    let id = nodes[0].properties.get("id").unwrap().as_string().unwrap();
-    eprintln!("Person id: {}", id);
-    assert_eq!(id.len(), 36);
+    // Generate 10 UUIDs and verify all unique
+    let mut uuids = Vec::new();
+    for _ in 0..10 {
+        let r = engine
+            .execute("RETURN randomUUID() AS uuid", &store)
+            .unwrap();
+        let uuid = r.records[0]
+            .get("uuid")
+            .unwrap()
+            .as_property()
+            .unwrap()
+            .as_string()
+            .unwrap()
+            .to_string();
+        assert_eq!(uuid.len(), 36, "UUID should be 36 chars");
+        uuids.push(uuid);
+    }
+    let unique: std::collections::HashSet<_> = uuids.iter().collect();
+    assert_eq!(unique.len(), 10, "All 10 UUIDs should be unique");
 }

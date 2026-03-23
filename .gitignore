@@ -20,7 +20,14 @@ wal/
 data/
 .env
 
+/docs
 docs/
 .CLAUDE.md
 
 dataset/
+
+ROADMAP.md
+
+/examples
+
+examples/
