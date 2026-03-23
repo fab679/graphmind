@@ -6440,7 +6440,6 @@ impl PhysicalOperator for PerRowCreateOperator {
         };
 
         let mut record = input_record.clone();
-        let store_ref: &GraphStore = store;
 
         // Create nodes for this row
         for (labels, static_props, expr_props, var_name) in &self.node_specs {

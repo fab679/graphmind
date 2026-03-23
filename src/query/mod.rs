@@ -324,7 +324,7 @@ impl QueryEngine {
         let mut result = Vec::new();
         for element in &elements {
             // Replace occurrences of the variable in the CREATE clause with the literal value
-            let mut create = create_clause.to_string();
+            let create = create_clause.to_string();
             // Simple replacement: replace `: var}` and `: var,` patterns
             // Also handle `{prop: var}` and `{prop: var,`
             // Use word-boundary replacement

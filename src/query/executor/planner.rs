@@ -960,7 +960,10 @@ impl QueryPlanner {
                 }
 
                 // Build per-row CREATE from the create clause
-                let create_clause = query.create_clause.as_ref().unwrap();
+                let create_clause = match query.create_clause.as_ref() {
+                    Some(c) => c,
+                    None => unreachable!(),
+                };
                 let mut node_specs = Vec::new();
                 let mut edge_specs = Vec::new();
 

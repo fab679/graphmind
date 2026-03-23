@@ -83,7 +83,11 @@ fn test_consistency_unique_node_ids() {
 
     // All nodes should have unique IDs (verified via store)
     let nodes = store.get_nodes_by_label(&Label::new("N"));
-    assert_eq!(nodes.len(), 100, "All 100 nodes should exist with unique IDs");
+    assert_eq!(
+        nodes.len(),
+        100,
+        "All 100 nodes should exist with unique IDs"
+    );
 }
 
 #[test]
