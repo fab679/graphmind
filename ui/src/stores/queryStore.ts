@@ -18,6 +18,15 @@ export interface SavedQuery {
   createdAt: number;
 }
 
+export interface WriteStats {
+  nodes_created: number;
+  nodes_deleted: number;
+  edges_created: number;
+  edges_deleted: number;
+  total_nodes: number;
+  total_edges: number;
+}
+
 interface QueryState {
   currentQuery: string;
   isExecuting: boolean;
@@ -26,6 +35,7 @@ interface QueryState {
   error: string | null;
   history: HistoryEntry[];
   savedQueries: SavedQuery[];
+  writeStats: WriteStats | null;
 
   setQuery: (query: string) => void;
   executeQuery: (query?: string, graph?: string) => Promise<void>;
@@ -44,6 +54,7 @@ export const useQueryStore = create<QueryState>()(
       currentQuery: "",
       isExecuting: false,
       columns: [],
+      writeStats: null,
       records: [],
       error: null,
       history: [],
@@ -85,6 +96,7 @@ export const useQueryStore = create<QueryState>()(
             isExecuting: false,
             currentQuery: q,
             history: [entry, ...state.history].slice(0, MAX_HISTORY),
+            writeStats: (response as unknown as Record<string, unknown>).stats as WriteStats | undefined ?? null,
           }));
 
           // Auto-show bottom panel when results are table-only (no graph nodes)

@@ -54,14 +54,28 @@ pub async fn query_handler(
 
     let start = std::time::Instant::now();
     let store = state.stores.get_store(&payload.graph).await;
-    let result = if is_write {
+    let (result, write_stats) = if is_write {
         let mut store_guard = store.write().await;
-        state
+        let nb = store_guard.node_count();
+        let eb = store_guard.edge_count();
+        let r = state
             .engine
-            .execute_mut(&payload.query, &mut store_guard, &payload.graph)
+            .execute_mut(&payload.query, &mut store_guard, &payload.graph);
+        let na = store_guard.node_count();
+        let ea = store_guard.edge_count();
+        let stats = json!({
+            "nodes_created": if na > nb { na - nb } else { 0 },
+            "nodes_deleted": if nb > na { nb - na } else { 0 },
+            "edges_created": if ea > eb { ea - eb } else { 0 },
+            "edges_deleted": if eb > ea { eb - ea } else { 0 },
+            "total_nodes": na,
+            "total_edges": ea,
+        });
+        (r, Some(stats))
     } else {
         let store_guard = store.read().await;
-        state.engine.execute(&payload.query, &store_guard)
+        let r = state.engine.execute(&payload.query, &store_guard);
+        (r, None)
     };
     let duration = start.elapsed().as_secs_f64() * 1000.0;
     crate::metrics::record_query(duration, is_write);
@@ -150,14 +164,20 @@ pub async fn query_handler(
                 records.push(row);
             }
 
-            Json(json!({
+            let mut response = json!({
                 "nodes": nodes.values().collect::<Vec<_>>(),
                 "edges": edges.values().collect::<Vec<_>>(),
                 "columns": batch.columns,
                 "records": records,
                 "duration_ms": duration,
-            }))
-            .into_response()
+            });
+
+            // Add write statistics for mutation queries
+            if let Some(stats) = write_stats {
+                response["stats"] = stats;
+            }
+
+            Json(response).into_response()
         }
         Err(e) => (
             axum::http::StatusCode::BAD_REQUEST,

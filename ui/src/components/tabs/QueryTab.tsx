@@ -35,6 +35,7 @@ export function QueryTab() {
   const error = useQueryStore((s) => s.error);
   const columns = useQueryStore((s) => s.columns);
   const records = useQueryStore((s) => s.records);
+  const writeStats = useQueryStore((s) => s.writeStats);
   const history = useQueryStore((s) => s.history);
 
   const nodes = useGraphStore((s) => s.nodes);
@@ -244,10 +245,25 @@ export function QueryTab() {
                 <h3 className="mb-1 font-semibold text-foreground">
                   Query Executed
                 </h3>
-                <p className="text-sm text-muted-foreground">
-                  {useUiStore.getState().nodeCount} nodes,{" "}
-                  {useUiStore.getState().edgeCount} edges in database
-                </p>
+                {writeStats ? (
+                  <div className="text-sm text-muted-foreground space-y-0.5">
+                    {writeStats.nodes_created > 0 && <p>Created {writeStats.nodes_created} node{writeStats.nodes_created !== 1 ? 's' : ''}</p>}
+                    {writeStats.edges_created > 0 && <p>Created {writeStats.edges_created} relationship{writeStats.edges_created !== 1 ? 's' : ''}</p>}
+                    {writeStats.nodes_deleted > 0 && <p>Deleted {writeStats.nodes_deleted} node{writeStats.nodes_deleted !== 1 ? 's' : ''}</p>}
+                    {writeStats.edges_deleted > 0 && <p>Deleted {writeStats.edges_deleted} relationship{writeStats.edges_deleted !== 1 ? 's' : ''}</p>}
+                    {writeStats.nodes_created === 0 && writeStats.edges_created === 0 && writeStats.nodes_deleted === 0 && writeStats.edges_deleted === 0 && (
+                      <p>No changes made</p>
+                    )}
+                    <p className="text-[10px] mt-1 opacity-60">
+                      Total: {writeStats.total_nodes} nodes, {writeStats.total_edges} edges
+                    </p>
+                  </div>
+                ) : (
+                  <p className="text-sm text-muted-foreground">
+                    {useUiStore.getState().nodeCount} nodes,{" "}
+                    {useUiStore.getState().edgeCount} edges in database
+                  </p>
+                )}
               </div>
             </div>
           )}

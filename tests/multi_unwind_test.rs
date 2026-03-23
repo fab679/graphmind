@@ -1,55 +1,25 @@
 #[test]
-fn test_schema_from_indexes_only() {
+fn test_rewrite_doesnt_break_match_create() {
     let mut store = graphmind::GraphStore::new();
     let engine = graphmind::QueryEngine::new();
 
-    // Create constraints/indexes with NO data
-    engine
-        .execute_mut(
-            "CREATE CONSTRAINT person_id IF NOT EXISTS FOR (p:Person) REQUIRE p.id IS UNIQUE",
-            &mut store,
-            "default",
-        )
-        .unwrap();
-    engine
-        .execute_mut(
-            "CREATE INDEX person_name IF NOT EXISTS FOR (p:Person) ON (p.name)",
-            &mut store,
-            "default",
-        )
-        .unwrap();
-    engine
-        .execute_mut(
-            "CREATE INDEX movie_year IF NOT EXISTS FOR (m:Movie) ON (m.year)",
-            &mut store,
-            "default",
-        )
-        .unwrap();
+    // Create people via the SAME execute_mut call (semicolons)
+    let full_script = "CREATE (p1:Person {id: 'p1', name: 'Alice'});
+CREATE (p2:Person {id: 'p2', name: 'Bob'});
+CREATE (p3:Person {id: 'p3', name: 'Charlie'});
+// ─── Social graph ──────────────────
+MATCH (a:Person {id:'p1'}), (b:Person {id:'p2'}) CREATE (a)-[:FOLLOWS]->(b);
+MATCH (a:Person {id:'p1'}), (b:Person {id:'p3'}) CREATE (a)-[:FOLLOWS]->(b)";
 
-    // Zero nodes
-    assert_eq!(store.node_count(), 0);
-
-    // But indexes should define schema labels
-    let indexed = store.property_index.indexed_labels();
-    let label_names: Vec<String> = indexed
-        .iter()
-        .map(|(l, _)| l.as_str().to_string())
-        .collect();
-    eprintln!("Indexed labels: {:?}", label_names);
-    assert!(
-        label_names.contains(&"Person".to_string()),
-        "Person should be in indexed labels"
+    match engine.execute_mut(full_script, &mut store, "default") {
+        Ok(_) => eprintln!("OK"),
+        Err(e) => eprintln!("ERROR: {}", e),
+    }
+    eprintln!(
+        "Nodes: {}, Edges: {}",
+        store.node_count(),
+        store.edge_count()
     );
-    assert!(
-        label_names.contains(&"Movie".to_string()),
-        "Movie should be in indexed labels"
-    );
-
-    // SHOW INDEXES should show all
-    let r = engine.execute("SHOW INDEXES", &store).unwrap();
-    assert!(r.len() >= 2, "Should show at least 2 indexes");
-
-    // SHOW CONSTRAINTS should show the unique constraint
-    let r = engine.execute("SHOW CONSTRAINTS", &store).unwrap();
-    assert!(r.len() >= 1, "Should show at least 1 constraint");
+    assert_eq!(store.node_count(), 3);
+    assert_eq!(store.edge_count(), 2, "Should have 2 FOLLOWS edges");
 }
