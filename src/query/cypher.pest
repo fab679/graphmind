@@ -40,7 +40,7 @@
 // Trailing whitespace after the optional semicolon is also consumed explicitly.
 cypher = { SOI ~ explain_prefix? ~ top_statement ~ (";" ~ WHITESPACE*)? ~ EOI }
 
-top_statement = { show_indexes_stmt | show_constraints_stmt | drop_index_stmt | create_constraint_stmt | create_vector_index_stmt | create_index_stmt | query }
+top_statement = { show_indexes_stmt | show_constraints_stmt | drop_constraint_stmt | drop_index_stmt | create_constraint_stmt | create_vector_index_stmt | create_index_stmt | query }
 statement = { query }
 
 // standalone_call is tried first: it is strictly more specific (requires the
@@ -825,13 +825,40 @@ COMMENT = _{
 explain_prefix = { kw_explain | kw_profile }
 kw_explain = @{ ^"EXPLAIN" ~ !identifier_part }
 kw_profile = @{ ^"PROFILE" ~ !identifier_part }
-create_index_stmt = { kw_create ~ kw_index ~ kw_on ~ ":" ~ schema_name ~ "(" ~ property_key_name ~ ("," ~ property_key_name)* ~ ")" }
+// CREATE INDEX — supports both old and new syntax:
+//   Old: CREATE INDEX ON :Label(prop)
+//   New: CREATE INDEX name IF NOT EXISTS FOR (n:Label) ON (n.prop)
+create_index_stmt = {
+    (kw_create ~ kw_index ~ symbolic_name? ~ kw_if_not_exists? ~ kw_for ~ "(" ~ variable ~ ":" ~ schema_name ~ ")" ~ kw_on ~ "(" ~ property_expression ~ ("," ~ property_expression)* ~ ")") |
+    (kw_create ~ kw_index ~ kw_on ~ ":" ~ schema_name ~ "(" ~ property_key_name ~ ("," ~ property_key_name)* ~ ")")
+}
 kw_index = @{ ^"INDEX" ~ !identifier_part }
-drop_index_stmt = { kw_drop ~ kw_index ~ kw_on ~ ":" ~ schema_name ~ "(" ~ property_key_name ~ ")" }
+kw_if_not_exists = { kw_if ~ kw_not ~ kw_exists }
+kw_if = @{ ^"IF" ~ !identifier_part }
+
+// DROP INDEX/CONSTRAINT — supports both old and new syntax:
+//   Old: DROP INDEX ON :Label(prop)
+//   New: DROP INDEX name IF EXISTS
+//   New: DROP CONSTRAINT name IF EXISTS
+drop_index_stmt = {
+    (kw_drop ~ kw_index ~ symbolic_name ~ kw_if_exists?) |
+    (kw_drop ~ kw_index ~ kw_on ~ ":" ~ schema_name ~ "(" ~ property_key_name ~ ")")
+}
+drop_constraint_stmt = { kw_drop ~ kw_constraint ~ symbolic_name ~ kw_if_exists? }
+kw_if_exists = { kw_if ~ kw_exists }
 kw_drop = @{ ^"DROP" ~ !identifier_part }
-create_constraint_stmt = { kw_create ~ kw_constraint ~ kw_on ~ "(" ~ variable ~ ":" ~ schema_name ~ ")" ~ kw_assert ~ property_expression ~ kw_is ~ kw_unique }
+
+// CREATE CONSTRAINT — supports both old and new syntax:
+//   Old: CREATE CONSTRAINT ON (n:Label) ASSERT n.prop IS UNIQUE
+//   New: CREATE CONSTRAINT name IF NOT EXISTS FOR (n:Label) REQUIRE n.prop IS UNIQUE
+//   New: CREATE CONSTRAINT name IF NOT EXISTS FOR (n:Label) REQUIRE n.prop IS NOT NULL
+create_constraint_stmt = {
+    (kw_create ~ kw_constraint ~ symbolic_name? ~ kw_if_not_exists? ~ kw_for ~ "(" ~ variable ~ ":" ~ schema_name ~ ")" ~ kw_require ~ property_expression ~ kw_is ~ (kw_not ~ kw_null | kw_unique)) |
+    (kw_create ~ kw_constraint ~ kw_on ~ "(" ~ variable ~ ":" ~ schema_name ~ ")" ~ kw_assert ~ property_expression ~ kw_is ~ kw_unique)
+}
 kw_constraint = @{ ^"CONSTRAINT" ~ !identifier_part }
 kw_assert     = @{ ^"ASSERT"     ~ !identifier_part }
+kw_require    = @{ ^"REQUIRE"    ~ !identifier_part }
 kw_unique     = @{ ^"UNIQUE"     ~ !identifier_part }
 create_vector_index_stmt = { kw_create ~ kw_vector ~ kw_index ~ symbolic_name ~ kw_for ~ "(" ~ variable ~ ":" ~ schema_name ~ ")" ~ kw_on ~ "(" ~ property_expression ~ ")" ~ kw_options ~ map_literal }
 kw_vector  = @{ ^"VECTOR"  ~ !identifier_part }

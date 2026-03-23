@@ -199,6 +199,13 @@ fn parse_top_statement(pair: pest::iterators::Pair<Rule>, query: &mut Query) -> 
             Rule::drop_index_stmt => {
                 parse_drop_index_statement(inner, query)?;
             }
+            Rule::drop_constraint_stmt => {
+                // DROP CONSTRAINT name [IF EXISTS] — just mark as drop
+                query.drop_index_clause = Some(DropIndexClause {
+                    label: Label::new("__constraint__"),
+                    property: inner.as_str().to_string(),
+                });
+            }
             Rule::create_constraint_stmt => {
                 parse_create_constraint_statement(inner, query)?;
             }
@@ -236,6 +243,21 @@ fn parse_create_index_statement(
                 }
             }
             Rule::property_key_name => properties.push(inner.as_str().to_string()),
+            // New syntax: FOR (n:Label) ON (n.prop)
+            Rule::variable => {} // skip index name and variable
+            Rule::property_expression => {
+                // Extract property name from "n.prop"
+                let text = inner.as_str();
+                if let Some(dot_pos) = text.rfind('.') {
+                    properties.push(text[dot_pos + 1..].to_string());
+                }
+            }
+            Rule::kw_if_not_exists
+            | Rule::kw_index
+            | Rule::kw_create
+            | Rule::kw_for
+            | Rule::kw_on
+            | Rule::symbolic_name => {} // skip keywords
             _ => {}
         }
     }
@@ -314,6 +336,18 @@ fn parse_create_constraint_statement(
                     }
                 }
             }
+            // Skip new-syntax keywords (IF NOT EXISTS, FOR, REQUIRE, constraint name)
+            Rule::kw_if_not_exists
+            | Rule::kw_require
+            | Rule::kw_for
+            | Rule::kw_constraint
+            | Rule::kw_create
+            | Rule::kw_assert
+            | Rule::kw_is
+            | Rule::kw_unique
+            | Rule::kw_not
+            | Rule::kw_null
+            | Rule::symbolic_name => {}
             _ => {}
         }
     }
