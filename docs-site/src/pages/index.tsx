@@ -1,14 +1,21 @@
-import React from 'react';
-import Link from '@docusaurus/Link';
-import useDocusaurusContext from '@docusaurus/useDocusaurusContext';
-import Layout from '@theme/Layout';
-import styles from './index.module.css';
+import React from "react";
+import Link from "@docusaurus/Link";
+import useDocusaurusContext from "@docusaurus/useDocusaurusContext";
+import Layout from "@theme/Layout";
+import styles from "./index.module.css";
 
 // ─── SVG Icons ───
 
 function IconCypher() {
   return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
       <polyline points="16 18 22 12 16 6" />
       <polyline points="8 6 2 12 8 18" />
     </svg>
@@ -17,7 +24,14 @@ function IconCypher() {
 
 function IconGraph() {
   return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
       <circle cx="6" cy="6" r="3" />
       <circle cx="18" cy="18" r="3" />
       <circle cx="18" cy="6" r="3" />
@@ -29,7 +43,14 @@ function IconGraph() {
 
 function IconShield() {
   return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
       <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
     </svg>
   );
@@ -37,7 +58,14 @@ function IconShield() {
 
 function IconVector() {
   return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
       <circle cx="12" cy="12" r="10" />
       <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
       <line x1="2" y1="12" x2="22" y2="12" />
@@ -47,7 +75,14 @@ function IconVector() {
 
 function IconTerminal() {
   return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
       <polyline points="4 17 10 11 4 5" />
       <line x1="12" y1="19" x2="20" y2="19" />
     </svg>
@@ -56,7 +91,14 @@ function IconTerminal() {
 
 function IconAlgorithm() {
   return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
       <line x1="18" y1="20" x2="18" y2="10" />
       <line x1="12" y1="20" x2="12" y2="4" />
       <line x1="6" y1="20" x2="6" y2="14" />
@@ -66,7 +108,16 @@ function IconAlgorithm() {
 
 function IconArrowRight() {
   return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
       <line x1="5" y1="12" x2="19" y2="12" />
       <polyline points="12 5 19 12 12 19" />
     </svg>
@@ -86,47 +137,47 @@ function IconGitHub() {
 const features = [
   {
     icon: <IconCypher />,
-    title: 'OpenCypher Queries',
+    title: "OpenCypher Queries",
     description:
-      'Full Cypher support with MATCH, CREATE, SET, DELETE, MERGE, aggregations, and 30+ built-in functions.',
+      "Full Cypher support with MATCH, CREATE, SET, DELETE, MERGE, aggregations, and 30+ built-in functions.",
   },
   {
     icon: <IconGraph />,
-    title: 'Web Visualizer',
+    title: "Web Visualizer",
     description:
-      'Interactive graph explorer with D3.js force layout, fullscreen mode, search, custom colors and icons.',
+      "Interactive graph explorer with D3.js force layout, fullscreen mode, search, custom colors and icons.",
   },
   {
     icon: <IconShield />,
-    title: 'Multi-Tenancy',
+    title: "Multi-Tenancy",
     description:
-      'Isolated graph namespaces with per-tenant storage, authentication, and RBAC.',
+      "Isolated graph namespaces with per-tenant storage, authentication, and RBAC.",
   },
   {
     icon: <IconVector />,
-    title: 'Vector Search',
+    title: "Vector Search",
     description:
-      'HNSW index for k-NN similarity search, hybrid queries combining vectors with graph patterns.',
+      "HNSW index for k-NN similarity search, hybrid queries combining vectors with graph patterns.",
   },
   {
     icon: <IconTerminal />,
-    title: 'Redis Protocol',
+    title: "Redis Protocol",
     description:
-      'Drop-in RESP compatibility, connect with any Redis client from any language.',
+      "Drop-in RESP compatibility, connect with any Redis client from any language.",
   },
   {
     icon: <IconAlgorithm />,
-    title: 'Graph Algorithms',
+    title: "Graph Algorithms",
     description:
-      'PageRank, shortest path, community detection, connected components, and more.',
+      "PageRank, shortest path, community detection, connected components, and more.",
   },
 ];
 
 const stats = [
-  { value: '1800+', label: 'Tests' },
-  { value: '90%', label: 'OpenCypher' },
-  { value: '<1ms', label: 'Queries' },
-  { value: 'Multi', label: 'Tenant' },
+  { value: "1800+", label: "Tests" },
+  { value: "90%", label: "OpenCypher" },
+  { value: "<1ms", label: "Queries" },
+  { value: "Multi", label: "Tenant" },
 ];
 
 // ─── Components ───
@@ -135,10 +186,15 @@ function Hero() {
   return (
     <header className={styles.hero}>
       <div className="container">
-        <img src="/graphmind/img/logo.svg" alt="Graphmind" style={{width: 64, height: 64, marginBottom: 16}} />
+        <img
+          src="/graphmind/img/logo.svg"
+          alt="Graphmind"
+          style={{ width: 64, height: 64, marginBottom: 16 }}
+        />
         <h1 className={styles.heroTitle}>Graphmind</h1>
         <p className={styles.heroTagline}>
-          High-performance distributed graph database built in Rust with OpenCypher support, vector search, and real-time visualization.
+          High-performance distributed graph database built in Rust with
+          OpenCypher support, vector search, and real-time visualization.
         </p>
         <div className={styles.heroButtons}>
           <Link className={styles.btnPrimary} to="/docs/getting-started">
@@ -179,7 +235,8 @@ function Features() {
       <div className="container">
         <h2 className={styles.sectionTitle}>Built for Production</h2>
         <p className={styles.sectionSubtitle}>
-          Everything you need to build, query, and scale graph-powered applications.
+          Everything you need to build, query, and scale graph-powered
+          applications.
         </p>
         <div className={styles.featureGrid}>
           {features.map((feature) => (
@@ -211,34 +268,28 @@ function QuickStart() {
           </div>
           <pre className={styles.codeBody}>
             <code>
-              <span className={styles.codeComment}>
-                # Install and run
-              </span>
-              {'\n'}
-              <span className={styles.codeCommand}>
-                docker run
-              </span>
-              {' -d -p 6379:6379 -p 8080:8080 fab679/graphmind:latest'}
-              {'\n\n'}
-              <span className={styles.codeComment}>
-                # Open the visualizer
-              </span>
-              {'\n'}
+              <span className={styles.codeComment}># Install and run</span>
+              {"\n"}
+              <span className={styles.codeCommand}>docker run</span>
+              {" -d -p 6379:6379 -p 8080:8080 fabischk/graphmind:latest"}
+              {"\n\n"}
+              <span className={styles.codeComment}># Open the visualizer</span>
+              {"\n"}
               <span className={styles.codeCommand}>open</span>
-              {' http://localhost:8080'}
-              {'\n\n'}
+              {" http://localhost:8080"}
+              {"\n\n"}
               <span className={styles.codeComment}>
                 # Or connect via redis-cli
               </span>
-              {'\n'}
+              {"\n"}
               <span className={styles.codeCommand}>redis-cli</span>
-              {' -p 6379'}
-              {'\n'}
-              <span className={styles.codePrompt}>{'> '}</span>
+              {" -p 6379"}
+              {"\n"}
+              <span className={styles.codePrompt}>{"> "}</span>
               <span className={styles.codeCommand}>GRAPH.QUERY</span>
-              {' default '}
+              {" default "}
               <span className={styles.codeString}>
-                {'"CREATE (n:Person {name: \'Alice\'}) RETURN n"'}
+                {"\"CREATE (n:Person {name: 'Alice'}) RETURN n\""}
               </span>
             </code>
           </pre>
@@ -264,55 +315,71 @@ function SDKs() {
             </div>
             <pre className={styles.sdkCode}>
               <code>
-                <span className={styles.codeComment}>{'// Embedded mode - zero network overhead'}</span>
-                {'\n'}
-                {'let store = GraphStore::new();\n'}
-                {'let id = store.create_node('}
+                <span className={styles.codeComment}>
+                  {"// Embedded mode - zero network overhead"}
+                </span>
+                {"\n"}
+                {"let store = GraphStore::new();\n"}
+                {"let id = store.create_node("}
                 <span className={styles.codeString}>{'"Person"'}</span>
-                {');\n'}
-                {'store.set_property(id, '}
+                {");\n"}
+                {"store.set_property(id, "}
                 <span className={styles.codeString}>{'"name"'}</span>
-                {', '}
+                {", "}
                 <span className={styles.codeString}>{'"Alice"'}</span>
-                {');'}
+                {");"}
               </code>
             </pre>
           </div>
           <div className={styles.sdkCard}>
             <div className={styles.sdkHeader}>
-              <span className={`${styles.sdkLang} ${styles.sdkPython}`}>Py</span>
+              <span className={`${styles.sdkLang} ${styles.sdkPython}`}>
+                Py
+              </span>
               Python
             </div>
             <pre className={styles.sdkCode}>
               <code>
-                <span className={styles.codeComment}>{'# pip install graphmind'}</span>
-                {'\n'}
-                {'from graphmind import GraphmindClient\n'}
-                {'client = GraphmindClient('}
+                <span className={styles.codeComment}>
+                  {"# pip install graphmind"}
+                </span>
+                {"\n"}
+                {"from graphmind import GraphmindClient\n"}
+                {"client = GraphmindClient("}
                 <span className={styles.codeString}>{'"localhost:6379"'}</span>
-                {')\n'}
-                {'result = client.query('}
-                <span className={styles.codeString}>{'"MATCH (n) RETURN n"'}</span>
-                {')'}
+                {")\n"}
+                {"result = client.query("}
+                <span className={styles.codeString}>
+                  {'"MATCH (n) RETURN n"'}
+                </span>
+                {")"}
               </code>
             </pre>
           </div>
           <div className={styles.sdkCard}>
             <div className={styles.sdkHeader}>
-              <span className={`${styles.sdkLang} ${styles.sdkTypescript}`}>TS</span>
+              <span className={`${styles.sdkLang} ${styles.sdkTypescript}`}>
+                TS
+              </span>
               TypeScript
             </div>
             <pre className={styles.sdkCode}>
               <code>
-                <span className={styles.codeComment}>{'// npm install @graphmind/client'}</span>
-                {'\n'}
-                {'import { Graphmind } from '}
-                <span className={styles.codeString}>{'"@graphmind/client"'}</span>
-                {';\n'}
-                {'const gm = new Graphmind({ port: 8080 });\n'}
-                {'const res = await gm.query('}
-                <span className={styles.codeString}>{'"MATCH (n) RETURN n"'}</span>
-                {');'}
+                <span className={styles.codeComment}>
+                  {"// npm install @graphmind/client"}
+                </span>
+                {"\n"}
+                {"import { Graphmind } from "}
+                <span className={styles.codeString}>
+                  {'"@graphmind/client"'}
+                </span>
+                {";\n"}
+                {"const gm = new Graphmind({ port: 8080 });\n"}
+                {"const res = await gm.query("}
+                <span className={styles.codeString}>
+                  {'"MATCH (n) RETURN n"'}
+                </span>
+                {");"}
               </code>
             </pre>
           </div>
