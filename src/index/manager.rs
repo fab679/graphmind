@@ -39,6 +39,30 @@ impl IndexManager {
             .or_insert_with(|| Arc::new(RwLock::new(PropertyIndex::new())));
     }
 
+    /// Get all labels that have indexes or constraints defined
+    pub fn indexed_labels(&self) -> Vec<(Label, Vec<String>)> {
+        let mut label_props: std::collections::HashMap<Label, Vec<String>> =
+            std::collections::HashMap::new();
+
+        let indices = self.indices.read().unwrap();
+        for key in indices.keys() {
+            label_props
+                .entry(key.label.clone())
+                .or_default()
+                .push(key.property.clone());
+        }
+
+        let constraints = self.unique_constraints.read().unwrap();
+        for key in constraints.keys() {
+            let props = label_props.entry(key.label.clone()).or_default();
+            if !props.contains(&key.property) {
+                props.push(key.property.clone());
+            }
+        }
+
+        label_props.into_iter().collect()
+    }
+
     /// Drop an index
     pub fn drop_index(&self, label: &Label, property: &str) {
         let key = PropertyIndexKey {

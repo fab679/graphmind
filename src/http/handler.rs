@@ -376,7 +376,9 @@ pub async fn schema_handler(
 
     let stats = store_guard.compute_statistics();
     let mut node_types = Vec::new();
+    let mut seen_labels = std::collections::HashSet::new();
     for label in store_guard.all_labels() {
+        seen_labels.insert(label.as_str().to_string());
         let count = store_guard.label_node_count(label);
         let mut properties = BTreeMap::new();
         for (l, prop) in stats.property_stats.keys() {
@@ -404,6 +406,21 @@ pub async fn schema_handler(
             "count": count,
             "properties": properties,
         }));
+    }
+
+    // Include labels from indexes/constraints that have no nodes yet
+    for (label, props) in store_guard.property_index.indexed_labels() {
+        if !seen_labels.contains(label.as_str()) {
+            let mut properties = BTreeMap::new();
+            for prop in &props {
+                properties.insert(prop.clone(), "Indexed".to_string());
+            }
+            node_types.push(json!({
+                "label": label.as_str(),
+                "count": 0,
+                "properties": properties,
+            }));
+        }
     }
 
     let mut edge_types = Vec::new();
