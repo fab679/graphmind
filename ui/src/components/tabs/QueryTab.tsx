@@ -226,37 +226,74 @@ export function QueryTab() {
 
           {hasError && !isExecuting && (
             <div className="flex h-full items-center justify-center p-8">
-              <div className="max-w-md rounded-lg border border-destructive/30 bg-destructive/5 p-6 text-center">
-                <AlertCircle className="mx-auto mb-3 h-8 w-8 text-destructive" />
-                <h3 className="mb-2 font-semibold text-destructive">
-                  Query Error
-                </h3>
-                <p className="font-mono text-sm text-destructive/80">
-                  {error}
-                </p>
+              <div className="max-w-lg rounded-lg border border-destructive/30 bg-destructive/5 p-6">
+                <div className="flex items-start gap-3">
+                  <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-destructive" />
+                  <div className="min-w-0">
+                    <h3 className="mb-2 font-semibold text-destructive">Query Error</h3>
+                    {(() => {
+                      // Parse error message for better display
+                      let msg = error || "";
+                      try { const parsed = JSON.parse(msg); msg = parsed.error || msg; } catch { /* not JSON */ }
+
+                      // Extract error type and details
+                      const parseMatch = msg.match(/^(Parse error|Type error|Runtime error|Semantic error|Planning error|Variable not found|Constraint violation):\s*(.*)/s);
+                      if (parseMatch) {
+                        const [, errorType, details] = parseMatch;
+                        return (
+                          <div className="space-y-2">
+                            <span className="inline-block rounded bg-destructive/10 px-2 py-0.5 text-xs font-medium text-destructive">{errorType}</span>
+                            <pre className="whitespace-pre-wrap break-words rounded bg-background/50 p-3 font-mono text-xs text-foreground/80">{details.trim()}</pre>
+                          </div>
+                        );
+                      }
+                      return <pre className="whitespace-pre-wrap break-words rounded bg-background/50 p-3 font-mono text-xs text-foreground/80">{msg}</pre>;
+                    })()}
+                  </div>
+                </div>
               </div>
             </div>
           )}
 
           {writeSuccess && !isExecuting && (
             <div className="flex h-full items-center justify-center p-8">
-              <div className="max-w-sm rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-6 text-center">
-                <Check className="mx-auto mb-3 h-8 w-8 text-emerald-500" />
-                <h3 className="mb-1 font-semibold text-foreground">
-                  Query Executed
-                </h3>
+              <div className="max-w-sm rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-6">
+                <div className="flex items-start gap-3">
+                  <Check className="mt-0.5 h-5 w-5 shrink-0 text-emerald-500" />
+                  <div>
+                    <h3 className="mb-2 font-semibold text-foreground">Query Executed Successfully</h3>
                 {writeStats ? (
-                  <div className="text-sm text-muted-foreground space-y-0.5">
-                    {writeStats.nodes_created > 0 && <p>Created {writeStats.nodes_created} node{writeStats.nodes_created !== 1 ? 's' : ''}</p>}
-                    {writeStats.edges_created > 0 && <p>Created {writeStats.edges_created} relationship{writeStats.edges_created !== 1 ? 's' : ''}</p>}
-                    {writeStats.nodes_deleted > 0 && <p>Deleted {writeStats.nodes_deleted} node{writeStats.nodes_deleted !== 1 ? 's' : ''}</p>}
-                    {writeStats.edges_deleted > 0 && <p>Deleted {writeStats.edges_deleted} relationship{writeStats.edges_deleted !== 1 ? 's' : ''}</p>}
-                    {writeStats.nodes_created === 0 && writeStats.edges_created === 0 && writeStats.nodes_deleted === 0 && writeStats.edges_deleted === 0 && (
-                      <p>No changes made</p>
+                  <div className="space-y-1.5 text-sm">
+                    {writeStats.nodes_created > 0 && (
+                      <div className="flex items-center gap-2">
+                        <span className="inline-block h-2 w-2 rounded-full bg-emerald-500" />
+                        <span className="text-foreground">Created <strong>{writeStats.nodes_created}</strong> node{writeStats.nodes_created !== 1 ? 's' : ''}</span>
+                      </div>
                     )}
-                    <p className="text-[10px] mt-1 opacity-60">
-                      Total: {writeStats.total_nodes} nodes, {writeStats.total_edges} edges
-                    </p>
+                    {writeStats.edges_created > 0 && (
+                      <div className="flex items-center gap-2">
+                        <span className="inline-block h-2 w-2 rounded-full bg-emerald-500" />
+                        <span className="text-foreground">Created <strong>{writeStats.edges_created}</strong> relationship{writeStats.edges_created !== 1 ? 's' : ''}</span>
+                      </div>
+                    )}
+                    {writeStats.nodes_deleted > 0 && (
+                      <div className="flex items-center gap-2">
+                        <span className="inline-block h-2 w-2 rounded-full bg-red-400" />
+                        <span className="text-foreground">Deleted <strong>{writeStats.nodes_deleted}</strong> node{writeStats.nodes_deleted !== 1 ? 's' : ''}</span>
+                      </div>
+                    )}
+                    {writeStats.edges_deleted > 0 && (
+                      <div className="flex items-center gap-2">
+                        <span className="inline-block h-2 w-2 rounded-full bg-red-400" />
+                        <span className="text-foreground">Deleted <strong>{writeStats.edges_deleted}</strong> relationship{writeStats.edges_deleted !== 1 ? 's' : ''}</span>
+                      </div>
+                    )}
+                    {writeStats.nodes_created === 0 && writeStats.edges_created === 0 && writeStats.nodes_deleted === 0 && writeStats.edges_deleted === 0 && (
+                      <p className="text-muted-foreground">No changes made</p>
+                    )}
+                    <div className="mt-2 rounded bg-background/50 px-3 py-1.5 text-xs text-muted-foreground">
+                      Database: <strong>{writeStats.total_nodes}</strong> nodes, <strong>{writeStats.total_edges}</strong> relationships
+                    </div>
                   </div>
                 ) : (
                   <p className="text-sm text-muted-foreground">
@@ -264,6 +301,8 @@ export function QueryTab() {
                     {useUiStore.getState().edgeCount} edges in database
                   </p>
                 )}
+                  </div>
+                </div>
               </div>
             </div>
           )}
