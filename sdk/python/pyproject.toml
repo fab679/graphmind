@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "graphmind"
-version = "0.7.0"
+version = "0.8.0b1"
 description = "Python SDK for the Graphmind Graph Database — embedded and remote modes"
 readme = {file = "README.md", content-type = "text/markdown"}
 requires-python = ">=3.8"
