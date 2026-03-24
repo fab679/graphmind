@@ -1,6 +1,6 @@
 [package]
 name = "graphmind-optimization"
-version = "0.8.0-beta"
+version = "0.8.0"
 edition = "2021"
 authors = ["Sandeep Kunkunuru <team@graphmind.dev>"]
 description = "High-performance metaheuristic optimization algorithms (Jaya, Rao, TLBO, BMR, BWR, QOJaya, ITLBO) in Rust."

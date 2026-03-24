@@ -231,6 +231,6 @@ mod tests {
     fn test_version() {
         let ver = version();
         assert!(!ver.is_empty());
-        assert_eq!(ver, "0.8.0-beta");
+        assert_eq!(ver, "0.8.0");
     }
 }

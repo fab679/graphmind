@@ -270,7 +270,7 @@ print(f"Executed {len(results)} statements")
 
 ```python
 status = client.status()
-print(status.version)  # e.g. "0.8.0-beta"
+print(status.version)  # e.g. "0.8.0"
 ```
 
 ## Multi-tenancy

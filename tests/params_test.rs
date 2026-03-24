@@ -243,3 +243,99 @@ fn test_escaped_quotes_in_strings() {
     };
     assert!(text.contains("\"hello\""));
 }
+
+#[test]
+fn test_params_in_merge_property_map() {
+    // This is the exact pattern from the TMDB import notebook:
+    // MERGE (t:TVShow {id: $id}) SET t.name = $name ...
+    let mut store = GraphStore::new();
+    let engine = QueryEngine::new();
+
+    let mut params = HashMap::new();
+    params.insert("id".to_string(), PropertyValue::Integer(1399));
+    params.insert(
+        "name".to_string(),
+        PropertyValue::String("Game of Thrones".to_string()),
+    );
+    params.insert("seasons".to_string(), PropertyValue::Integer(8));
+
+    let q = r#"MERGE (t:TVShow {id: $id}) SET t.name = $name, t.seasons = $seasons"#;
+    engine
+        .execute_mut_with_params(q, &mut store, "default", &params)
+        .unwrap();
+
+    let shows = store.get_nodes_by_label(&Label::new("TVShow"));
+    assert_eq!(shows.len(), 1, "Should create 1 TVShow node");
+    assert_eq!(
+        shows[0].properties.get("id"),
+        Some(&PropertyValue::Integer(1399))
+    );
+    assert_eq!(
+        shows[0].properties.get("name"),
+        Some(&PropertyValue::String("Game of Thrones".to_string()))
+    );
+    assert_eq!(
+        shows[0].properties.get("seasons"),
+        Some(&PropertyValue::Integer(8))
+    );
+
+    // Run again — MERGE should be idempotent
+    engine
+        .execute_mut_with_params(q, &mut store, "default", &params)
+        .unwrap();
+    let shows2 = store.get_nodes_by_label(&Label::new("TVShow"));
+    assert_eq!(shows2.len(), 1, "MERGE should not create duplicate");
+}
+
+#[test]
+fn test_params_in_create_property_map() {
+    let mut store = GraphStore::new();
+    let engine = QueryEngine::new();
+
+    let mut params = HashMap::new();
+    params.insert(
+        "name".to_string(),
+        PropertyValue::String("Alice".to_string()),
+    );
+    params.insert("age".to_string(), PropertyValue::Integer(30));
+
+    let q = r#"CREATE (p:Person {name: $name, age: $age})"#;
+    engine
+        .execute_mut_with_params(q, &mut store, "default", &params)
+        .unwrap();
+
+    let people = store.get_nodes_by_label(&Label::new("Person"));
+    assert_eq!(people.len(), 1);
+    assert_eq!(
+        people[0].properties.get("name"),
+        Some(&PropertyValue::String("Alice".to_string()))
+    );
+    assert_eq!(
+        people[0].properties.get("age"),
+        Some(&PropertyValue::Integer(30))
+    );
+}
+
+#[test]
+fn test_params_in_match_property_map() {
+    let mut store = GraphStore::new();
+    let engine = QueryEngine::new();
+
+    engine
+        .execute_mut(
+            r#"CREATE (a:Person {name: "Alice", age: 30})"#,
+            &mut store,
+            "default",
+        )
+        .unwrap();
+
+    let mut params = HashMap::new();
+    params.insert(
+        "name".to_string(),
+        PropertyValue::String("Alice".to_string()),
+    );
+
+    let q = r#"MATCH (p:Person {name: $name}) RETURN p.age"#;
+    let result = engine.execute_with_params(q, &store, &params).unwrap();
+    assert_eq!(result.records.len(), 1, "Should find Alice by param");
+}

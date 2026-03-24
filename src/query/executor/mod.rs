@@ -420,11 +420,80 @@ impl<'a> MutQueryExecutor<'a> {
 }
 
 /// Substitute Expression::Parameter references with Expression::Literal values from the params map.
+fn substitute_pattern_nodes(
+    paths: &mut [crate::query::ast::PathPattern],
+    params: &HashMap<String, crate::graph::PropertyValue>,
+) -> ExecutionResult<()> {
+    for path in paths.iter_mut() {
+        // Substitute in start node expression_properties
+        substitute_pattern_node_props(&mut path.start, params)?;
+        // Substitute in segment nodes
+        for seg in &mut path.segments {
+            substitute_pattern_node_props(&mut seg.node, params)?;
+        }
+    }
+    Ok(())
+}
+
+fn substitute_pattern_node_props(
+    node: &mut crate::query::ast::NodePattern,
+    params: &HashMap<String, crate::graph::PropertyValue>,
+) -> ExecutionResult<()> {
+    // Substitute expression_properties that contain Parameter expressions
+    let mut resolved_static: Vec<(String, crate::graph::PropertyValue)> = Vec::new();
+    let mut remaining: Vec<(String, crate::query::ast::Expression)> = Vec::new();
+
+    for (key, mut expr) in node.expression_properties.drain(..) {
+        if let crate::query::ast::Expression::Parameter(ref name) = expr {
+            if let Some(val) = params.get(name.as_str()) {
+                resolved_static.push((key, val.clone()));
+            } else {
+                return Err(ExecutionError::RuntimeError(format!(
+                    "Unresolved parameter: ${}",
+                    name
+                )));
+            }
+        } else {
+            substitute_expr(&mut expr, params)?;
+            remaining.push((key, expr));
+        }
+    }
+    // Move resolved params to static properties
+    if !resolved_static.is_empty() {
+        let props = node
+            .properties
+            .get_or_insert_with(HashMap::<String, crate::graph::PropertyValue>::new);
+        for (k, v) in resolved_static {
+            props.insert(k, v);
+        }
+    }
+    node.expression_properties = remaining;
+    Ok(())
+}
+
 fn substitute_params(
     query: &mut Query,
     params: &HashMap<String, crate::graph::PropertyValue>,
 ) -> ExecutionResult<()> {
-    // Recursively substitute in WHERE clause
+    // Substitute in MATCH clause pattern nodes (e.g., MATCH (n:Person {id: $id}))
+    for mc in &mut query.match_clauses {
+        substitute_pattern_nodes(&mut mc.pattern.paths, params)?;
+    }
+    // Substitute in CREATE clause patterns
+    if let Some(cc) = &mut query.create_clause {
+        substitute_pattern_nodes(&mut cc.pattern.paths, params)?;
+    }
+    for cc in &mut query.create_clauses {
+        substitute_pattern_nodes(&mut cc.pattern.paths, params)?;
+    }
+    // Substitute in MERGE clause pattern
+    if let Some(mc) = &mut query.merge_clause {
+        substitute_pattern_nodes(&mut mc.pattern.paths, params)?;
+    }
+    for mc in &mut query.all_merge_clauses {
+        substitute_pattern_nodes(&mut mc.pattern.paths, params)?;
+    }
+    // Substitute in WHERE clause
     if let Some(wc) = &mut query.where_clause {
         substitute_expr(&mut wc.predicate, params)?;
     }
@@ -453,6 +522,34 @@ fn substitute_params(
     for sc in &mut query.set_clauses {
         for item in &mut sc.items {
             substitute_expr(&mut item.value, params)?;
+        }
+    }
+    // Substitute in UNWIND expression
+    if let Some(uw) = &mut query.unwind_clause {
+        substitute_expr(&mut uw.expression, params)?;
+    }
+    // Substitute in multi-part stages
+    for stage in &mut query.multi_part_stages {
+        for cc in &mut stage.create_clauses {
+            substitute_pattern_nodes(&mut cc.pattern.paths, params)?;
+        }
+        for mc in &mut stage.merge_clauses {
+            substitute_pattern_nodes(&mut mc.pattern.paths, params)?;
+        }
+        for sc in &mut stage.set_clauses {
+            for item in &mut sc.items {
+                substitute_expr(&mut item.value, params)?;
+            }
+        }
+        for uw in &mut stage.unwind_clauses {
+            substitute_expr(&mut uw.expression, params)?;
+        }
+        // WITH clause in stage
+        for item in &mut stage.with_clause.items {
+            substitute_expr(&mut item.expression, params)?;
+        }
+        if let Some(wc) = &mut stage.with_clause.where_clause {
+            substitute_expr(&mut wc.predicate, params)?;
         }
     }
     Ok(())
