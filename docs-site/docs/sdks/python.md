@@ -73,8 +73,8 @@ print(result.records[0][0])  # total node count
 |--------|-------------|
 | `GraphmindClient.embedded()` | Create an in-process client |
 | `GraphmindClient.connect(url)` | Connect to a remote server |
-| `query(cypher, graph="default")` | Execute a read/write query |
-| `query_readonly(cypher, graph="default")` | Execute a read-only query |
+| `query(cypher, graph="default", params=None)` | Execute a read/write query |
+| `query_readonly(cypher, graph="default", params=None)` | Execute a read-only query |
 | `explain(cypher, graph="default")` | Show execution plan |
 | `profile(cypher, graph="default")` | Execute with profiling stats |
 | `execute_script(script, graph="default")` | Run multi-statement script |
@@ -92,6 +92,47 @@ print(result.records[0][0])  # total node count
 | `records` | `list[list]` | Row data (native Python types) |
 | `nodes` | `list[dict]` | Nodes with `id`, `labels`, `properties` |
 | `edges` | `list[dict]` | Edges with `id`, `source`, `target`, `type`, `properties` |
+
+## Query Parameters
+
+Use parameterized queries to safely pass dynamic values. Parameters prevent injection and are ideal for strings with special characters (quotes, semicolons).
+
+```python
+# Pass parameters as a dict
+result = client.query_readonly(
+    "MATCH (p:Person) WHERE p.name = $name AND p.age > $minAge RETURN p.name, p.age",
+    params={"name": "Alice", "minAge": 25}
+)
+
+for row in result.records:
+    print(f"{row[0]} is {row[1]} years old")
+```
+
+### Write queries with parameters
+
+```python
+client.query(
+    "MERGE (p:Person {name: $name}) SET p.age = $age, p.bio = $bio",
+    params={
+        "name": "Carol",
+        "age": 28,
+        "bio": 'She said "hello" and it\'s fine — special chars work!'
+    }
+)
+```
+
+### Supported parameter types
+
+| Python type | Cypher type |
+|-------------|-------------|
+| `str` | String |
+| `int` | Integer |
+| `float` | Float |
+| `bool` | Boolean |
+| `None` | Null |
+| `list` | Array |
+
+Parameters work in both embedded and remote mode.
 
 ## CRUD Operations
 
@@ -229,7 +270,7 @@ print(f"Executed {len(results)} statements")
 
 ```python
 status = client.status()
-print(status.version)  # e.g. "0.7.0-beta"
+print(status.version)  # e.g. "0.8.0-beta"
 ```
 
 ## Multi-tenancy

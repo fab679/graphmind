@@ -1021,7 +1021,7 @@ checksum = "0cc23270f6e1808e30a928bdc84dea0b9b4136a8bc82338574f23baf47bbd280"
 
 [[package]]
 name = "graphmind"
-version = "0.7.0"
+version = "0.8.0-beta"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1075,7 +1075,7 @@ dependencies = [
 
 [[package]]
 name = "graphmind-cli"
-version = "0.7.0"
+version = "0.8.0-beta"
 dependencies = [
  "clap",
  "comfy-table",
@@ -1086,7 +1086,7 @@ dependencies = [
 
 [[package]]
 name = "graphmind-graph-algorithms"
-version = "0.7.0"
+version = "0.8.0-beta"
 dependencies = [
  "ndarray",
  "rand 0.8.5",
@@ -1095,7 +1095,7 @@ dependencies = [
 
 [[package]]
 name = "graphmind-optimization"
-version = "0.7.0"
+version = "0.8.0-beta"
 dependencies = [
  "criterion",
  "ndarray",
@@ -1108,7 +1108,7 @@ dependencies = [
 
 [[package]]
 name = "graphmind-sdk"
-version = "0.7.0"
+version = "0.8.0-beta"
 dependencies = [
  "async-trait",
  "graphmind",

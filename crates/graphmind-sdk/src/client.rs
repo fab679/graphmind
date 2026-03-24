@@ -1,5 +1,7 @@
 //! GraphmindClient trait — the unified interface for embedded and remote modes
 
+use std::collections::HashMap;
+
 use crate::error::GraphmindResult;
 use crate::models::{QueryResult, ServerStatus};
 use async_trait::async_trait;
@@ -13,6 +15,14 @@ use async_trait::async_trait;
 pub trait GraphmindClient: Send + Sync {
     /// Execute a read-write Cypher query
     async fn query(&self, graph: &str, cypher: &str) -> GraphmindResult<QueryResult>;
+
+    /// Execute a read-write Cypher query with parameters
+    async fn query_with_params(
+        &self,
+        graph: &str,
+        cypher: &str,
+        params: HashMap<String, serde_json::Value>,
+    ) -> GraphmindResult<QueryResult>;
 
     /// Execute a read-only Cypher query
     async fn query_readonly(&self, graph: &str, cypher: &str) -> GraphmindResult<QueryResult>;

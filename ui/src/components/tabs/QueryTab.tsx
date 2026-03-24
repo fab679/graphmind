@@ -12,8 +12,10 @@ import {
 import { CypherEditor } from "@/components/editor/CypherEditor";
 import { ForceGraph } from "@/components/graph/ForceGraph";
 import { ResultsTable } from "@/components/results/ResultsTable";
+import { ExplainPlan } from "@/components/results/ExplainPlan";
 import { PropertyInspector } from "@/components/inspector/PropertyInspector";
 import { SavedQueries } from "@/components/editor/SavedQueries";
+import { ParamsPanel } from "@/components/editor/ParamsPanel";
 import { useQueryStore } from "@/stores/queryStore";
 import { useGraphStore } from "@/stores/graphStore";
 import { useUiStore } from "@/stores/uiStore";
@@ -27,9 +29,19 @@ interface ScriptResult {
   errors: string[];
 }
 
+/** Format a duration in ms to the most readable unit */
+function formatDuration(ms: number): string {
+  if (ms < 0.001) return `${(ms * 1_000_000).toFixed(0)} ns`;
+  if (ms < 1) return `${(ms * 1_000).toFixed(1)} \u00B5s`;
+  if (ms < 1000) return `${ms < 10 ? ms.toFixed(2) : ms.toFixed(1)} ms`;
+  return `${(ms / 1000).toFixed(2)} s`;
+}
+
 export function QueryTab() {
   const currentQuery = useQueryStore((s) => s.currentQuery);
+  const currentParams = useQueryStore((s) => s.currentParams);
   const setQuery = useQueryStore((s) => s.setQuery);
+  const setParams = useQueryStore((s) => s.setParams);
   const executeQuery = useQueryStore((s) => s.executeQuery);
   const isExecuting = useQueryStore((s) => s.isExecuting);
   const error = useQueryStore((s) => s.error);
@@ -45,6 +57,7 @@ export function QueryTab() {
   const [editorHeight, setEditorHeight] = useState(200);
   const [showHistory, setShowHistory] = useState(false);
   const [showSaved, setShowSaved] = useState(false);
+  const [showParams, setShowParams] = useState(false);
   const [forceView, setForceView] = useState<'auto' | 'graph' | 'table'>('auto');
   const [scriptResult, setScriptResult] = useState<ScriptResult | null>(null);
   const [lastExecutedQuery, setLastExecutedQuery] = useState("");
@@ -52,6 +65,7 @@ export function QueryTab() {
   // Determine result type
   const hasGraphResult = nodes.length > 0;
   const hasTableResult = columns.length > 0 && records.length > 0;
+  const isExplainResult = columns.length === 1 && columns[0] === "plan" && records.length === 1 && typeof records[0]?.[0] === "string";
   const isWriteQuery = /\b(CREATE|DELETE|SET|MERGE|REMOVE|DETACH)\b/.test(
     lastExecutedQuery.toUpperCase(),
   );
@@ -152,7 +166,7 @@ export function QueryTab() {
 
         {history.length > 0 && !isExecuting && (records.length > 0 || columns.length > 0 || nodes.length > 0) && (
           <span className="text-xs text-muted-foreground">
-            {history[0].rowCount} rows &bull; {history[0].duration < 1000 ? `${history[0].duration}ms` : `${(history[0].duration / 1000).toFixed(1)}s`}
+            {history[0].rowCount} rows &bull; {formatDuration(history[0].duration)}
           </span>
         )}
 
@@ -212,7 +226,29 @@ export function QueryTab() {
           <Bookmark className="h-3 w-3" />
           Saved
         </button>
+
+        <button
+          onClick={() => setShowParams(!showParams)}
+          className={cn(
+            "flex items-center gap-1 rounded-md px-2 py-1 text-xs transition-colors font-mono",
+            showParams
+              ? "bg-accent text-foreground"
+              : "text-muted-foreground hover:bg-accent hover:text-foreground",
+          )}
+          title="Query parameters (JSON)"
+        >
+          {"${}"}
+          Params
+        </button>
       </div>
+
+      {/* Parameters panel */}
+      {showParams && (
+        <ParamsPanel
+          value={currentParams}
+          onChange={setParams}
+        />
+      )}
 
       {/* Results area */}
       <div className="flex min-h-0 flex-1 overflow-hidden">
@@ -318,49 +354,78 @@ export function QueryTab() {
             !hasError &&
             !isExecuting &&
             hasTableResult && (
-              <div className="h-full overflow-auto p-2">
-                <ResultsTable />
-              </div>
+              isExplainResult ? (
+                <div className="h-full overflow-auto">
+                  <ExplainPlan planText={records[0][0] as string} />
+                </div>
+              ) : (
+                <div className="h-full overflow-auto p-2">
+                  <ResultsTable />
+                </div>
+              )
             )}
 
           {scriptResult && !isExecuting && (
-            <div className="absolute left-3 top-3 z-10 max-w-sm">
+            <div className="flex h-full items-center justify-center p-8">
               <div
                 className={cn(
-                  "rounded-lg border p-4 shadow-md",
+                  "w-full max-w-lg rounded-lg border p-6 shadow-md",
                   scriptResult.success
-                    ? "border-emerald-500/30 bg-emerald-500/10"
-                    : "border-destructive/30 bg-destructive/10",
+                    ? "border-emerald-500/30 bg-emerald-500/5"
+                    : "border-destructive/30 bg-destructive/5",
                 )}
               >
-                <div className="mb-1 flex items-center justify-between gap-3">
+                <div className="mb-3 flex items-start justify-between gap-3">
                   <div className="flex items-center gap-2">
                     {scriptResult.success ? (
-                      <Check className="h-4 w-4 text-emerald-500" />
+                      <Check className="mt-0.5 h-5 w-5 shrink-0 text-emerald-500" />
                     ) : (
-                      <AlertCircle className="h-4 w-4 text-destructive" />
+                      <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-destructive" />
                     )}
-                    <span className="text-sm font-medium text-foreground">
-                      {scriptResult.success
-                        ? `Script executed: ${scriptResult.executed} statements`
-                        : `Script partially failed: ${scriptResult.executed} succeeded`}
-                    </span>
+                    <div>
+                      <h3 className="font-semibold text-foreground">
+                        {scriptResult.success ? "Script Executed" : "Script Failed"}
+                      </h3>
+                      <p className="text-sm text-muted-foreground">
+                        {scriptResult.success
+                          ? `${scriptResult.executed} statement${scriptResult.executed !== 1 ? "s" : ""} executed successfully`
+                          : `${scriptResult.executed} succeeded, ${scriptResult.errors.length} failed`}
+                      </p>
+                    </div>
                   </div>
                   <button
                     onClick={() => setScriptResult(null)}
-                    className="text-muted-foreground hover:text-foreground"
+                    className="shrink-0 rounded-md p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
                   >
-                    <X className="h-3.5 w-3.5" />
+                    <X className="h-4 w-4" />
                   </button>
                 </div>
                 {scriptResult.errors.length > 0 && (
-                  <ul className="mt-2 space-y-1">
-                    {scriptResult.errors.map((err, i) => (
-                      <li key={i} className="font-mono text-xs text-destructive/80">
-                        {err}
-                      </li>
-                    ))}
-                  </ul>
+                  <div className="max-h-60 overflow-auto rounded-md bg-background/50 p-3">
+                    <ul className="space-y-2">
+                      {scriptResult.errors.map((err, i) => {
+                        const parseMatch = err.match(/^(Statement \d+): (.+)/s);
+                        return (
+                          <li key={i}>
+                            {parseMatch ? (
+                              <div>
+                                <span className="text-[10px] font-semibold text-destructive">
+                                  {parseMatch[1]}
+                                </span>
+                                <pre className="mt-0.5 whitespace-pre-wrap break-words font-mono text-xs text-foreground/70">
+                                  {parseMatch[2]}
+                                </pre>
+                              </div>
+                            ) : (
+                              <pre className="whitespace-pre-wrap break-words font-mono text-xs text-destructive/80">
+                                {err}
+                              </pre>
+                            )}
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </div>
                 )}
               </div>
             </div>
@@ -446,7 +511,7 @@ function HistoryPanel() {
               {entry.rowCount} rows
             </span>
             <span className="text-[10px] text-muted-foreground">
-              {entry.duration}ms
+              {formatDuration(entry.duration)}
             </span>
             <button
               className="ml-auto text-[10px] text-primary opacity-0 group-hover:opacity-100"

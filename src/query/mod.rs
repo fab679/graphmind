@@ -74,6 +74,7 @@ pub mod executor;
 pub mod parser;
 
 use lru::LruCache;
+use std::collections::HashMap;
 use std::num::NonZeroUsize;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
@@ -195,7 +196,7 @@ impl QueryEngine {
     /// Returns individual statement strings (trimmed, non-empty).
     /// Strip `// ...` line comments (not inside strings).
     /// Returns a new string with comments removed.
-    fn strip_line_comments(input: &str) -> String {
+    pub fn strip_line_comments(input: &str) -> String {
         let mut result = String::with_capacity(input.len());
         let mut in_single = false;
         let mut in_double = false;
@@ -241,7 +242,7 @@ impl QueryEngine {
         result
     }
 
-    fn split_statements(input: &str) -> Vec<&str> {
+    pub fn split_statements(input: &str) -> Vec<&str> {
         let mut statements = Vec::new();
         let mut start = 0;
         let mut in_single_quote = false;
@@ -522,6 +523,16 @@ impl QueryEngine {
         query_str: &str,
         store: &crate::graph::GraphStore,
     ) -> Result<RecordBatch, Box<dyn std::error::Error>> {
+        self.execute_with_params(query_str, store, &HashMap::new())
+    }
+
+    /// Execute a read-only query with parameters
+    pub fn execute_with_params(
+        &self,
+        query_str: &str,
+        store: &crate::graph::GraphStore,
+        params: &HashMap<String, crate::graph::PropertyValue>,
+    ) -> Result<RecordBatch, Box<dyn std::error::Error>> {
         let cleaned = Self::strip_line_comments(query_str);
         let statements = Self::split_statements(&cleaned);
         let mut last_result = RecordBatch {
@@ -532,6 +543,9 @@ impl QueryEngine {
         for stmt in &statements {
             let query = self.cached_parse(stmt)?;
             let mut executor = QueryExecutor::new(store);
+            if !params.is_empty() {
+                executor = executor.with_params(params.clone());
+            }
             if self.query_timeout_secs > 0 {
                 executor = executor.with_deadline(
                     std::time::Instant::now()
@@ -554,6 +568,17 @@ impl QueryEngine {
         store: &mut crate::graph::GraphStore,
         tenant_id: &str,
     ) -> Result<RecordBatch, Box<dyn std::error::Error>> {
+        self.execute_mut_with_params(query_str, store, tenant_id, &HashMap::new())
+    }
+
+    /// Execute a write query with parameters
+    pub fn execute_mut_with_params(
+        &self,
+        query_str: &str,
+        store: &mut crate::graph::GraphStore,
+        tenant_id: &str,
+        params: &HashMap<String, crate::graph::PropertyValue>,
+    ) -> Result<RecordBatch, Box<dyn std::error::Error>> {
         let cleaned = Self::strip_line_comments(query_str);
         let statements = Self::split_statements(&cleaned);
         let mut last_result = RecordBatch {
@@ -570,6 +595,9 @@ impl QueryEngine {
                 for create_stmt in &expanded {
                     let query = self.cached_parse(create_stmt)?;
                     let mut executor = MutQueryExecutor::new(store, tenant_id.to_string());
+                    if !params.is_empty() {
+                        executor = executor.with_params(params.clone());
+                    }
                     last_result = executor.execute(&query)?;
                 }
                 continue;
@@ -577,6 +605,9 @@ impl QueryEngine {
 
             let query = self.cached_parse(&rewritten)?;
             let mut executor = MutQueryExecutor::new(store, tenant_id.to_string());
+            if !params.is_empty() {
+                executor = executor.with_params(params.clone());
+            }
             last_result = executor.execute(&query)?;
         }
 

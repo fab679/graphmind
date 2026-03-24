@@ -117,8 +117,10 @@ pub struct Query {
     pub unwind_clause: Option<UnwindClause>,
     /// Additional UNWIND clauses (for consecutive UNWINDs)
     pub additional_unwinds: Vec<UnwindClause>,
-    /// MERGE clause (optional)
+    /// MERGE clause (optional, first one for backward compat)
     pub merge_clause: Option<MergeClause>,
+    /// All MERGE clauses (for multi-MERGE queries)
+    pub all_merge_clauses: Vec<MergeClause>,
     /// UNION queries (chained via UNION/UNION ALL)
     pub union_queries: Vec<(Query, bool)>, // (query, is_union_all)
     /// EXPLAIN clause (optional)
@@ -262,8 +264,10 @@ pub struct NodePattern {
     pub variable: Option<String>,
     /// Labels (e.g., ["Person", "Employee"])
     pub labels: Vec<Label>,
-    /// Property constraints
+    /// Property constraints (static values)
     pub properties: Option<HashMap<String, PropertyValue>>,
+    /// Expression properties that need runtime evaluation (e.g., {name: varName})
+    pub expression_properties: Vec<(String, Expression)>,
 }
 
 /// Edge pattern: -[:KNOWS|FOLLOWS*1..5]->
@@ -651,6 +655,7 @@ impl Query {
             unwind_clause: None,
             additional_unwinds: Vec::new(),
             merge_clause: None,
+            all_merge_clauses: Vec::new(),
             union_queries: Vec::new(),
             explain: false,
             with_split_index: None,
@@ -682,6 +687,7 @@ mod tests {
             variable: Some("n".to_string()),
             labels: vec![Label::new("Person")],
             properties: None,
+            expression_properties: Vec::new(),
         };
         assert_eq!(pattern.variable, Some("n".to_string()));
         assert_eq!(pattern.labels.len(), 1);

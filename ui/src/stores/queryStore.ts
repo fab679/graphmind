@@ -29,6 +29,7 @@ export interface WriteStats {
 
 interface QueryState {
   currentQuery: string;
+  currentParams: string;
   isExecuting: boolean;
   columns: string[];
   records: unknown[][];
@@ -38,6 +39,7 @@ interface QueryState {
   writeStats: WriteStats | null;
 
   setQuery: (query: string) => void;
+  setParams: (params: string) => void;
   executeQuery: (query?: string, graph?: string) => Promise<void>;
   clearResults: () => void;
   clearHistory: () => void;
@@ -52,6 +54,7 @@ export const useQueryStore = create<QueryState>()(
   persist(
     (set, get) => ({
       currentQuery: "",
+      currentParams: "",
       isExecuting: false,
       columns: [],
       writeStats: null,
@@ -61,6 +64,7 @@ export const useQueryStore = create<QueryState>()(
       savedQueries: [],
 
       setQuery: (query) => set({ currentQuery: query }),
+      setParams: (params) => set({ currentParams: params }),
 
       executeQuery: async (query?: string, graph?: string) => {
         const q = query ?? get().currentQuery;
@@ -71,8 +75,21 @@ export const useQueryStore = create<QueryState>()(
 
         try {
           const activeGraph = graph ?? useUiStore.getState().activeGraph;
-          const response = await apiExecuteQuery(q, activeGraph);
-          const duration = Math.round(performance.now() - start);
+
+          // Parse params JSON if provided
+          let parsedParams: Record<string, unknown> | undefined;
+          const paramsStr = get().currentParams.trim();
+          if (paramsStr) {
+            try {
+              parsedParams = JSON.parse(paramsStr);
+            } catch {
+              set({ error: "Invalid parameters JSON: " + paramsStr, isExecuting: false });
+              return;
+            }
+          }
+
+          const response = await apiExecuteQuery(q, activeGraph, parsedParams);
+          const clientDuration = performance.now() - start;
 
           if (response.error) {
             set({ error: response.error, isExecuting: false });
@@ -81,6 +98,11 @@ export const useQueryStore = create<QueryState>()(
 
           const { setGraphData } = useGraphStore.getState();
           setGraphData(response.nodes, response.edges);
+
+          // Use server-side duration_ms (pure execution time) when available,
+          // fall back to client-side measurement (includes network)
+          const serverDuration = (response as unknown as Record<string, unknown>).duration_ms as number | undefined;
+          const duration = serverDuration ?? clientDuration;
 
           const entry: HistoryEntry = {
             query: q,

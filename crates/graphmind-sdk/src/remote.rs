@@ -5,6 +5,8 @@
 use async_trait::async_trait;
 use reqwest::Client;
 
+use std::collections::HashMap;
+
 use crate::client::GraphmindClient;
 use crate::error::{GraphmindError, GraphmindResult};
 use crate::models::{QueryResult, ServerStatus};
@@ -34,8 +36,22 @@ impl RemoteClient {
 
     /// Execute a POST request to /api/query
     async fn post_query(&self, graph: &str, cypher: &str) -> GraphmindResult<QueryResult> {
+        self.post_query_with_params(graph, cypher, None).await
+    }
+
+    /// Execute a POST request to /api/query with optional parameters
+    async fn post_query_with_params(
+        &self,
+        graph: &str,
+        cypher: &str,
+        params: Option<HashMap<String, serde_json::Value>>,
+    ) -> GraphmindResult<QueryResult> {
         let url = format!("{}/api/query", self.http_base_url);
-        let body = serde_json::json!({ "query": cypher, "graph": graph });
+        let mut body = serde_json::json!({ "query": cypher, "graph": graph });
+        if let Some(p) = params {
+            body["params"] = serde_json::to_value(p)
+                .unwrap_or_else(|_| serde_json::Value::Object(serde_json::Map::new()));
+        }
 
         let response = self.http_client.post(&url).json(&body).send().await?;
 
@@ -61,6 +77,16 @@ impl RemoteClient {
 impl GraphmindClient for RemoteClient {
     async fn query(&self, graph: &str, cypher: &str) -> GraphmindResult<QueryResult> {
         self.post_query(graph, cypher).await
+    }
+
+    async fn query_with_params(
+        &self,
+        graph: &str,
+        cypher: &str,
+        params: HashMap<String, serde_json::Value>,
+    ) -> GraphmindResult<QueryResult> {
+        self.post_query_with_params(graph, cypher, Some(params))
+            .await
     }
 
     async fn query_readonly(&self, graph: &str, cypher: &str) -> GraphmindResult<QueryResult> {

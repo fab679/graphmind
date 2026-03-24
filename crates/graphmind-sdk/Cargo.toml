@@ -1,6 +1,6 @@
 [package]
 name = "graphmind-sdk"
-version = "0.7.0"
+version = "0.8.0-beta"
 edition = "2021"
 authors = ["Graphmind Team"]
 description = "Client SDK for Graphmind Graph Database — embedded and remote modes"
@@ -25,13 +25,13 @@ reqwest = { version = "0.13.1", features = ["json"] }
 thiserror = "1.0"
 
 # Core graph database (for EmbeddedClient)
-graphmind = { path = "../..", version = "0.7.0" }
+graphmind = { path = "../..", version = "0.8.0-beta" }
 
 # Graph algorithms (for AlgorithmClient)
-graphmind-graph-algorithms = { path = "../graphmind-graph-algorithms", version = "0.7.0" }
+graphmind-graph-algorithms = { path = "../graphmind-graph-algorithms", version = "0.8.0-beta" }
 
 # Optimization engine (re-exported for examples)
-graphmind-optimization = { path = "../graphmind-optimization", version = "0.7.0" }
+graphmind-optimization = { path = "../graphmind-optimization", version = "0.8.0-beta" }
 
 # Numeric arrays (re-exported for optimization problems)
 ndarray = "0.15"

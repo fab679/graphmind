@@ -136,10 +136,15 @@ export async function login(
 export async function executeQuery(
   query: string,
   graph?: string,
+  params?: Record<string, unknown>,
 ): Promise<QueryResponse> {
+  const body: Record<string, unknown> = { query, graph };
+  if (params && Object.keys(params).length > 0) {
+    body.params = params;
+  }
   return request<QueryResponse>("/api/query", {
     method: "POST",
-    body: JSON.stringify({ query, graph }),
+    body: JSON.stringify(body),
   });
 }
 

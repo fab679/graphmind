@@ -13,30 +13,30 @@ Download the latest release for your platform from [GitHub Releases](https://git
 ### Linux (x86_64)
 
 ```bash
-curl -LO https://github.com/fab679/graphmind/releases/download/v0.7.0-beta/graphmind-v0.7.0-beta-x86_64-unknown-linux-gnu.tar.gz
-tar xzf graphmind-v0.7.0-beta-x86_64-unknown-linux-gnu.tar.gz
+curl -LO https://github.com/fab679/graphmind/releases/download/v0.8.0-beta/graphmind-v0.8.0-beta-x86_64-unknown-linux-gnu.tar.gz
+tar xzf graphmind-v0.8.0-beta-x86_64-unknown-linux-gnu.tar.gz
 sudo install -m 755 graphmind /usr/local/bin/graphmind
 ```
 
 ### macOS (Apple Silicon)
 
 ```bash
-curl -LO https://github.com/fab679/graphmind/releases/download/v0.7.0-beta/graphmind-v0.7.0-beta-aarch64-apple-darwin.tar.gz
-tar xzf graphmind-v0.7.0-beta-aarch64-apple-darwin.tar.gz
+curl -LO https://github.com/fab679/graphmind/releases/download/v0.8.0-beta/graphmind-v0.8.0-beta-aarch64-apple-darwin.tar.gz
+tar xzf graphmind-v0.8.0-beta-aarch64-apple-darwin.tar.gz
 sudo install -m 755 graphmind /usr/local/bin/graphmind
 ```
 
 ### macOS (Intel)
 
 ```bash
-curl -LO https://github.com/fab679/graphmind/releases/download/v0.7.0-beta/graphmind-v0.7.0-beta-x86_64-apple-darwin.tar.gz
-tar xzf graphmind-v0.7.0-beta-x86_64-apple-darwin.tar.gz
+curl -LO https://github.com/fab679/graphmind/releases/download/v0.8.0-beta/graphmind-v0.8.0-beta-x86_64-apple-darwin.tar.gz
+tar xzf graphmind-v0.8.0-beta-x86_64-apple-darwin.tar.gz
 sudo install -m 755 graphmind /usr/local/bin/graphmind
 ```
 
 ### Windows (x86_64)
 
-Download and extract the zip from [GitHub Releases](https://github.com/fab679/graphmind/releases/download/v0.7.0-beta/graphmind-v0.7.0-beta-x86_64-pc-windows-msvc.zip), then add the `graphmind.exe` to your PATH.
+Download and extract the zip from [GitHub Releases](https://github.com/fab679/graphmind/releases/download/v0.8.0-beta/graphmind-v0.8.0-beta-x86_64-pc-windows-msvc.zip), then add the `graphmind.exe` to your PATH.
 
 ### What's in the archive
 

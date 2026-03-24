@@ -121,6 +121,32 @@ await client.query('MATCH (p:Person {name: "Bob"}) DELETE p');
 await client.query('MERGE (p:Person {name: "Dave"}) SET p.age = 35');
 ```
 
+## Query Parameters
+
+Use parameterized queries to safely pass dynamic values. Parameters prevent injection and improve query plan caching.
+
+```typescript
+// Pass parameters as the third argument
+const result = await client.queryReadonly(
+  "MATCH (p:Person) WHERE p.name = $name AND p.age > $minAge RETURN p.name, p.age",
+  "default",
+  { name: "Alice", minAge: 25 }
+);
+
+for (const [name, age] of result.records) {
+  console.log(`${name} is ${age} years old`);
+}
+
+// Write queries with parameters
+await client.query(
+  'CREATE (p:Person {name: $name, age: $age})',
+  "default",
+  { name: "Carol", age: 28 }
+);
+```
+
+Parameters are passed as `Record<string, unknown>` and sent in the `params` field of the POST body. Use `$paramName` syntax in the Cypher query to reference them.
+
 ## Aggregations
 
 ```typescript

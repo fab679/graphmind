@@ -21,11 +21,19 @@ export class HttpTransport {
   }
 
   /** Execute a Cypher query via POST /api/query */
-  async query(cypher: string, graph: string = "default"): Promise<QueryResult> {
+  async query(
+    cypher: string,
+    graph: string = "default",
+    params?: Record<string, unknown>,
+  ): Promise<QueryResult> {
+    const body: Record<string, unknown> = { query: cypher, graph };
+    if (params && Object.keys(params).length > 0) {
+      body.params = params;
+    }
     const response = await fetch(`${this.baseUrl}/api/query`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...this.extraHeaders },
-      body: JSON.stringify({ query: cypher, graph }),
+      body: JSON.stringify(body),
     });
 
     if (!response.ok) {

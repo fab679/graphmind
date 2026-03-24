@@ -30,11 +30,33 @@ Authorization: Bearer <token>
 
 Execute a Cypher query (read or write).
 
+**Request body fields:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `query` | `string` | Yes | The Cypher query to execute |
+| `graph` | `string` | No | Graph namespace (default: `"default"`) |
+| `params` | `object` | No | Query parameters as key-value pairs |
+
 **Request:**
 ```bash
 curl -X POST http://localhost:8080/api/query \
   -H 'Content-Type: application/json' \
   -d '{"query": "MATCH (p:Person) RETURN p.name, p.age", "graph": "default"}'
+```
+
+**Request with parameters:**
+```bash
+curl -X POST http://localhost:8080/api/query \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "query": "MATCH (p:Person) WHERE p.name = $name AND p.age > $minAge RETURN p.name, p.age",
+    "graph": "default",
+    "params": {
+      "name": "Alice",
+      "minAge": 25
+    }
+  }'
 ```
 
 **Response:**
@@ -50,7 +72,7 @@ curl -X POST http://localhost:8080/api/query \
 }
 ```
 
-The `graph` field is optional and defaults to `"default"`.
+The `graph` field is optional and defaults to `"default"`. The `params` field is optional and allows you to pass named parameters that are substituted into the query at execution time, preventing injection and improving query plan caching.
 
 ### POST /api/script
 

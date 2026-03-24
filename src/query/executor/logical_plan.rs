@@ -279,6 +279,7 @@ mod tests {
                 variable: Some(start_var.to_string()),
                 labels: start_labels,
                 properties: None,
+                expression_properties: Vec::new(),
             },
             segments,
         }
@@ -303,6 +304,7 @@ mod tests {
                 variable: Some(node_var.to_string()),
                 labels: node_labels,
                 properties: None,
+                expression_properties: Vec::new(),
             },
         }
     }

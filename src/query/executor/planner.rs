@@ -68,11 +68,12 @@ use crate::query::executor::{
         CreateVectorIndexOperator, DeleteOperator, DropIndexOperator, ExpandOperator,
         FilterOperator, ForeachOperator, IndexScanOperator, JoinOperator, LeftOuterJoinOperator,
         LimitOperator, MatchCreateEdgeOperator, MergeOperator, MockProcedureOperator,
-        NodeScanOperator, PerRowCreateOperator, ProjectOperator, RemovePropertyOperator,
-        SchemaVisualizationOperator, SetPropertyOperator, ShortestPathOperator,
-        ShowConstraintsOperator, ShowIndexesOperator, ShowLabelsOperator, ShowPropertyKeysOperator,
-        ShowRelationshipTypesOperator, SingleRowOperator, SkipOperator, SortOperator,
-        UnwindOperator, VarLengthExpandOperator, VectorSearchOperator, WithBarrierOperator,
+        NodeScanOperator, PerRowCreateOperator, PerRowMergeOperator, ProjectOperator,
+        RemovePropertyOperator, SchemaVisualizationOperator, SetPropertyOperator,
+        ShortestPathOperator, ShowConstraintsOperator, ShowIndexesOperator, ShowLabelsOperator,
+        ShowPropertyKeysOperator, ShowRelationshipTypesOperator, SingleRowOperator, SkipOperator,
+        SortOperator, UnwindOperator, VarLengthExpandOperator, VectorSearchOperator,
+        WithBarrierOperator,
     },
     ExecutionError,
     ExecutionResult,
@@ -815,6 +816,13 @@ impl QueryPlanner {
                     is_write: true,
                 });
             }
+        }
+
+        // Handle multi-part write queries (CREATE...SET...WITH...UNWIND...CREATE pattern)
+        // Each MultiPartStage represents clauses between two WITH barriers.
+        // The pipeline: Stage1 ops → WithBarrier → Stage2 ops → WithBarrier → ... → final stage
+        if !query.multi_part_stages.is_empty() {
+            return self.plan_multi_part_write(query, store);
         }
 
         // Handle MERGE-only statement (no MATCH needed)
@@ -2565,6 +2573,19 @@ impl QueryPlanner {
                 }
             }
 
+            // Also convert expression properties (e.g., {id: randomUUID()}) to predicates.
+            // These are non-literal expressions that need runtime evaluation.
+            for (prop_name, expr) in &path.start.expression_properties {
+                per_path_preds[path_idx].push(Expression::Binary {
+                    left: Box::new(Expression::Property {
+                        variable: start_var.clone(),
+                        property: prop_name.clone(),
+                    }),
+                    op: BinaryOp::Eq,
+                    right: Box::new(expr.clone()),
+                });
+            }
+
             // Optimization: Check for index usage (using this path's assigned predicates)
             let mut index_op: Option<OperatorBox> = None;
             let mut remaining_predicates: Vec<Expression> = Vec::new();
@@ -3004,6 +3025,34 @@ impl QueryPlanner {
         let mut output_columns: Vec<String> = Vec::new();
         let mut create_anon_counter = 0usize;
 
+        // Check if any node has expression properties (e.g., {id: randomUUID()})
+        // If so, use PerRowCreateOperator which can evaluate expressions at runtime
+        let has_expr_props = create_clauses.iter().any(|cc| {
+            cc.pattern.paths.iter().any(|p| {
+                !p.start.expression_properties.is_empty()
+                    || p.segments
+                        .iter()
+                        .any(|s| !s.node.expression_properties.is_empty())
+            })
+        });
+        if has_expr_props {
+            let mut known_vars: HashSet<String> = HashSet::new();
+            let mut anon_counter = 0usize;
+            let (node_specs, edge_specs) =
+                self.extract_create_specs(create_clauses, &mut anon_counter, &mut known_vars);
+            let output_columns: Vec<String> = known_vars.into_iter().collect();
+            let operator: OperatorBox = Box::new(PerRowCreateOperator::new(
+                Box::new(SingleRowOperator::new()),
+                node_specs,
+                edge_specs,
+            ));
+            return Ok(ExecutionPlan {
+                root: operator,
+                output_columns,
+                is_write: true,
+            });
+        }
+
         for create_clause in create_clauses {
             let pattern = &create_clause.pattern;
             for path in &pattern.paths {
@@ -3282,6 +3331,456 @@ fn flatten_and_predicates(expr: &Expression) -> Vec<Expression> {
 
 impl QueryPlanner {
     /// Build a WithBarrier operator from a WithClause (extracted for multi-WITH reuse)
+    /// Plan a multi-part write query with WITH barriers between stages.
+    /// Each stage can contain CREATE, MERGE, SET, DELETE, UNWIND clauses.
+    /// The pipeline: Stage1 → WithBarrier → Stage2 → WithBarrier → ... → final single_part_query
+    fn plan_multi_part_write(
+        &self,
+        query: &Query,
+        store: &GraphStore,
+    ) -> ExecutionResult<ExecutionPlan> {
+        let mut operator: OperatorBox = Box::new(SingleRowOperator::new());
+        let mut known_vars: HashSet<String> = HashSet::new();
+        let mut create_anon_counter = 0usize;
+
+        // Process each multi-part stage
+        for stage in &query.multi_part_stages {
+            // 1. Apply MATCH clauses for this stage
+            for mc in &stage.match_clauses {
+                let match_op = self.plan_match(mc, stage.where_clause.as_ref(), store)?;
+                let match_vars = self.extract_match_vars(mc);
+                let shared: Vec<String> = known_vars.intersection(&match_vars).cloned().collect();
+                if !shared.is_empty() {
+                    operator = Box::new(JoinOperator::new(operator, match_op, shared[0].clone()));
+                } else if known_vars.is_empty() {
+                    operator = match_op;
+                } else {
+                    operator = Box::new(CartesianProductOperator::new(operator, match_op));
+                }
+                for v in match_vars {
+                    known_vars.insert(v);
+                }
+            }
+
+            // 2. Apply UNWIND clauses for this stage
+            for unwind in &stage.unwind_clauses {
+                operator = Box::new(UnwindOperator::new(
+                    operator,
+                    unwind.expression.clone(),
+                    unwind.variable.clone(),
+                ));
+                known_vars.insert(unwind.variable.clone());
+            }
+
+            // 3. Apply MERGE clauses for this stage (before CREATE, since MERGE may bind vars used by CREATE)
+            for merge_clause in &stage.merge_clauses {
+                let on_create: Vec<(String, String, Expression)> = merge_clause
+                    .on_create_set
+                    .iter()
+                    .map(|s| (s.variable.clone(), s.property.clone(), s.value.clone()))
+                    .collect();
+                let on_match: Vec<(String, String, Expression)> = merge_clause
+                    .on_match_set
+                    .iter()
+                    .map(|s| (s.variable.clone(), s.property.clone(), s.value.clone()))
+                    .collect();
+
+                // MERGE always uses PerRowMergeOperator which handles both node and edge patterns.
+                // It checks for existing nodes/edges before creating, ensuring idempotency.
+                let merge_vars = self.extract_pattern_vars(&merge_clause.pattern);
+                operator = Box::new(PerRowMergeOperator::new(
+                    operator,
+                    merge_clause.pattern.clone(),
+                    on_create,
+                    on_match,
+                ));
+                for v in merge_vars {
+                    known_vars.insert(v);
+                }
+            }
+
+            // 4. Apply CREATE clauses for this stage (after MERGE, since MERGE binds vars used by CREATE)
+            if !stage.create_clauses.is_empty() {
+                let (node_specs, edge_specs) = self.extract_create_specs(
+                    &stage.create_clauses,
+                    &mut create_anon_counter,
+                    &mut known_vars,
+                );
+                operator = Box::new(PerRowCreateOperator::new(operator, node_specs, edge_specs));
+            }
+
+            // 5. Apply SET clauses for this stage
+            if !stage.set_clauses.is_empty() {
+                let mut items = Vec::new();
+                for set_clause in &stage.set_clauses {
+                    for item in &set_clause.items {
+                        items.push((
+                            item.variable.clone(),
+                            item.property.clone(),
+                            item.value.clone(),
+                        ));
+                    }
+                }
+                operator = Box::new(SetPropertyOperator::new(operator, items));
+            }
+
+            // 6. Apply DELETE clause for this stage
+            if let Some(delete_clause) = &stage.delete_clause {
+                let vars: Vec<String> = delete_clause
+                    .expressions
+                    .iter()
+                    .filter_map(|e| {
+                        if let Expression::Variable(v) = e {
+                            Some(v.clone())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                operator = Box::new(DeleteOperator::new(operator, vars, delete_clause.detach));
+            }
+
+            // 7. Apply REMOVE clauses for this stage
+            if !stage.remove_clauses.is_empty() {
+                let mut items = Vec::new();
+                for remove_clause in &stage.remove_clauses {
+                    for item in &remove_clause.items {
+                        if let RemoveItem::Property { variable, property } = item {
+                            items.push((variable.clone(), property.clone()));
+                        }
+                    }
+                }
+                if !items.is_empty() {
+                    operator = Box::new(RemovePropertyOperator::new(operator, items));
+                }
+            }
+
+            // 8. Apply WITH barrier to materialize results and scope variables.
+            // For multi-part write queries, use DISTINCT semantics when the WITH
+            // only passes through simple variables — this matches Neo4j's behavior
+            // where WITH t between CREATE stages collapses duplicate rows.
+            let mut with_for_barrier = stage.with_clause.clone();
+            let is_simple_passthrough = !with_for_barrier.distinct
+                && with_for_barrier.where_clause.is_none()
+                && with_for_barrier.order_by.is_none()
+                && with_for_barrier.skip.is_none()
+                && with_for_barrier.limit.is_none()
+                && with_for_barrier.items.iter().all(|item| {
+                    matches!(item.expression, Expression::Variable(_)) && item.alias.is_none()
+                });
+            if is_simple_passthrough && !stage.unwind_clauses.is_empty() {
+                // After UNWIND+CREATE, WITH t produces N copies of t.
+                // Apply DISTINCT to collapse back to unique rows.
+                with_for_barrier.distinct = true;
+            }
+            operator = self.build_with_barrier(operator, &with_for_barrier, store)?;
+
+            // Update known_vars to only include this WITH's projected outputs
+            known_vars.clear();
+            for item in &stage.with_clause.items {
+                let alias = item
+                    .alias
+                    .clone()
+                    .unwrap_or_else(|| match &item.expression {
+                        Expression::Variable(v) => v.clone(),
+                        Expression::Property { variable, property } => {
+                            format!("{}.{}", variable, property)
+                        }
+                        _ => "?".to_string(),
+                    });
+                known_vars.insert(alias);
+            }
+        }
+
+        // Now handle the final single_part_query's clauses (the "tail" after the last WITH)
+        // These are in the flat query fields: create_clause, unwind_clause, merge_clause, etc.
+
+        // Final UNWIND
+        for unwind in &query.additional_unwinds {
+            operator = Box::new(UnwindOperator::new(
+                operator,
+                unwind.expression.clone(),
+                unwind.variable.clone(),
+            ));
+            known_vars.insert(unwind.variable.clone());
+        }
+        if let Some(unwind) = &query.unwind_clause {
+            operator = Box::new(UnwindOperator::new(
+                operator,
+                unwind.expression.clone(),
+                unwind.variable.clone(),
+            ));
+            known_vars.insert(unwind.variable.clone());
+        }
+
+        // Final MERGE clauses (before CREATE, since MERGE binds vars that CREATE may reference)
+        // Always use PerRowMergeOperator which checks for existing nodes/edges (idempotent).
+        for merge_clause in &query.all_merge_clauses {
+            let on_create: Vec<(String, String, Expression)> = merge_clause
+                .on_create_set
+                .iter()
+                .map(|s| (s.variable.clone(), s.property.clone(), s.value.clone()))
+                .collect();
+            let on_match: Vec<(String, String, Expression)> = merge_clause
+                .on_match_set
+                .iter()
+                .map(|s| (s.variable.clone(), s.property.clone(), s.value.clone()))
+                .collect();
+
+            let merge_vars = self.extract_pattern_vars(&merge_clause.pattern);
+            operator = Box::new(PerRowMergeOperator::new(
+                operator,
+                merge_clause.pattern.clone(),
+                on_create,
+                on_match,
+            ));
+            for v in merge_vars {
+                known_vars.insert(v);
+            }
+        }
+
+        // Final CREATE (after MERGE, since MERGE binds vars that CREATE may reference)
+        if !query.create_clauses.is_empty() {
+            let (node_specs, edge_specs) = self.extract_create_specs(
+                &query.create_clauses,
+                &mut create_anon_counter,
+                &mut known_vars,
+            );
+            operator = Box::new(PerRowCreateOperator::new(operator, node_specs, edge_specs));
+        } else if let Some(create_clause) = &query.create_clause {
+            let (node_specs, edge_specs) = self.extract_create_specs(
+                std::slice::from_ref(create_clause),
+                &mut create_anon_counter,
+                &mut known_vars,
+            );
+            operator = Box::new(PerRowCreateOperator::new(operator, node_specs, edge_specs));
+        }
+
+        // Final SET
+        if !query.set_clauses.is_empty() {
+            let mut items = Vec::new();
+            for set_clause in &query.set_clauses {
+                for item in &set_clause.items {
+                    items.push((
+                        item.variable.clone(),
+                        item.property.clone(),
+                        item.value.clone(),
+                    ));
+                }
+            }
+            operator = Box::new(SetPropertyOperator::new(operator, items));
+        }
+
+        // Final DELETE
+        if let Some(delete_clause) = &query.delete_clause {
+            let vars: Vec<String> = delete_clause
+                .expressions
+                .iter()
+                .filter_map(|e| {
+                    if let Expression::Variable(v) = e {
+                        Some(v.clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            operator = Box::new(DeleteOperator::new(operator, vars, delete_clause.detach));
+        }
+
+        // Final RETURN
+        let mut output_columns = Vec::new();
+        if let Some(return_clause) = &query.return_clause {
+            let effective_items = if return_clause.star {
+                let mut star_items: Vec<crate::query::ast::ReturnItem> = known_vars
+                    .iter()
+                    .filter(|v| !v.starts_with("_anon_") && !v.starts_with("_create_anon_"))
+                    .map(|v| crate::query::ast::ReturnItem {
+                        expression: Expression::Variable(v.clone()),
+                        alias: None,
+                    })
+                    .collect();
+                star_items.sort_by(|a, b| {
+                    let va = match &a.expression {
+                        Expression::Variable(v) => v.clone(),
+                        _ => String::new(),
+                    };
+                    let vb = match &b.expression {
+                        Expression::Variable(v) => v.clone(),
+                        _ => String::new(),
+                    };
+                    va.cmp(&vb)
+                });
+                star_items.extend(return_clause.items.iter().cloned());
+                star_items
+            } else {
+                return_clause.items.clone()
+            };
+
+            let projections: Vec<(Expression, String)> = effective_items
+                .iter()
+                .enumerate()
+                .map(|(i, item)| {
+                    let alias = item
+                        .alias
+                        .clone()
+                        .unwrap_or_else(|| match &item.expression {
+                            Expression::Variable(v) => v.clone(),
+                            Expression::Property { variable, property } => {
+                                format!("{}.{}", variable, property)
+                            }
+                            _ => format!("col_{}", i),
+                        });
+                    output_columns.push(alias.clone());
+                    (item.expression.clone(), alias)
+                })
+                .collect();
+            operator = Box::new(ProjectOperator::new(operator, projections));
+        }
+
+        // Final ORDER BY, SKIP, LIMIT
+        if let Some(order_by) = &query.order_by {
+            let sort_items: Vec<(Expression, bool)> = order_by
+                .items
+                .iter()
+                .map(|i| (i.expression.clone(), i.ascending))
+                .collect();
+            operator = Box::new(SortOperator::new(operator, sort_items));
+        }
+        if let Some(skip) = query.skip {
+            operator = Box::new(SkipOperator::new(operator, skip));
+        }
+        if let Some(limit) = query.limit {
+            operator = Box::new(LimitOperator::new(operator, limit));
+        }
+
+        Ok(ExecutionPlan {
+            root: operator,
+            output_columns,
+            is_write: true,
+        })
+    }
+
+    /// Extract node and edge specs from CREATE clauses for PerRowCreateOperator.
+    fn extract_create_specs(
+        &self,
+        create_clauses: &[CreateClause],
+        anon_counter: &mut usize,
+        known_vars: &mut HashSet<String>,
+    ) -> (
+        Vec<(
+            Vec<Label>,
+            HashMap<String, PropertyValue>,
+            Vec<(String, Expression)>,
+            Option<String>,
+        )>,
+        Vec<(
+            String,
+            String,
+            EdgeType,
+            HashMap<String, PropertyValue>,
+            Option<String>,
+        )>,
+    ) {
+        let mut node_specs = Vec::new();
+        let mut edge_specs = Vec::new();
+
+        for create_clause in create_clauses {
+            for path in &create_clause.pattern.paths {
+                let start_var = path.start.variable.clone();
+                let labels = path.start.labels.clone();
+                let static_props = path.start.properties.clone().unwrap_or_default();
+                let expr_props = path.start.expression_properties.clone();
+
+                // Only create node if variable is new (not already bound)
+                let var_is_new = start_var
+                    .as_ref()
+                    .map(|v| !known_vars.contains(v))
+                    .unwrap_or(true);
+                if var_is_new {
+                    node_specs.push((labels, static_props, expr_props, start_var.clone()));
+                    if let Some(ref v) = start_var {
+                        known_vars.insert(v.clone());
+                    }
+                }
+
+                let current_var = start_var.unwrap_or_else(|| {
+                    let name = format!("_create_anon_{}", *anon_counter);
+                    *anon_counter += 1;
+                    name
+                });
+
+                let mut prev_var = current_var;
+
+                for seg in &path.segments {
+                    let target_var = seg.node.variable.clone();
+                    let seg_labels = seg.node.labels.clone();
+                    let seg_props = seg.node.properties.clone().unwrap_or_default();
+                    let seg_expr_props = seg.node.expression_properties.clone();
+
+                    let target_is_new = target_var
+                        .as_ref()
+                        .map(|v| !known_vars.contains(v))
+                        .unwrap_or(true);
+                    if target_is_new {
+                        node_specs.push((
+                            seg_labels,
+                            seg_props,
+                            seg_expr_props,
+                            target_var.clone(),
+                        ));
+                        if let Some(ref v) = target_var {
+                            known_vars.insert(v.clone());
+                        }
+                    }
+
+                    let target_name = target_var.unwrap_or_else(|| {
+                        let name = format!("_create_anon_{}", *anon_counter);
+                        *anon_counter += 1;
+                        name
+                    });
+
+                    if let Some(et) = seg.edge.types.first() {
+                        let edge_props = seg.edge.properties.clone().unwrap_or_default();
+                        let (src, tgt) = if matches!(seg.edge.direction, Direction::Incoming) {
+                            (target_name.clone(), prev_var.clone())
+                        } else {
+                            (prev_var.clone(), target_name.clone())
+                        };
+                        edge_specs.push((
+                            src,
+                            tgt,
+                            et.clone(),
+                            edge_props,
+                            seg.edge.variable.clone(),
+                        ));
+                    }
+                    prev_var = target_name;
+                }
+            }
+        }
+
+        (node_specs, edge_specs)
+    }
+
+    /// Extract variable names from a pattern
+    fn extract_pattern_vars(&self, pattern: &Pattern) -> HashSet<String> {
+        let mut vars = HashSet::new();
+        for path in &pattern.paths {
+            if let Some(v) = &path.start.variable {
+                vars.insert(v.clone());
+            }
+            for seg in &path.segments {
+                if let Some(v) = &seg.node.variable {
+                    vars.insert(v.clone());
+                }
+                if let Some(v) = &seg.edge.variable {
+                    vars.insert(v.clone());
+                }
+            }
+        }
+        vars
+    }
+
     fn build_with_barrier(
         &self,
         input: OperatorBox,
@@ -4221,6 +4720,7 @@ mod tests {
             unwind_clause: None,
             additional_unwinds: Vec::new(),
             merge_clause: None,
+            all_merge_clauses: vec![],
             union_queries: vec![],
             explain: false,
             with_split_index: None,

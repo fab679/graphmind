@@ -6543,6 +6543,272 @@ impl PhysicalOperator for PerRowCreateOperator {
     }
 }
 
+/// Per-row MERGE operator for the Apply pattern in multi-part queries.
+/// For each input row, performs a MERGE (find-or-create) on a node pattern,
+/// binding the result to the record for downstream operators.
+pub struct PerRowMergeOperator {
+    input: OperatorBox,
+    pattern: Pattern,
+    on_create_set: Vec<(String, String, Expression)>,
+    on_match_set: Vec<(String, String, Expression)>,
+}
+
+impl PerRowMergeOperator {
+    pub fn new(
+        input: OperatorBox,
+        pattern: Pattern,
+        on_create_set: Vec<(String, String, Expression)>,
+        on_match_set: Vec<(String, String, Expression)>,
+    ) -> Self {
+        Self {
+            input,
+            pattern,
+            on_create_set,
+            on_match_set,
+        }
+    }
+}
+
+impl PhysicalOperator for PerRowMergeOperator {
+    fn next(&mut self, _store: &GraphStore) -> ExecutionResult<Option<Record>> {
+        Err(ExecutionError::RuntimeError(
+            "PerRowMergeOperator requires mutable store access".to_string(),
+        ))
+    }
+
+    fn next_mut(
+        &mut self,
+        store: &mut GraphStore,
+        tenant_id: &str,
+    ) -> ExecutionResult<Option<Record>> {
+        let input_record = match self.input.next_mut(store, tenant_id)? {
+            Some(r) => r,
+            None => return Ok(None),
+        };
+
+        let mut record = input_record;
+
+        let path = match self.pattern.paths.first() {
+            Some(p) => p,
+            None => return Ok(Some(record)),
+        };
+
+        let start = &path.start;
+        let start_var = start.variable.clone().unwrap_or_else(|| "n".to_string());
+        let labels = &start.labels;
+
+        // Resolve properties from pattern (static + expression)
+        let mut resolved_props: HashMap<String, PropertyValue> =
+            start.properties.clone().unwrap_or_default();
+        // Evaluate expression properties from the record (e.g., {name: genre_name})
+        for (key, expr) in &start.expression_properties {
+            let store_ref: &GraphStore = store;
+            let val = eval_expression(expr, &record, store_ref)?;
+            if let Value::Property(pv) = val {
+                resolved_props.insert(key.clone(), pv);
+            }
+        }
+        // Remove Null values from resolved_props (they're non-matches)
+        resolved_props.retain(|_, v| !matches!(v, PropertyValue::Null));
+
+        // Check if the variable is already bound in the record (from a previous stage)
+        let mut matched_node_id = record.get(&start_var).and_then(|v| v.node_id());
+
+        // If not bound, search for existing node matching labels + properties
+        if matched_node_id.is_none() {
+            if let Some(first_label) = labels.first() {
+                let candidates = store.get_nodes_by_label(first_label);
+                for node in candidates {
+                    let has_all_labels = labels.iter().all(|l| node.labels.contains(l));
+                    if !has_all_labels {
+                        continue;
+                    }
+                    if !resolved_props.is_empty() {
+                        let props_match = resolved_props
+                            .iter()
+                            .all(|(k, v)| node.properties.get(k) == Some(v));
+                        if !props_match {
+                            continue;
+                        }
+                    }
+                    matched_node_id = Some(node.id);
+                    break;
+                }
+            }
+        }
+
+        let node_id;
+        if let Some(existing_id) = matched_node_id {
+            // ON MATCH
+            node_id = existing_id;
+            record.bind(start_var.clone(), Value::NodeRef(node_id));
+            for (var, prop, expr) in &self.on_match_set {
+                if var == &start_var {
+                    let val = eval_expression(expr, &record, store)?;
+                    if let Value::Property(pv) = val {
+                        if let Some(node) = store.get_node_mut(node_id) {
+                            node.set_property(prop.clone(), pv);
+                        }
+                    }
+                }
+            }
+        } else {
+            // ON CREATE
+            let label_str = labels.first().map(|l| l.as_str()).unwrap_or("Node");
+            node_id = store.create_node(label_str);
+            for label in labels.iter().skip(1) {
+                if let Some(node) = store.get_node_mut(node_id) {
+                    node.labels.insert(label.clone());
+                }
+            }
+            for (k, v) in &resolved_props {
+                if let Some(node) = store.get_node_mut(node_id) {
+                    node.set_property(k.clone(), v.clone());
+                }
+            }
+            record.bind(start_var.clone(), Value::NodeRef(node_id));
+            for (var, prop, expr) in &self.on_create_set {
+                if var == &start_var {
+                    let val = eval_expression(expr, &record, store)?;
+                    if let Value::Property(pv) = val {
+                        if let Some(node) = store.get_node_mut(node_id) {
+                            node.set_property(prop.clone(), pv);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Handle relationship segments if any
+        for seg in &path.segments {
+            let edge_types = &seg.edge.types;
+            let edge_type_str = edge_types.first().map(|t| t.as_str()).unwrap_or("RELATED");
+            let target = &seg.node;
+            let target_var = target.variable.clone().unwrap_or_else(|| "m".to_string());
+            let target_labels = &target.labels;
+            let target_props = target.properties.as_ref();
+
+            // Check if target is already bound
+            let mut target_node_id = record.get(&target_var).and_then(|v| v.node_id());
+
+            // Search by labels + properties
+            if target_node_id.is_none() {
+                if let Some(first_label) = target_labels.first() {
+                    let candidates = store.get_nodes_by_label(first_label);
+                    for candidate in candidates {
+                        let has_labels = target_labels.iter().all(|l| candidate.labels.contains(l));
+                        if !has_labels {
+                            continue;
+                        }
+                        if let Some(req_props) = target_props {
+                            let props_match = req_props
+                                .iter()
+                                .all(|(k, v)| candidate.properties.get(k) == Some(v));
+                            if !props_match {
+                                continue;
+                            }
+                        }
+                        target_node_id = Some(candidate.id);
+                        break;
+                    }
+                }
+            }
+
+            // Create target if not found
+            let target_id = if let Some(tid) = target_node_id {
+                tid
+            } else {
+                let label_str = target_labels.first().map(|l| l.as_str()).unwrap_or("Node");
+                let tid = store.create_node(label_str);
+                for label in target_labels.iter().skip(1) {
+                    if let Some(node) = store.get_node_mut(tid) {
+                        node.labels.insert(label.clone());
+                    }
+                }
+                if let Some(req_props) = target_props {
+                    for (k, v) in req_props {
+                        if let Some(node) = store.get_node_mut(tid) {
+                            node.set_property(k.clone(), v.clone());
+                        }
+                    }
+                }
+                tid
+            };
+
+            record.bind(target_var, Value::NodeRef(target_id));
+
+            // Check if relationship already exists
+            let (source_id, dest_id) = match seg.edge.direction {
+                Direction::Incoming => (target_id, node_id),
+                _ => (node_id, target_id),
+            };
+
+            let mut edge_exists = false;
+            let outgoing = store.get_outgoing_edges(source_id);
+            for existing_edge in &outgoing {
+                if existing_edge.target == dest_id
+                    && existing_edge.edge_type.as_str() == edge_type_str
+                {
+                    edge_exists = true;
+                    if let Some(ev) = &seg.edge.variable {
+                        record.bind(
+                            ev.clone(),
+                            Value::EdgeRef(
+                                existing_edge.id,
+                                source_id,
+                                dest_id,
+                                existing_edge.edge_type.clone(),
+                            ),
+                        );
+                    }
+                    break;
+                }
+            }
+
+            if !edge_exists {
+                if let Ok(edge_id) = store.create_edge(source_id, dest_id, edge_type_str) {
+                    if let Some(edge_props) = &seg.edge.properties {
+                        for (k, v) in edge_props {
+                            if let Some(edge) = store.get_edge_mut(edge_id) {
+                                edge.set_property(k.clone(), v.clone());
+                            }
+                        }
+                    }
+                    if let Some(ev) = &seg.edge.variable {
+                        record.bind(
+                            ev.clone(),
+                            Value::EdgeRef(
+                                edge_id,
+                                source_id,
+                                dest_id,
+                                EdgeType::new(edge_type_str),
+                            ),
+                        );
+                    }
+                }
+            }
+        }
+
+        Ok(Some(record))
+    }
+
+    fn reset(&mut self) {
+        self.input.reset();
+    }
+
+    fn describe(&self) -> OperatorDescription {
+        OperatorDescription {
+            name: "PerRowMerge".to_string(),
+            details: format!("{} paths", self.pattern.paths.len()),
+            children: vec![self.input.describe()],
+        }
+    }
+
+    fn is_mutating(&self) -> bool {
+        true
+    }
+}
+
 /// Create edge operator: `CREATE (a)-[:KNOWS]->(b)`
 pub struct CreateEdgeOperator {
     /// Input operator (provides source/target nodes from MATCH)
@@ -6677,6 +6943,20 @@ impl PhysicalOperator for CreateEdgeOperator {
 
     fn is_mutating(&self) -> bool {
         true
+    }
+
+    fn describe(&self) -> OperatorDescription {
+        let (src, tgt, et, _, _) = &self.edge_pattern;
+        let children = self
+            .input
+            .as_ref()
+            .map(|i| vec![i.describe()])
+            .unwrap_or_default();
+        OperatorDescription {
+            name: "CreateEdge".to_string(),
+            details: format!("({})-[:{}]->({})", src, et.as_str(), tgt),
+            children,
+        }
     }
 }
 
@@ -6822,6 +7102,19 @@ impl PhysicalOperator for CreateNodesAndEdgesOperator {
     fn is_mutating(&self) -> bool {
         true
     }
+
+    fn describe(&self) -> OperatorDescription {
+        let edge_descs: Vec<String> = self
+            .edges_to_create
+            .iter()
+            .map(|(src, tgt, et, _, _)| format!("({})-[:{}]->({})", src, et.as_str(), tgt))
+            .collect();
+        OperatorDescription {
+            name: "CreateNodesAndEdges".to_string(),
+            details: edge_descs.join(", "),
+            children: vec![self.node_operator.describe()],
+        }
+    }
 }
 
 /// Operator for MATCH...CREATE queries
@@ -6942,6 +7235,19 @@ impl PhysicalOperator for MatchCreateEdgeOperator {
 
     fn is_mutating(&self) -> bool {
         true
+    }
+
+    fn describe(&self) -> OperatorDescription {
+        let edge_descs: Vec<String> = self
+            .edges_to_create
+            .iter()
+            .map(|(src, tgt, et, _, _)| format!("({})-[:{}]->({})", src, et.as_str(), tgt))
+            .collect();
+        OperatorDescription {
+            name: "MatchCreateEdge".to_string(),
+            details: edge_descs.join(", "),
+            children: vec![self.input.describe()],
+        }
     }
 }
 
@@ -8226,6 +8532,45 @@ impl PhysicalOperator for UnwindOperator {
         }
     }
 
+    fn next_mut(
+        &mut self,
+        store: &mut GraphStore,
+        tenant_id: &str,
+    ) -> ExecutionResult<Option<Record>> {
+        loop {
+            if self.buffer_idx < self.buffer.len() {
+                let record = self.buffer[self.buffer_idx].clone();
+                self.buffer_idx += 1;
+                return Ok(Some(record));
+            }
+
+            let record = match self.input.next_mut(store, tenant_id)? {
+                Some(r) => r,
+                None => return Ok(None),
+            };
+
+            let store_ref: &GraphStore = store;
+            let list_val = eval_expression(&self.expression, &record, store_ref)?;
+
+            let items = match list_val {
+                Value::Property(PropertyValue::Array(arr)) => arr,
+                Value::Property(PropertyValue::Vector(vec)) => vec
+                    .into_iter()
+                    .map(|f| PropertyValue::Float(f as f64))
+                    .collect(),
+                _ => vec![],
+            };
+
+            self.buffer.clear();
+            self.buffer_idx = 0;
+            for item in items {
+                let mut new_record = record.clone();
+                new_record.bind(self.variable.clone(), Value::Property(item));
+                self.buffer.push(new_record);
+            }
+        }
+    }
+
     fn next_batch(
         &mut self,
         store: &GraphStore,
@@ -8252,6 +8597,10 @@ impl PhysicalOperator for UnwindOperator {
         self.input.reset();
         self.buffer.clear();
         self.buffer_idx = 0;
+    }
+
+    fn is_mutating(&self) -> bool {
+        self.input.is_mutating()
     }
 
     fn describe(&self) -> OperatorDescription {
@@ -8532,6 +8881,36 @@ impl PhysicalOperator for MergeOperator {
     fn reset(&mut self) {
         self.executed = false;
     }
+
+    fn is_mutating(&self) -> bool {
+        true
+    }
+
+    fn describe(&self) -> OperatorDescription {
+        let labels: Vec<String> = self
+            .pattern
+            .paths
+            .first()
+            .map(|p| {
+                p.start
+                    .labels
+                    .iter()
+                    .map(|l| l.as_str().to_string())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let var = self
+            .pattern
+            .paths
+            .first()
+            .and_then(|p| p.start.variable.clone())
+            .unwrap_or_else(|| "?".to_string());
+        OperatorDescription {
+            name: "Merge".to_string(),
+            details: format!("({}:{})", var, labels.join(":")),
+            children: vec![],
+        }
+    }
 }
 
 /// FOREACH operator: FOREACH (x IN list | SET x.prop = val)
@@ -8663,6 +9042,23 @@ impl PhysicalOperator for ForeachOperator {
 
     fn reset(&mut self) {
         self.input.reset();
+    }
+
+    fn is_mutating(&self) -> bool {
+        true
+    }
+
+    fn describe(&self) -> OperatorDescription {
+        OperatorDescription {
+            name: "Foreach".to_string(),
+            details: format!(
+                "{} IN ... | {} SETs, {} CREATEs",
+                self.variable,
+                self.set_items.len(),
+                self.create_patterns.len()
+            ),
+            children: vec![self.input.describe()],
+        }
     }
 }
 
@@ -9174,12 +9570,155 @@ impl WithBarrierOperator {
         self.executed = true;
         Ok(())
     }
+
+    /// Mutable version of execute_all that drains mutating child operators.
+    /// Used when the input pipeline contains write operators (PerRowCreate, SetProperty, etc.)
+    fn execute_all_mut(&mut self, store: &mut GraphStore, tenant_id: &str) -> ExecutionResult<()> {
+        let mut output_records = if self.has_aggregation {
+            let mut groups: HashMap<Vec<Value>, Vec<AggregatorState>> = HashMap::new();
+            let batch_size = 1024;
+            while let Some(batch) = self.input.next_batch_mut(store, tenant_id, batch_size)? {
+                for record in batch.records {
+                    let mut key = Vec::new();
+                    let store_ref: &GraphStore = store;
+                    for (expr, _) in &self.group_by {
+                        key.push(Self::evaluate_expression(expr, &record, store_ref)?);
+                    }
+                    let states = groups.entry(key).or_insert_with(|| {
+                        self.aggregates
+                            .iter()
+                            .map(|agg| AggregatorState::new(&agg.func, agg.distinct))
+                            .collect()
+                    });
+                    let store_ref: &GraphStore = store;
+                    for (i, agg) in self.aggregates.iter().enumerate() {
+                        let val = Self::evaluate_expression(&agg.expr, &record, store_ref)?;
+                        states[i].update(&val);
+                    }
+                }
+            }
+            let mut records = Vec::new();
+            let store_ref: &GraphStore = store;
+            for (key, states) in groups {
+                let mut record = Record::new();
+                for (i, (_, alias)) in self.group_by.iter().enumerate() {
+                    record.bind(alias.clone(), key[i].clone());
+                }
+                for (i, agg) in self.aggregates.iter().enumerate() {
+                    record.bind(agg.alias.clone(), states[i].result());
+                }
+                records.push(record);
+            }
+            let mut projected = Vec::with_capacity(records.len());
+            for intermediate in records {
+                let mut new_record = Record::new();
+                for (expr, alias) in &self.items {
+                    let value = Self::evaluate_expression(expr, &intermediate, store_ref)?;
+                    new_record.bind(alias.clone(), value);
+                }
+                projected.push(new_record);
+            }
+            projected
+        } else {
+            let mut records = Vec::new();
+            let batch_size = 1024;
+            while let Some(batch) = self.input.next_batch_mut(store, tenant_id, batch_size)? {
+                let store_ref: &GraphStore = store;
+                for record in batch.records {
+                    let mut new_record = Record::new();
+                    for (expr, alias) in &self.items {
+                        let value = Self::evaluate_expression(expr, &record, store_ref)?;
+                        new_record.bind(alias.clone(), value);
+                    }
+                    records.push(new_record);
+                }
+            }
+            records
+        };
+
+        // Apply WHERE filter
+        if let Some(ref predicate) = self.where_predicate {
+            let store_ref: &GraphStore = store;
+            output_records.retain(|record| {
+                match Self::evaluate_expression(predicate, record, store_ref) {
+                    Ok(Value::Property(PropertyValue::Boolean(b))) => b,
+                    Ok(Value::Null) | Ok(Value::Property(PropertyValue::Null)) => false,
+                    _ => false,
+                }
+            });
+        }
+
+        // Apply DISTINCT
+        if self.distinct {
+            let mut seen: HashSet<Vec<Value>> = HashSet::new();
+            output_records.retain(|record| {
+                let mut key: Vec<(String, Value)> = record
+                    .bindings()
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect();
+                key.sort_by(|a, b| a.0.cmp(&b.0));
+                let vals: Vec<Value> = key.into_iter().map(|(_, v)| v).collect();
+                seen.insert(vals)
+            });
+        }
+
+        // Apply ORDER BY
+        if !self.sort_items.is_empty() {
+            let store_ref: &GraphStore = store;
+            let sort_items = &self.sort_items;
+            output_records.sort_by(|a, b| {
+                for (expr, ascending) in sort_items {
+                    let val_a =
+                        Self::evaluate_expression(expr, a, store_ref).unwrap_or(Value::Null);
+                    let val_b =
+                        Self::evaluate_expression(expr, b, store_ref).unwrap_or(Value::Null);
+                    let prop_a = val_a.as_property().unwrap_or(&PropertyValue::Null);
+                    let prop_b = val_b.as_property().unwrap_or(&PropertyValue::Null);
+                    let ord = prop_a.cmp(prop_b);
+                    if ord != std::cmp::Ordering::Equal {
+                        return if *ascending { ord } else { ord.reverse() };
+                    }
+                }
+                std::cmp::Ordering::Equal
+            });
+        }
+
+        // Apply SKIP
+        if let Some(skip) = self.skip {
+            if skip < output_records.len() {
+                output_records = output_records.split_off(skip);
+            } else {
+                output_records.clear();
+            }
+        }
+
+        // Apply LIMIT
+        if let Some(limit) = self.limit {
+            output_records.truncate(limit);
+        }
+
+        self.results = output_records.into_iter();
+        self.executed = true;
+        Ok(())
+    }
 }
 
 impl PhysicalOperator for WithBarrierOperator {
     fn next(&mut self, store: &GraphStore) -> ExecutionResult<Option<Record>> {
         if !self.executed {
             self.execute_all(store)?;
+        }
+        Ok(self.results.next())
+    }
+
+    fn next_mut(
+        &mut self,
+        store: &mut GraphStore,
+        tenant_id: &str,
+    ) -> ExecutionResult<Option<Record>> {
+        if !self.executed {
+            self.execute_all_mut(store, tenant_id)?;
         }
         Ok(self.results.next())
     }
@@ -9212,10 +9751,43 @@ impl PhysicalOperator for WithBarrierOperator {
         }
     }
 
+    fn next_batch_mut(
+        &mut self,
+        store: &mut GraphStore,
+        tenant_id: &str,
+        batch_size: usize,
+    ) -> ExecutionResult<Option<RecordBatch>> {
+        if !self.executed {
+            self.execute_all_mut(store, tenant_id)?;
+        }
+
+        let mut batch = Vec::with_capacity(batch_size);
+        for _ in 0..batch_size {
+            if let Some(record) = self.results.next() {
+                batch.push(record);
+            } else {
+                break;
+            }
+        }
+
+        if batch.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(RecordBatch {
+                records: batch,
+                columns: Vec::new(),
+            }))
+        }
+    }
+
     fn reset(&mut self) {
         self.input.reset();
         self.executed = false;
         self.results = Vec::new().into_iter();
+    }
+
+    fn is_mutating(&self) -> bool {
+        self.input.is_mutating()
     }
 
     fn describe(&self) -> OperatorDescription {

@@ -145,6 +145,41 @@ fn json_to_py(py: Python<'_>, value: &serde_json::Value) -> PyResult<PyObject> {
     }
 }
 
+/// Convert a Python dict to a HashMap<String, serde_json::Value> for query parameters
+fn py_dict_to_json_map(dict: &Bound<'_, PyDict>) -> PyResult<HashMap<String, serde_json::Value>> {
+    let mut map = HashMap::new();
+    for (key, value) in dict.iter() {
+        let k: String = key.extract()?;
+        let v = py_to_json(value)?;
+        map.insert(k, v);
+    }
+    Ok(map)
+}
+
+/// Convert a Python object to serde_json::Value
+fn py_to_json(obj: pyo3::Bound<'_, pyo3::PyAny>) -> PyResult<serde_json::Value> {
+    if obj.is_none() {
+        Ok(serde_json::Value::Null)
+    } else if let Ok(b) = obj.extract::<bool>() {
+        Ok(serde_json::Value::Bool(b))
+    } else if let Ok(i) = obj.extract::<i64>() {
+        Ok(serde_json::json!(i))
+    } else if let Ok(f) = obj.extract::<f64>() {
+        Ok(serde_json::json!(f))
+    } else if let Ok(s) = obj.extract::<String>() {
+        Ok(serde_json::Value::String(s))
+    } else if let Ok(list) = obj.extract::<Vec<pyo3::Bound<'_, pyo3::PyAny>>>() {
+        let arr: Vec<serde_json::Value> = list
+            .into_iter()
+            .map(py_to_json)
+            .collect::<PyResult<_>>()?;
+        Ok(serde_json::Value::Array(arr))
+    } else {
+        // Fallback: convert to string
+        Ok(serde_json::Value::String(obj.str()?.to_string()))
+    }
+}
+
 /// Internal enum to hold either embedded or remote client
 enum ClientInner {
     Embedded(EmbeddedClient),
@@ -190,12 +225,20 @@ impl GraphmindClient {
     }
 
     /// Execute a Cypher query
-    #[pyo3(signature = (cypher, graph="default"))]
-    fn query(&self, cypher: &str, graph: &str) -> PyResult<QueryResult> {
+    #[pyo3(signature = (cypher, graph="default", params=None))]
+    fn query(&self, cypher: &str, graph: &str, params: Option<&Bound<'_, PyDict>>) -> PyResult<QueryResult> {
         let rt = get_runtime();
-        let result = match &*self.inner {
-            ClientInner::Embedded(c) => rt.block_on(c.query(graph, cypher)),
-            ClientInner::Remote(c) => rt.block_on(c.query(graph, cypher)),
+        let result = if let Some(py_params) = params {
+            let json_params = py_dict_to_json_map(py_params)?;
+            match &*self.inner {
+                ClientInner::Embedded(c) => rt.block_on(c.query_with_params(graph, cypher, json_params)),
+                ClientInner::Remote(c) => rt.block_on(c.query_with_params(graph, cypher, json_params)),
+            }
+        } else {
+            match &*self.inner {
+                ClientInner::Embedded(c) => rt.block_on(c.query(graph, cypher)),
+                ClientInner::Remote(c) => rt.block_on(c.query(graph, cypher)),
+            }
         };
         match result {
             Ok(r) => convert_query_result(r),
@@ -204,12 +247,20 @@ impl GraphmindClient {
     }
 
     /// Execute a read-only Cypher query
-    #[pyo3(signature = (cypher, graph="default"))]
-    fn query_readonly(&self, cypher: &str, graph: &str) -> PyResult<QueryResult> {
+    #[pyo3(signature = (cypher, graph="default", params=None))]
+    fn query_readonly(&self, cypher: &str, graph: &str, params: Option<&Bound<'_, PyDict>>) -> PyResult<QueryResult> {
         let rt = get_runtime();
-        let result = match &*self.inner {
-            ClientInner::Embedded(c) => rt.block_on(c.query_readonly(graph, cypher)),
-            ClientInner::Remote(c) => rt.block_on(c.query_readonly(graph, cypher)),
+        let result = if let Some(py_params) = params {
+            let json_params = py_dict_to_json_map(py_params)?;
+            match &*self.inner {
+                ClientInner::Embedded(c) => rt.block_on(c.query_with_params(graph, cypher, json_params)),
+                ClientInner::Remote(c) => rt.block_on(c.query_with_params(graph, cypher, json_params)),
+            }
+        } else {
+            match &*self.inner {
+                ClientInner::Embedded(c) => rt.block_on(c.query_readonly(graph, cypher)),
+                ClientInner::Remote(c) => rt.block_on(c.query_readonly(graph, cypher)),
+            }
         };
         match result {
             Ok(r) => convert_query_result(r),

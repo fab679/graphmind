@@ -539,75 +539,168 @@ fn parse_single_part_query(
 
 fn parse_multi_part_query(pair: pest::iterators::Pair<Rule>, query: &mut Query) -> ParseResult<()> {
     // The multi_part_query has N WITH-segments followed by a single_part_query.
-    // We collect clauses between WITH separators.
-    // Collect all children and process them segment by segment.
+    // Each segment: reading_clause* updating_clause* with_clause
+    // We accumulate per-stage clauses and create MultiPartStage for each WITH.
     let children: Vec<pest::iterators::Pair<Rule>> = pair.into_inner().collect();
 
-    // We need to process: reading*, updating*, with_clause repeated, then single_part_query
-    // Each WITH separates a stage.
+    // Per-stage accumulators
     let mut pending_match_clauses: Vec<MatchClause> = Vec::new();
     let mut pending_unwind: Option<UnwindClause> = None;
+    let mut pending_unwinds: Vec<UnwindClause> = Vec::new();
     let mut pending_where: Option<WhereClause> = None;
+    let mut pending_creates: Vec<CreateClause> = Vec::new();
+    let mut pending_merges: Vec<MergeClause> = Vec::new();
+    let mut pending_sets: Vec<SetClause> = Vec::new();
+    let mut pending_delete: Option<DeleteClause> = None;
+    let mut pending_removes: Vec<RemoveClause> = Vec::new();
+    let mut has_any_mutations = false;
 
     for child in children {
         match child.as_rule() {
             Rule::reading_clause => {
                 // Accumulate reading clauses for the current segment
-                parse_reading_clause_into_pending(
+                parse_reading_clause_into_pending_ext(
                     child,
                     &mut pending_match_clauses,
                     &mut pending_unwind,
-                    query,
+                    &mut pending_unwinds,
+                    &mut pending_where,
                 )?;
             }
             Rule::updating_clause => {
-                parse_updating_clause(child, query)?;
+                // Parse into per-stage accumulators instead of flat query
+                for inner in child.into_inner() {
+                    match inner.as_rule() {
+                        Rule::create => {
+                            let pattern = parse_create_clause(inner)?;
+                            pending_creates.push(CreateClause { pattern });
+                            has_any_mutations = true;
+                        }
+                        Rule::merge => {
+                            pending_merges.push(parse_merge_clause(inner)?);
+                            has_any_mutations = true;
+                        }
+                        Rule::delete_clause => {
+                            pending_delete = Some(parse_delete_clause(inner)?);
+                            has_any_mutations = true;
+                        }
+                        Rule::set_clause => {
+                            pending_sets.push(parse_set_clause(inner)?);
+                            has_any_mutations = true;
+                        }
+                        Rule::remove => {
+                            pending_removes.push(parse_remove_clause(inner)?);
+                            has_any_mutations = true;
+                        }
+                        _ => {}
+                    }
+                }
             }
             Rule::with_clause => {
                 let wc = parse_with_clause(child)?;
 
-                if query.with_clause.is_some() {
-                    // Previous WITH exists — save it as an extra stage
-                    let prev_with = query.with_clause.take().unwrap();
-                    let prev_unwind = query.unwind_clause.take();
-
-                    // Post-WITH match clauses are the ones accumulated since the split
-                    let split = query.with_split_index.unwrap_or(query.match_clauses.len());
-                    let post_matches: Vec<_> = query.match_clauses.drain(split..).collect();
-                    let post_where = query.post_with_where_clause.take();
-
-                    query.extra_with_stages.push((
-                        prev_with,
-                        prev_unwind,
-                        post_matches,
-                        post_where,
-                    ));
-                }
-
-                // Push any pending match clauses to the main query
-                for mc in pending_match_clauses.drain(..) {
-                    query.match_clauses.push(mc);
-                }
+                // Collect all pending unwinds
+                let mut all_unwinds = Vec::new();
+                all_unwinds.append(&mut pending_unwinds);
                 if let Some(uw) = pending_unwind.take() {
-                    if let Some(prev) = query.unwind_clause.take() {
-                        query.additional_unwinds.push(prev);
-                    }
-                    query.unwind_clause = Some(uw);
+                    all_unwinds.push(uw);
                 }
 
-                query.with_split_index = Some(query.match_clauses.len());
-                query.with_clause = Some(wc);
+                // Check if this stage has mutations
+                let stage_has_mutations = !pending_creates.is_empty()
+                    || !pending_merges.is_empty()
+                    || !pending_sets.is_empty()
+                    || pending_delete.is_some()
+                    || !pending_removes.is_empty();
+
+                if stage_has_mutations || has_any_mutations {
+                    // Use multi_part_stages path for write queries
+                    let stage = MultiPartStage {
+                        with_clause: wc,
+                        unwind_clauses: all_unwinds,
+                        match_clauses: std::mem::take(&mut pending_match_clauses),
+                        create_clauses: std::mem::take(&mut pending_creates),
+                        merge_clauses: std::mem::take(&mut pending_merges),
+                        set_clauses: std::mem::take(&mut pending_sets),
+                        delete_clause: pending_delete.take(),
+                        remove_clauses: std::mem::take(&mut pending_removes),
+                        where_clause: pending_where.take(),
+                    };
+                    query.multi_part_stages.push(stage);
+                } else {
+                    // Read-only stage: use legacy extra_with_stages path for backward compat
+                    if query.with_clause.is_some() {
+                        let prev_with = query.with_clause.take().unwrap();
+                        let prev_unwind = query.unwind_clause.take();
+                        let split = query.with_split_index.unwrap_or(query.match_clauses.len());
+                        let post_matches: Vec<_> = query.match_clauses.drain(split..).collect();
+                        let post_where = query.post_with_where_clause.take();
+                        query.extra_with_stages.push((
+                            prev_with,
+                            prev_unwind,
+                            post_matches,
+                            post_where,
+                        ));
+                    }
+
+                    for mc in pending_match_clauses.drain(..) {
+                        query.match_clauses.push(mc);
+                    }
+                    // Transfer pending WHERE to the query
+                    if let Some(pw) = pending_where.take() {
+                        if query.with_clause.is_some() {
+                            query.post_with_where_clause = Some(pw);
+                        } else {
+                            query.where_clause = Some(pw);
+                        }
+                    }
+                    if let Some(uw) = all_unwinds.into_iter().last() {
+                        if let Some(prev) = query.unwind_clause.take() {
+                            query.additional_unwinds.push(prev);
+                        }
+                        query.unwind_clause = Some(uw);
+                    }
+
+                    query.with_split_index = Some(query.match_clauses.len());
+                    query.with_clause = Some(wc);
+                }
             }
             Rule::single_part_query => {
-                // Push any remaining pending match clauses
+                // Push any remaining pending reading clauses to main query
                 for mc in pending_match_clauses.drain(..) {
                     query.match_clauses.push(mc);
+                }
+                // Remaining unwinds go to the final stage
+                for uw in pending_unwinds.drain(..) {
+                    query.additional_unwinds.push(uw);
                 }
                 if let Some(uw) = pending_unwind.take() {
                     if let Some(prev) = query.unwind_clause.take() {
                         query.additional_unwinds.push(prev);
                     }
                     query.unwind_clause = Some(uw);
+                }
+                // Remaining mutation clauses go to the flat query (final stage)
+                for cc in pending_creates.drain(..) {
+                    if query.create_clause.is_none() {
+                        query.create_clause = Some(cc.clone());
+                    }
+                    query.create_clauses.push(cc);
+                }
+                for mc in pending_merges.drain(..) {
+                    if query.merge_clause.is_none() {
+                        query.merge_clause = Some(mc.clone());
+                    }
+                    query.all_merge_clauses.push(mc);
+                }
+                for sc in pending_sets.drain(..) {
+                    query.set_clauses.push(sc);
+                }
+                if let Some(dc) = pending_delete.take() {
+                    query.delete_clause = Some(dc);
+                }
+                for rc in pending_removes.drain(..) {
+                    query.remove_clauses.push(rc);
                 }
                 parse_single_part_query(child, query)?;
             }
@@ -627,7 +720,38 @@ fn parse_multi_part_query(pair: pest::iterators::Pair<Rule>, query: &mut Query) 
     Ok(())
 }
 
-fn parse_reading_clause_into_pending(
+/// Extended version of parse_reading_clause_into_pending that doesn't touch the query struct.
+/// Accumulates unwinds and where clauses into separate accumulators.
+fn parse_reading_clause_into_pending_ext(
+    pair: pest::iterators::Pair<Rule>,
+    match_clauses: &mut Vec<MatchClause>,
+    unwind: &mut Option<UnwindClause>,
+    additional_unwinds: &mut Vec<UnwindClause>,
+    where_clause: &mut Option<WhereClause>,
+) -> ParseResult<()> {
+    for inner in pair.into_inner() {
+        match inner.as_rule() {
+            Rule::match_clause => {
+                let (mc, wc) = parse_match_clause(inner)?;
+                match_clauses.push(mc);
+                if let Some(w) = wc {
+                    *where_clause = Some(w);
+                }
+            }
+            Rule::unwind => {
+                let new_unwind = parse_unwind_clause(inner)?;
+                if let Some(prev) = unwind.take() {
+                    additional_unwinds.push(prev);
+                }
+                *unwind = Some(new_unwind);
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn _parse_reading_clause_into_pending(
     pair: pest::iterators::Pair<Rule>,
     match_clauses: &mut Vec<MatchClause>,
     unwind: &mut Option<UnwindClause>,
@@ -714,7 +838,11 @@ fn parse_updating_clause(pair: pest::iterators::Pair<Rule>, query: &mut Query) -
                 query.create_clauses.push(clause);
             }
             Rule::merge => {
-                query.merge_clause = Some(parse_merge_clause(inner)?);
+                let mc = parse_merge_clause(inner)?;
+                if query.merge_clause.is_none() {
+                    query.merge_clause = Some(mc.clone());
+                }
+                query.all_merge_clauses.push(mc);
             }
             Rule::delete_clause => {
                 query.delete_clause = Some(parse_delete_clause(inner)?);
@@ -1648,6 +1776,7 @@ fn parse_pattern_element(pair: pest::iterators::Pair<Rule>) -> ParseResult<PathP
             variable: None,
             labels: vec![],
             properties: None,
+            expression_properties: Vec::new(),
         }),
         segments,
     })
@@ -1662,6 +1791,7 @@ fn parse_node_pattern(pair: pest::iterators::Pair<Rule>) -> ParseResult<NodePatt
     let mut variable = None;
     let mut labels = Vec::new();
     let mut properties = None;
+    let mut expr_properties: Vec<(String, Expression)> = Vec::new();
 
     for inner in pair.into_inner() {
         match inner.as_rule() {
@@ -1679,7 +1809,9 @@ fn parse_node_pattern(pair: pest::iterators::Pair<Rule>) -> ParseResult<NodePatt
                 }
             }
             Rule::properties => {
-                properties = Some(parse_properties(inner)?);
+                let (static_props, expr_ps) = parse_properties_with_exprs(inner)?;
+                properties = Some(static_props);
+                expr_properties = expr_ps;
             }
             _ => {}
         }
@@ -1689,6 +1821,7 @@ fn parse_node_pattern(pair: pest::iterators::Pair<Rule>) -> ParseResult<NodePatt
         variable,
         labels,
         properties,
+        expression_properties: expr_properties,
     })
 }
 
@@ -1813,19 +1946,25 @@ fn parse_range_literal(pair: pest::iterators::Pair<Rule>) -> ParseResult<LengthP
 fn parse_properties(
     pair: pest::iterators::Pair<Rule>,
 ) -> ParseResult<HashMap<String, PropertyValue>> {
+    let (props, _) = parse_properties_with_exprs(pair)?;
+    Ok(props)
+}
+
+fn parse_properties_with_exprs(
+    pair: pest::iterators::Pair<Rule>,
+) -> ParseResult<(HashMap<String, PropertyValue>, Vec<(String, Expression)>)> {
     for inner in pair.into_inner() {
         match inner.as_rule() {
             Rule::map_literal => {
-                return parse_map_literal_to_props(inner);
+                return parse_map_literal_to_props_with_exprs(inner);
             }
             Rule::parameter => {
-                // Property from parameter — return empty map for now
-                return Ok(HashMap::new());
+                return Ok((HashMap::new(), Vec::new()));
             }
             _ => {}
         }
     }
-    Ok(HashMap::new())
+    Ok((HashMap::new(), Vec::new()))
 }
 
 /// Parse a map_literal into a HashMap<String, PropertyValue>
@@ -1833,10 +1972,20 @@ fn parse_properties(
 fn parse_map_literal_to_props(
     pair: pest::iterators::Pair<Rule>,
 ) -> ParseResult<HashMap<String, PropertyValue>> {
+    let (props, _expr_props) = parse_map_literal_to_props_with_exprs(pair)?;
+    Ok(props)
+}
+
+/// Parse a map literal returning both static PropertyValue props and expression props.
+/// Expression props are for values that are variable references (e.g., {name: genre_name})
+/// which cannot be resolved to static PropertyValues at parse time.
+fn parse_map_literal_to_props_with_exprs(
+    pair: pest::iterators::Pair<Rule>,
+) -> ParseResult<(HashMap<String, PropertyValue>, Vec<(String, Expression)>)> {
     let mut props = HashMap::new();
+    let mut expr_props = Vec::new();
 
     let children: Vec<pest::iterators::Pair<Rule>> = pair.into_inner().collect();
-    // Children alternate: property_key_name, expression, property_key_name, expression, ...
     let mut i = 0;
     while i < children.len() {
         if children[i].as_rule() == Rule::property_key_name {
@@ -1844,7 +1993,15 @@ fn parse_map_literal_to_props(
             if i + 1 < children.len() && children[i + 1].as_rule() == Rule::expression {
                 let expr = parse_expression(children[i + 1].clone())?;
                 let value = expression_to_property_value(&expr);
-                props.insert(key, value);
+                if matches!(value, PropertyValue::Null)
+                    && !matches!(expr, Expression::Literal(PropertyValue::Null))
+                {
+                    // This is a non-literal expression (variable ref, function call, etc.)
+                    // Store as expression property for runtime evaluation
+                    expr_props.push((key, expr));
+                } else {
+                    props.insert(key, value);
+                }
                 i += 2;
             } else {
                 i += 1;
@@ -1854,7 +2011,7 @@ fn parse_map_literal_to_props(
         }
     }
 
-    Ok(props)
+    Ok((props, expr_props))
 }
 
 // ============================================================
@@ -2975,6 +3132,7 @@ fn parse_relationships_pattern(pair: pest::iterators::Pair<Rule>) -> ParseResult
             variable: None,
             labels: vec![],
             properties: None,
+            expression_properties: Vec::new(),
         }),
         segments,
     })

@@ -14,7 +14,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-graphmind-sdk = "0.6.4"
+graphmind-sdk = "0.8.0-beta"
 tokio = { version = "1", features = ["full"] }
 ```
 
@@ -94,6 +94,58 @@ async fn count_nodes(client: &dyn GraphmindClient) -> GraphmindResult<u64> {
 | Method | Description |
 |--------|-------------|
 | `query(graph, cypher)` | Execute a read/write Cypher query |
+| `query_readonly(graph, cypher)` | Execute a read-only query |
+| `explain(graph, cypher)` | Return the EXPLAIN plan without executing |
+| `profile(graph, cypher)` | Execute with PROFILE instrumentation |
+| `schema(graph)` | Return a schema summary string |
+| `status()` | Server health, version, node/edge counts |
+| `ping()` | Connectivity check (returns `"PONG"`) |
+| `list_graphs()` | List all graph namespaces |
+| `delete_graph(graph)` | Delete all data in a graph |
+
+## Query Parameters
+
+Use parameterized queries to safely pass dynamic values. Parameters prevent injection and improve query plan caching.
+
+```rust
+use std::collections::HashMap;
+
+// Build a parameter map
+let mut params = HashMap::new();
+params.insert("name".to_string(), serde_json::json!("Alice"));
+params.insert("minAge".to_string(), serde_json::json!(25));
+
+// Pass parameters via query_with_params
+let result = client.query_with_params(
+    "default",
+    "MATCH (p:Person) WHERE p.name = $name AND p.age > $minAge RETURN p.name, p.age",
+    params,
+).await?;
+
+for record in &result.records {
+    println!("{:?}", record);
+}
+
+// Write queries with parameters
+let mut params = HashMap::new();
+params.insert("name".to_string(), serde_json::json!("Carol"));
+params.insert("age".to_string(), serde_json::json!(28));
+
+client.query_with_params(
+    "default",
+    "CREATE (p:Person {name: $name, age: $age})",
+    params,
+).await?;
+```
+
+The `query_with_params` method is available on both `EmbeddedClient` and `RemoteClient` via the `GraphmindClient` trait. Use `$paramName` syntax in the Cypher query to reference parameters.
+
+### Trait Methods
+
+| Method | Description |
+|--------|-------------|
+| `query(graph, cypher)` | Execute a read/write Cypher query |
+| `query_with_params(graph, cypher, params)` | Execute a read/write query with parameters |
 | `query_readonly(graph, cypher)` | Execute a read-only query |
 | `explain(graph, cypher)` | Return the EXPLAIN plan without executing |
 | `profile(graph, cypher)` | Execute with PROFILE instrumentation |

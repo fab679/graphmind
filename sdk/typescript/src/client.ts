@@ -58,13 +58,21 @@ export class GraphmindClient {
   }
 
   /** Execute a read-write Cypher query */
-  async query(cypher: string, graph: string = "default"): Promise<QueryResult> {
-    return this.http.query(cypher, graph);
+  async query(
+    cypher: string,
+    graph: string = "default",
+    params?: Record<string, unknown>,
+  ): Promise<QueryResult> {
+    return this.http.query(cypher, graph, params);
   }
 
   /** Execute a read-only Cypher query */
-  async queryReadonly(cypher: string, graph: string = "default"): Promise<QueryResult> {
-    return this.http.query(cypher, graph);
+  async queryReadonly(
+    cypher: string,
+    graph: string = "default",
+    params?: Record<string, unknown>,
+  ): Promise<QueryResult> {
+    return this.http.query(cypher, graph, params);
   }
 
   /**

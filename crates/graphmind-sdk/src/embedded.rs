@@ -301,6 +301,50 @@ impl GraphmindClient for EmbeddedClient {
         }
     }
 
+    async fn query_with_params(
+        &self,
+        graph: &str,
+        cypher: &str,
+        params: HashMap<String, serde_json::Value>,
+    ) -> GraphmindResult<QueryResult> {
+        // Convert JSON params to PropertyValue
+        let pv_params: HashMap<String, graphmind::graph::PropertyValue> = params
+            .into_iter()
+            .map(|(k, v)| {
+                let pv = match v {
+                    serde_json::Value::Null => graphmind::graph::PropertyValue::Null,
+                    serde_json::Value::Bool(b) => graphmind::graph::PropertyValue::Boolean(b),
+                    serde_json::Value::Number(n) => {
+                        if let Some(i) = n.as_i64() {
+                            graphmind::graph::PropertyValue::Integer(i)
+                        } else {
+                            graphmind::graph::PropertyValue::Float(n.as_f64().unwrap_or(0.0))
+                        }
+                    }
+                    serde_json::Value::String(s) => graphmind::graph::PropertyValue::String(s),
+                    _ => graphmind::graph::PropertyValue::String(v.to_string()),
+                };
+                (k, pv)
+            })
+            .collect();
+
+        if is_write_query(cypher) {
+            let mut store_guard = self.store.write().await;
+            let batch = self
+                .engine
+                .execute_mut_with_params(cypher, &mut *store_guard, graph, &pv_params)
+                .map_err(|e| GraphmindError::QueryError(e.to_string()))?;
+            Ok(record_batch_to_query_result(&batch, &*store_guard))
+        } else {
+            let store_guard = self.store.read().await;
+            let batch = self
+                .engine
+                .execute_with_params(cypher, &*store_guard, &pv_params)
+                .map_err(|e| GraphmindError::QueryError(e.to_string()))?;
+            Ok(record_batch_to_query_result(&batch, &*store_guard))
+        }
+    }
+
     async fn query_readonly(&self, _graph: &str, cypher: &str) -> GraphmindResult<QueryResult> {
         let store_guard = self.store.read().await;
         let batch = self

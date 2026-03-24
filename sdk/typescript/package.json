@@ -1,6 +1,6 @@
 {
   "name": "graphmind-sdk",
-  "version": "0.7.0",
+  "version": "0.8.0-beta",
   "description": "TypeScript SDK for the Graphmind Graph Database",
   "type": "module",
   "main": "dist/src/index.js",

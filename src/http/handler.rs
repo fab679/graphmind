@@ -17,10 +17,58 @@ pub struct QueryRequest {
     pub query: String,
     #[serde(default = "default_graph")]
     pub graph: String,
+    /// Query parameters: { "name": "Alice", "age": 30 }
+    #[serde(default)]
+    pub params: Option<HashMap<String, serde_json::Value>>,
 }
 
 fn default_graph() -> String {
     "default".to_string()
+}
+
+/// Convert JSON parameter values to PropertyValues for the query engine
+fn json_params_to_property_values(
+    params: &HashMap<String, serde_json::Value>,
+) -> HashMap<String, PropertyValue> {
+    params
+        .iter()
+        .map(|(k, v)| {
+            let pv = match v {
+                serde_json::Value::Null => PropertyValue::Null,
+                serde_json::Value::Bool(b) => PropertyValue::Boolean(*b),
+                serde_json::Value::Number(n) => {
+                    if let Some(i) = n.as_i64() {
+                        PropertyValue::Integer(i)
+                    } else if let Some(f) = n.as_f64() {
+                        PropertyValue::Float(f)
+                    } else {
+                        PropertyValue::Null
+                    }
+                }
+                serde_json::Value::String(s) => PropertyValue::String(s.clone()),
+                serde_json::Value::Array(arr) => {
+                    let items: Vec<PropertyValue> = arr
+                        .iter()
+                        .map(|item| match item {
+                            serde_json::Value::String(s) => PropertyValue::String(s.clone()),
+                            serde_json::Value::Number(n) => {
+                                if let Some(i) = n.as_i64() {
+                                    PropertyValue::Integer(i)
+                                } else {
+                                    PropertyValue::Float(n.as_f64().unwrap_or(0.0))
+                                }
+                            }
+                            serde_json::Value::Bool(b) => PropertyValue::Boolean(*b),
+                            _ => PropertyValue::Null,
+                        })
+                        .collect();
+                    PropertyValue::Array(items)
+                }
+                serde_json::Value::Object(_) => PropertyValue::String(v.to_string()),
+            };
+            (k.clone(), pv)
+        })
+        .collect()
 }
 
 /// Response containing both graph data and raw tabular data
@@ -54,13 +102,24 @@ pub async fn query_handler(
 
     let start = std::time::Instant::now();
     let store = state.stores.get_store(&payload.graph).await;
+
+    // Convert JSON params to PropertyValue params
+    let params = payload
+        .params
+        .as_ref()
+        .map(json_params_to_property_values)
+        .unwrap_or_default();
+
     let (result, write_stats) = if is_write {
         let mut store_guard = store.write().await;
         let nb = store_guard.node_count();
         let eb = store_guard.edge_count();
-        let r = state
-            .engine
-            .execute_mut(&payload.query, &mut store_guard, &payload.graph);
+        let r = state.engine.execute_mut_with_params(
+            &payload.query,
+            &mut store_guard,
+            &payload.graph,
+            &params,
+        );
         let na = store_guard.node_count();
         let ea = store_guard.edge_count();
         let stats = json!({
@@ -74,7 +133,9 @@ pub async fn query_handler(
         (r, Some(stats))
     } else {
         let store_guard = store.read().await;
-        let r = state.engine.execute(&payload.query, &store_guard);
+        let r = state
+            .engine
+            .execute_with_params(&payload.query, &store_guard, &params);
         (r, None)
     };
     let duration = start.elapsed().as_secs_f64() * 1000.0;
@@ -198,14 +259,16 @@ pub async fn script_handler(
     let mut executed = 0u64;
     let mut errors: Vec<String> = Vec::new();
 
-    for line in payload.query.lines() {
-        let stmt = line.trim();
-        // Skip empty lines and comments
-        if stmt.is_empty() || stmt.starts_with("//") || stmt.starts_with("--") {
-            continue;
-        }
-        // Strip trailing semicolons
-        let stmt = stmt.trim_end_matches(';').trim();
+    // Use the query engine's statement splitter which handles:
+    // - Semicolons inside quoted strings (not split)
+    // - Multi-line statements (joined until ;)
+    // - Comment stripping (// and --)
+    // This replaces the naive line-by-line splitting that broke multi-line SET clauses.
+    let cleaned = crate::query::QueryEngine::strip_line_comments(&payload.query);
+    let statements = crate::query::QueryEngine::split_statements(&cleaned);
+
+    for (idx, stmt) in statements.iter().enumerate() {
+        let stmt = stmt.trim();
         if stmt.is_empty() {
             continue;
         }
@@ -218,7 +281,7 @@ pub async fn script_handler(
                 executed += 1;
             }
             Err(e) => {
-                errors.push(format!("Line {}: {}", executed + 1, e));
+                errors.push(format!("Statement {}: {}", idx + 1, e));
                 // Continue executing remaining statements
             }
         }

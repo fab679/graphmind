@@ -547,6 +547,8 @@ export const ForceGraph = forwardRef<ForceGraphHandle, ForceGraphProps>(function
   const rafRef = useRef<number>(0);
   const canvasRectRef = useRef<DOMRect | null>(null);
   const layoutRef = useRef<LayoutType>("force");
+  // When true, the next data change is incremental (expand/load) — preserve positions, don't re-fit
+  const incrementalRef = useRef(false);
 
   // Interaction state refs (not React state — no re-renders)
   const selectedNodeIdRef = useRef<string | null>(null);
@@ -1085,14 +1087,27 @@ export const ForceGraph = forwardRef<ForceGraphHandle, ForceGraphProps>(function
       degreeMap.set(edge.target, (degreeMap.get(edge.target) ?? 0) + 1);
     }
 
-    const simNodes: SimNode[] = nodes.map((n) => ({
-      id: n.id,
-      labels: n.labels,
-      properties: n.properties,
-      radius: nodeRadius(degreeMap.get(n.id) ?? 0),
-      x: cw / 2 + (Math.random() - 0.5) * 50,
-      y: ch / 2 + (Math.random() - 0.5) * 50,
-    }));
+    // Build position map from previous sim nodes to preserve positions on incremental updates
+    const prevPositions = new Map<string, { x: number; y: number }>();
+    if (incrementalRef.current) {
+      for (const sn of simNodesRef.current) {
+        if (sn.x != null && sn.y != null) {
+          prevPositions.set(sn.id, { x: sn.x, y: sn.y });
+        }
+      }
+    }
+
+    const simNodes: SimNode[] = nodes.map((n) => {
+      const prev = prevPositions.get(n.id);
+      return {
+        id: n.id,
+        labels: n.labels,
+        properties: n.properties,
+        radius: nodeRadius(degreeMap.get(n.id) ?? 0),
+        x: prev?.x ?? cw / 2 + (Math.random() - 0.5) * 50,
+        y: prev?.y ?? cw / 2 + (Math.random() - 0.5) * 50,
+      };
+    });
 
     const nodeIdSet = new Set(simNodes.map((n) => n.id));
 
@@ -1150,16 +1165,22 @@ export const ForceGraph = forwardRef<ForceGraphHandle, ForceGraphProps>(function
       }
     } else {
       // Pre-tick to settled positions (synchronous, no rendering)
-      const iterations = Math.min(300, Math.ceil(Math.log(nodeCount + 1) * 50));
+      // Fewer iterations for incremental updates (positions already mostly settled)
+      const baseIter = Math.min(300, Math.ceil(Math.log(nodeCount + 1) * 50));
+      const iterations = prevPositions.size > 0 ? Math.min(50, baseIter) : baseIter;
       for (let i = 0; i < iterations; i++) sim.tick();
       simRef.current = sim;
     }
 
     // --- 4. Compute initial fit-to-screen transform ---
-    const fitT = computeFitTransform(simNodes, cw, ch);
-    if (fitT) {
-      transformRef.current = fitT;
+    // Skip re-fit on incremental updates (expand neighbors, load relationships)
+    if (!incrementalRef.current) {
+      const fitT = computeFitTransform(simNodes, cw, ch);
+      if (fitT) {
+        transformRef.current = fitT;
+      }
     }
+    incrementalRef.current = false; // Reset for next update
 
     // --- 5. Mouse/touch helpers (closured for event handlers) ---
     function mouseToWorld(event: MouseEvent): [number, number] {
@@ -1585,6 +1606,7 @@ export const ForceGraph = forwardRef<ForceGraphHandle, ForceGraphProps>(function
         }
       }
 
+      incrementalRef.current = true;
       useGraphStore.getState().setGraphData(mergedNodes, mergedEdges);
     } catch (err) {
       console.error("Expand neighbors failed:", err);
@@ -1618,6 +1640,7 @@ export const ForceGraph = forwardRef<ForceGraphHandle, ForceGraphProps>(function
         }
       }
 
+      incrementalRef.current = true;
       useGraphStore.getState().setGraphData(state.nodes, mergedEdges);
     } catch (err) {
       console.error("View all relationships failed:", err);
