@@ -4226,6 +4226,7 @@ mod tests {
             with_split_index: None,
             post_with_where_clause: None,
             extra_with_stages: vec![],
+            multi_part_stages: vec![],
         };
         let result = planner.plan(&query, &store);
         assert!(result.is_err());

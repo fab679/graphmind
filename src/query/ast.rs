@@ -136,6 +136,23 @@ pub struct Query {
         Vec<MatchClause>,
         Option<WhereClause>,
     )>,
+    /// Full multi-part query stages with ALL clause types per stage
+    /// Used for complex queries like CREATE...SET...WITH...UNWIND...CREATE...WITH...UNWIND...CREATE
+    pub multi_part_stages: Vec<MultiPartStage>,
+}
+
+/// A single stage in a multi-part query (everything between two WITH barriers)
+#[derive(Debug, Clone, PartialEq)]
+pub struct MultiPartStage {
+    pub with_clause: WithClause,
+    pub unwind_clauses: Vec<UnwindClause>,
+    pub match_clauses: Vec<MatchClause>,
+    pub create_clauses: Vec<CreateClause>,
+    pub merge_clauses: Vec<MergeClause>,
+    pub set_clauses: Vec<SetClause>,
+    pub delete_clause: Option<DeleteClause>,
+    pub remove_clauses: Vec<RemoveClause>,
+    pub where_clause: Option<WhereClause>,
 }
 
 /// CREATE VECTOR INDEX clause
@@ -639,6 +656,7 @@ impl Query {
             with_split_index: None,
             post_with_where_clause: None,
             extra_with_stages: Vec::new(),
+            multi_part_stages: Vec::new(),
         }
     }
 

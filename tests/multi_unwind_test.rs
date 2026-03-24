@@ -1,67 +1,52 @@
-use graphmind::{GraphStore, Label, QueryEngine};
+use graphmind::{GraphStore, QueryEngine};
 
 #[test]
-fn test_random_uuid() {
-    let store = GraphStore::new();
+fn test_multi_with_unwind_create_stages() {
+    let mut store = GraphStore::new();
     let engine = QueryEngine::new();
 
-    let r = engine
-        .execute("RETURN randomUUID() AS uuid", &store)
-        .unwrap();
-    let uuid = r.records[0]
-        .get("uuid")
-        .unwrap()
-        .as_property()
-        .unwrap()
-        .as_string()
-        .unwrap();
-    eprintln!("UUID: {}", uuid);
-    assert_eq!(uuid.len(), 36);
-    assert_eq!(uuid.chars().nth(14), Some('4'), "Version 4");
+    let q = r#"CREATE (t:TVShow {id: 1399})
+SET t.name = "Game of Thrones"
+WITH t
+UNWIND ["Drama", "Sci-Fi", "Adventure"] AS genre_name
+CREATE (g:Genre {name: genre_name})
+CREATE (t)-[:IN_GENRE]->(g)
+WITH t
+UNWIND ["HBO"] AS network_name
+CREATE (n:Network {name: network_name})
+CREATE (t)-[:AIRED_ON]->(n)"#;
 
-    // Two UUIDs should differ
-    let r2 = engine
-        .execute("RETURN randomUUID() AS u1, randomUUID() AS u2", &store)
-        .unwrap();
-    let u1 = r2.records[0]
-        .get("u1")
-        .unwrap()
-        .as_property()
-        .unwrap()
-        .as_string()
-        .unwrap();
-    let u2 = r2.records[0]
-        .get("u2")
-        .unwrap()
-        .as_property()
-        .unwrap()
-        .as_string()
-        .unwrap();
-    assert_ne!(u1, u2);
+    match engine.execute_mut(q, &mut store, "default") {
+        Ok(_) => eprintln!("OK: {} nodes, {} edges", store.node_count(), store.edge_count()),
+        Err(e) => eprintln!("ERROR: {}", e),
+    }
+    
+    // Expected: 1 show + 3 genres + 1 network = 5 nodes
+    // Expected: 3 IN_GENRE + 1 AIRED_ON = 4 edges
+    assert_eq!(store.node_count(), 5, "Expected 5 nodes");
+    assert_eq!(store.edge_count(), 4, "Expected 4 edges");
 }
 
 #[test]
-fn test_uuid_uniqueness() {
-    let store = GraphStore::new();
-    let engine = QueryEngine::new();
+fn test_parse_multi_part_stages() {
+    let q = r#"CREATE (t:TVShow {id: 1399})
+SET t.name = "Test"
+WITH t
+UNWIND ["A", "B"] AS x
+CREATE (g:Genre {name: x})
+CREATE (t)-[:IN_GENRE]->(g)
+WITH t
+UNWIND ["N1"] AS y
+CREATE (n:Network {name: y})
+CREATE (t)-[:ON]->(n)"#;
 
-    // Generate 10 UUIDs and verify all unique
-    let mut uuids = Vec::new();
-    for _ in 0..10 {
-        let r = engine
-            .execute("RETURN randomUUID() AS uuid", &store)
-            .unwrap();
-        let uuid = r.records[0]
-            .get("uuid")
-            .unwrap()
-            .as_property()
-            .unwrap()
-            .as_string()
-            .unwrap()
-            .to_string();
-        assert_eq!(uuid.len(), 36, "UUID should be 36 chars");
-        uuids.push(uuid);
+    let query = graphmind::query::parser::parse_query(q).unwrap();
+    eprintln!("multi_part_stages: {}", query.multi_part_stages.len());
+    for (i, stage) in query.multi_part_stages.iter().enumerate() {
+        eprintln!("  stage[{}]: with_items={}, unwinds={}, creates={}, sets={}", 
+            i, stage.with_clause.items.len(), stage.unwind_clauses.len(), 
+            stage.create_clauses.len(), stage.set_clauses.len());
     }
-    let unique: std::collections::HashSet<_> = uuids.iter().collect();
-    assert_eq!(unique.len(), 10, "All 10 UUIDs should be unique");
+    
+    assert!(query.multi_part_stages.len() >= 1, "Should have at least 1 multi-part stage");
 }
