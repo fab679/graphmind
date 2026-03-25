@@ -1467,7 +1467,9 @@ async fn main() {
                 PropertyValue::Boolean(s.gmp_certified),
             );
             props.insert("capabilities_vec".to_string(), PropertyValue::Vector(emb));
-            let id = store.create_node_with_properties(tenant, vec![Label::new("Supplier")], props);
+            let id = store
+                .create_node_with_properties(tenant, vec![Label::new("Supplier")], props)
+                .unwrap();
             supplier_ids.push(id);
         }
         println!(

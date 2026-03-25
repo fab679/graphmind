@@ -697,7 +697,25 @@ impl GraphStore {
         tenant_id: &str,
         labels: Vec<Label>,
         properties: PropertyMap,
-    ) -> NodeId {
+    ) -> GraphResult<NodeId> {
+        // Enforce UNIQUE constraints before creating the node
+        for label in &labels {
+            for (key, value) in &properties {
+                if self.property_index.has_unique_constraint(label, key) {
+                    if let Some(existing_ids) = self.property_index.lookup(label, key, value) {
+                        if !existing_ids.is_empty() {
+                            return Err(GraphError::ConstraintViolation(format!(
+                                "Node already exists with label '{}' and {} = {:?}",
+                                label.as_str(),
+                                key,
+                                value
+                            )));
+                        }
+                    }
+                }
+            }
+        }
+
         let node_id_u64 = if let Some(id) = self.free_node_ids.pop() {
             id
         } else {
@@ -747,7 +765,7 @@ impl GraphStore {
         }
 
         self.nodes[idx].push(node);
-        node_id
+        Ok(node_id)
     }
 
     /// Get a node by ID at a specific version (MVCC)
@@ -1788,11 +1806,13 @@ mod tests {
         props.insert("name".to_string(), "Alice".into());
         props.insert("age".to_string(), 30i64.into());
 
-        let node_id = store.create_node_with_properties(
-            "default",
-            vec![Label::new("Person"), Label::new("Employee")],
-            props,
-        );
+        let node_id = store
+            .create_node_with_properties(
+                "default",
+                vec![Label::new("Person"), Label::new("Employee")],
+                props,
+            )
+            .unwrap();
 
         let node = store.get_node(node_id).unwrap();
         assert_eq!(node.label_count(), 2);
@@ -3013,15 +3033,17 @@ mod tests {
     #[test]
     fn test_columnar_storage_integration() {
         let mut store = GraphStore::new();
-        let id = store.create_node_with_properties("default", vec![Label::new("Person")], {
-            let mut props = PropertyMap::new();
-            props.insert(
-                "name".to_string(),
-                PropertyValue::String("Alice".to_string()),
-            );
-            props.insert("age".to_string(), PropertyValue::Integer(30));
-            props
-        });
+        let id = store
+            .create_node_with_properties("default", vec![Label::new("Person")], {
+                let mut props = PropertyMap::new();
+                props.insert(
+                    "name".to_string(),
+                    PropertyValue::String("Alice".to_string()),
+                );
+                props.insert("age".to_string(), PropertyValue::Integer(30));
+                props
+            })
+            .unwrap();
 
         // Verify columnar storage has the values
         let idx = id.as_u64() as usize;

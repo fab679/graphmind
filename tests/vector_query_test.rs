@@ -17,7 +17,9 @@ fn test_vector_call_query() {
         "embedding".to_string(),
         PropertyValue::Vector(vec![1.0, 0.0, 0.0]),
     );
-    store.create_node_with_properties("default", vec![Label::new("Person")], props1);
+    store
+        .create_node_with_properties("default", vec![Label::new("Person")], props1)
+        .unwrap();
 
     let mut props2 = std::collections::HashMap::new();
     props2.insert("name".to_string(), "Bob".into());
@@ -25,7 +27,9 @@ fn test_vector_call_query() {
         "embedding".to_string(),
         PropertyValue::Vector(vec![0.0, 1.0, 0.0]),
     );
-    store.create_node_with_properties("default", vec![Label::new("Person")], props2);
+    store
+        .create_node_with_properties("default", vec![Label::new("Person")], props2)
+        .unwrap();
 
     // 2. Execute query
     let engine = QueryEngine::new();

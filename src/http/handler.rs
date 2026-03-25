@@ -4,7 +4,7 @@ use crate::graph::PropertyValue;
 use crate::http::server::AppState;
 use crate::query::Value;
 use axum::{
-    extract::{Json, Multipart, State},
+    extract::{Json, Multipart, Query, State},
     response::IntoResponse,
 };
 use serde::{Deserialize, Serialize};
@@ -936,9 +936,19 @@ pub async fn import_json_handler(
 
 // ==================== Snapshot Handlers ====================
 
+/// Query parameters for selecting a graph/tenant
+#[derive(Deserialize)]
+pub struct GraphQuery {
+    #[serde(default = "default_graph")]
+    pub graph: String,
+}
+
 /// POST /api/snapshot/export — export a .sgsnap snapshot
-pub async fn export_snapshot_handler(State(state): State<AppState>) -> impl IntoResponse {
-    let store = state.stores.get_store("default").await;
+pub async fn export_snapshot_handler(
+    State(state): State<AppState>,
+    Query(params): Query<GraphQuery>,
+) -> impl IntoResponse {
+    let store = state.stores.get_store(&params.graph).await;
     let store_guard = store.read().await;
 
     let mut buf = Vec::new();
@@ -968,8 +978,9 @@ pub async fn restore_snapshot_handler(
     State(state): State<AppState>,
     mut multipart: Multipart,
 ) -> impl IntoResponse {
-    // Read the snapshot file from multipart
+    // Read the snapshot file and optional graph name from multipart
     let mut snapshot_data: Option<Vec<u8>> = None;
+    let mut graph = "default".to_string();
 
     loop {
         let field_result: Result<Option<axum::extract::multipart::Field<'_>>, _> =
@@ -977,8 +988,8 @@ pub async fn restore_snapshot_handler(
         match field_result {
             Ok(Some(field)) => {
                 let name = field.name().unwrap_or("").to_string();
-                if name == "file" {
-                    match field.bytes().await {
+                match name.as_str() {
+                    "file" => match field.bytes().await {
                         Ok(bytes) => snapshot_data = Some(bytes.to_vec()),
                         Err(e) => {
                             return (
@@ -987,7 +998,13 @@ pub async fn restore_snapshot_handler(
                             )
                                 .into_response()
                         }
+                    },
+                    "graph" => {
+                        if let Ok(text) = field.text().await {
+                            graph = text;
+                        }
                     }
+                    _ => {}
                 }
             }
             Ok(None) => break,
@@ -1006,7 +1023,7 @@ pub async fn restore_snapshot_handler(
         }
     };
 
-    let store = state.stores.get_store("default").await;
+    let store = state.stores.get_store(&graph).await;
     let mut store_guard = store.write().await;
     let cursor = std::io::Cursor::new(data);
 

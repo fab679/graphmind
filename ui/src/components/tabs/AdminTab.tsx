@@ -422,10 +422,8 @@ function ImportExportSection() {
     setLoading(true);
     setMessage(null);
     try {
-      const resp = await fetch("/api/snapshot/export", {
+      const resp = await fetch(`/api/snapshot/export?graph=${encodeURIComponent(activeGraph)}`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ graph: activeGraph }),
       });
       if (!resp.ok) throw new Error(await resp.text());
       const blob = await resp.blob();

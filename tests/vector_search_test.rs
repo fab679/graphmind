@@ -17,7 +17,9 @@ fn test_vector_search_integration() {
         "embedding".to_string(),
         PropertyValue::Vector(vec![1.0, 0.0, 0.0]),
     );
-    store.create_node_with_properties("default", vec![Label::new("Person")], props1);
+    store
+        .create_node_with_properties("default", vec![Label::new("Person")], props1)
+        .unwrap();
 
     let mut props2 = PropertyMap::new();
     props2.insert("name".to_string(), "Bob".into());
@@ -25,7 +27,9 @@ fn test_vector_search_integration() {
         "embedding".to_string(),
         PropertyValue::Vector(vec![0.0, 1.0, 0.0]),
     );
-    store.create_node_with_properties("default", vec![Label::new("Person")], props2);
+    store
+        .create_node_with_properties("default", vec![Label::new("Person")], props2)
+        .unwrap();
 
     let mut props3 = PropertyMap::new();
     props3.insert("name".to_string(), "Charlie".into());
@@ -33,7 +37,9 @@ fn test_vector_search_integration() {
         "embedding".to_string(),
         PropertyValue::Vector(vec![0.0, 0.0, 1.0]),
     );
-    store.create_node_with_properties("default", vec![Label::new("Person")], props3);
+    store
+        .create_node_with_properties("default", vec![Label::new("Person")], props3)
+        .unwrap();
 
     // 3. Search
     // Query vector is closest to Alice [1, 0, 0]
