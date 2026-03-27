@@ -1713,6 +1713,11 @@ impl GraphStore {
                 .insert(node_id);
         }
 
+        // Populate columnar storage from recovered node properties
+        for (key, value) in &node.properties {
+            self.node_columns.set_property(idx, key, value.clone());
+        }
+
         // Insert the node
         self.nodes[idx].push(node);
 
@@ -1765,6 +1770,11 @@ impl GraphStore {
             .entry(edge.edge_type.clone())
             .or_default()
             .insert(edge_id);
+
+        // Populate columnar storage from recovered edge properties
+        for (key, value) in &edge.properties {
+            self.edge_columns.set_property(idx, key, value.clone());
+        }
 
         // Insert the edge
         self.edges[idx].push(edge);

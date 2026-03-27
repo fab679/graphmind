@@ -370,6 +370,7 @@ fn parse_create_vector_index_statement(
     query: &mut Query,
 ) -> ParseResult<()> {
     let mut index_name = None;
+    let mut if_not_exists = false;
     let mut label = None;
     let mut property_key = None;
     let mut dimensions = 1536;
@@ -381,6 +382,9 @@ fn parse_create_vector_index_statement(
                 if index_name.is_none() {
                     index_name = Some(inner.as_str().to_string());
                 }
+            }
+            Rule::kw_if_not_exists => {
+                if_not_exists = true;
             }
             Rule::variable => {
                 // The variable inside FOR (...) — skip it, we get label from schema_name
@@ -417,6 +421,7 @@ fn parse_create_vector_index_statement(
 
     query.create_vector_index_clause = Some(CreateVectorIndexClause {
         index_name,
+        if_not_exists,
         label: label.ok_or_else(|| {
             ParseError::SemanticError("Missing label in CREATE VECTOR INDEX".to_string())
         })?,
@@ -1918,6 +1923,7 @@ fn parse_relationship_pattern(pair: pest::iterators::Pair<Rule>) -> ParseResult<
     let mut types = Vec::new();
     let mut length = None;
     let mut properties = None;
+    let mut expr_properties = Vec::new();
 
     for inner in pair.into_inner() {
         match inner.as_rule() {
@@ -1930,11 +1936,7 @@ fn parse_relationship_pattern(pair: pest::iterators::Pair<Rule>) -> ParseResult<
                             variable = Some(detail.as_str().to_string());
                         }
                         Rule::relationship_types => {
-                            // relationship_types = { ":" ~ rel_type_name ~ ("|" ~ ":"? ~ rel_type_name)* }
-                            // rel_type_name is silent → schema_name
-                            // We need to extract the type names from the text
                             let types_text = detail.as_str();
-                            // Remove leading ":"
                             let types_str = types_text.trim_start_matches(':');
                             for t in types_str.split('|') {
                                 let t = t.trim().trim_start_matches(':').trim();
@@ -1947,7 +1949,9 @@ fn parse_relationship_pattern(pair: pest::iterators::Pair<Rule>) -> ParseResult<
                             length = Some(parse_range_literal(detail)?);
                         }
                         Rule::properties => {
-                            properties = Some(parse_properties(detail)?);
+                            let (static_props, ep) = parse_properties_with_exprs(detail)?;
+                            properties = Some(static_props);
+                            expr_properties = ep;
                         }
                         _ => {}
                     }
@@ -1974,6 +1978,7 @@ fn parse_relationship_pattern(pair: pest::iterators::Pair<Rule>) -> ParseResult<
         direction,
         length,
         properties,
+        expression_properties: expr_properties,
     })
 }
 
@@ -2022,13 +2027,6 @@ fn parse_range_literal(pair: pest::iterators::Pair<Rule>) -> ParseResult<LengthP
 // Properties
 // properties = { map_literal | parameter }
 // ============================================================
-
-fn parse_properties(
-    pair: pest::iterators::Pair<Rule>,
-) -> ParseResult<HashMap<String, PropertyValue>> {
-    let (props, _) = parse_properties_with_exprs(pair)?;
-    Ok(props)
-}
 
 fn parse_properties_with_exprs(
     pair: pest::iterators::Pair<Rule>,

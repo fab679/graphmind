@@ -14,7 +14,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-graphmind-sdk = "0.8.0"
+graphmind-sdk = "0.8.5"
 tokio = { version = "1", features = ["full"] }
 ```
 

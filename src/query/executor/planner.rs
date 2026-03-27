@@ -805,6 +805,7 @@ impl QueryPlanner {
                     clause.property_key.clone(),
                     clause.dimensions,
                     clause.similarity.clone(),
+                    clause.if_not_exists,
                 )),
                 output_columns: vec![],
                 is_write: true,
@@ -912,11 +913,12 @@ impl QueryPlanner {
                                 .unwrap_or_else(|| EdgeType::new("RELATED"));
                             let ep = seg.edge.properties.clone().unwrap_or_default();
                             let ev = seg.edge.variable.clone();
+                            let eep = seg.edge.expression_properties.clone();
                             let (s, t) = match seg.edge.direction {
                                 Direction::Incoming => (tv, sv),
                                 _ => (sv, tv),
                             };
-                            edges.push((s, t, et, ep, ev));
+                            edges.push((s, t, et, ep, ev, eep));
                         }
                     }
                 }
@@ -1113,6 +1115,7 @@ impl QueryPlanner {
                                 et.clone(),
                                 edge_props,
                                 seg.edge.variable.clone(),
+                                seg.edge.expression_properties.clone(),
                             ));
                         }
                         current_var = target_name;
@@ -2042,27 +2045,60 @@ impl QueryPlanner {
         // Determine output columns
         let mut output_columns = Vec::new();
 
-        // Check if this is a MATCH...CREATE query (create edges between matched nodes)
+        // Check if this is a MATCH...CREATE query (create nodes/edges from CREATE pattern)
         let is_write = if let Some(create_clause) = &query.create_clause {
-            // Extract edge creation info from CREATE pattern
-            // Example: MATCH (a:Trial), (b:Condition) CREATE (a)-[:STUDIES]->(b)
             let create_pattern = &create_clause.pattern;
 
-            // Collect edges to create from the CREATE pattern
+            // First pass: collect new nodes to create (not in known_vars)
+            // and edges to create between them
+            let mut new_node_specs: Vec<(
+                String,                         // variable
+                Vec<Label>,                     // labels
+                HashMap<String, PropertyValue>, // properties
+                Vec<(String, Expression)>,      // expression_properties
+            )> = Vec::new();
             let mut edges_to_create: Vec<(
                 String,
                 String,
                 EdgeType,
                 HashMap<String, PropertyValue>,
                 Option<String>,
+                Vec<(String, Expression)>,
             )> = Vec::new();
 
             for path in &create_pattern.paths {
+                // Check start node
+                if let Some(ref var) = path.start.variable {
+                    if !known_vars.contains(var) && !path.start.labels.is_empty() {
+                        new_node_specs.push((
+                            var.clone(),
+                            path.start.labels.clone(),
+                            path.start.properties.clone().unwrap_or_default(),
+                            path.start.expression_properties.clone(),
+                        ));
+                        known_vars.insert(var.clone());
+                    }
+                }
+
                 let mut current_var = path.start.variable.clone();
 
                 for segment in &path.segments {
                     let target_var = segment.node.variable.clone();
                     let edge = &segment.edge;
+
+                    // Check if target is a new node
+                    if let Some(ref tgt) = target_var {
+                        if !known_vars.contains(tgt) && !segment.node.labels.is_empty() {
+                            new_node_specs.push((
+                                tgt.clone(),
+                                segment.node.labels.clone(),
+                                segment.node.properties.clone().unwrap_or_default(),
+                                segment.node.expression_properties.clone(),
+                            ));
+                            known_vars.insert(tgt.clone());
+                        }
+                    }
+
                     let edge_type = edge
                         .types
                         .first()
@@ -2070,6 +2106,7 @@ impl QueryPlanner {
                         .unwrap_or_else(|| EdgeType::new("RELATED_TO"));
                     let edge_properties = edge.properties.clone().unwrap_or_default();
                     let edge_variable = edge.variable.clone();
+                    let edge_expr_props = edge.expression_properties.clone();
 
                     if let (Some(src), Some(tgt)) = (&current_var, &target_var) {
                         edges_to_create.push((
@@ -2078,6 +2115,7 @@ impl QueryPlanner {
                             edge_type,
                             edge_properties,
                             edge_variable,
+                            edge_expr_props,
                         ));
                     }
 
@@ -2085,13 +2123,27 @@ impl QueryPlanner {
                 }
             }
 
-            // Wrap the match operator with edge creation
+            // Create new nodes first (via PerRowCreateOperator)
+            if !new_node_specs.is_empty() {
+                let node_specs: Vec<(
+                    Vec<Label>,
+                    HashMap<String, PropertyValue>,
+                    Vec<(String, Expression)>,
+                    Option<String>,
+                )> = new_node_specs
+                    .into_iter()
+                    .map(|(var, labels, props, expr_props)| (labels, props, expr_props, Some(var)))
+                    .collect();
+                operator = Box::new(PerRowCreateOperator::new(operator, node_specs, Vec::new()));
+            }
+
+            // Then create edges
             if !edges_to_create.is_empty() {
                 use crate::query::executor::operator::MatchCreateEdgeOperator;
                 operator = Box::new(MatchCreateEdgeOperator::new(operator, edges_to_create));
             }
 
-            true // This is a write query
+            true
         } else {
             false
         };
@@ -2110,6 +2162,35 @@ impl QueryPlanner {
                 })
                 .collect();
             operator = Box::new(DeleteOperator::new(operator, vars, delete_clause.detach));
+            true
+        } else {
+            is_write
+        };
+
+        // Handle MERGE clauses (after MATCH)
+        let is_write = if !query.all_merge_clauses.is_empty() {
+            for merge_clause in &query.all_merge_clauses {
+                let on_create: Vec<(String, String, Expression)> = merge_clause
+                    .on_create_set
+                    .iter()
+                    .map(|s| (s.variable.clone(), s.property.clone(), s.value.clone()))
+                    .collect();
+                let on_match: Vec<(String, String, Expression)> = merge_clause
+                    .on_match_set
+                    .iter()
+                    .map(|s| (s.variable.clone(), s.property.clone(), s.value.clone()))
+                    .collect();
+                let merge_vars = self.extract_pattern_vars(&merge_clause.pattern);
+                operator = Box::new(PerRowMergeOperator::new(
+                    operator,
+                    merge_clause.pattern.clone(),
+                    on_create,
+                    on_match,
+                ));
+                for v in merge_vars {
+                    known_vars.insert(v);
+                }
+            }
             true
         } else {
             is_write
@@ -3167,14 +3248,15 @@ impl QueryPlanner {
         let mut output_columns: Vec<String> = Vec::new();
         let mut create_anon_counter = 0usize;
 
-        // Check if any node has expression properties (e.g., {id: randomUUID()})
+        // Check if any node or edge has expression properties (e.g., {id: randomUUID()})
         // If so, use PerRowCreateOperator which can evaluate expressions at runtime
         let has_expr_props = create_clauses.iter().any(|cc| {
             cc.pattern.paths.iter().any(|p| {
                 !p.start.expression_properties.is_empty()
-                    || p.segments
-                        .iter()
-                        .any(|s| !s.node.expression_properties.is_empty())
+                    || p.segments.iter().any(|s| {
+                        !s.node.expression_properties.is_empty()
+                            || !s.edge.expression_properties.is_empty()
+                    })
             })
         });
         if has_expr_props {
@@ -3331,6 +3413,7 @@ impl QueryPlanner {
             EdgeType,
             HashMap<String, PropertyValue>,
             Option<String>,
+            Vec<(String, Expression)>,
         )> = Vec::new();
 
         // Counter for generating anonymous variable names for CREATE patterns
@@ -3415,6 +3498,7 @@ impl QueryPlanner {
                         edge_type,
                         edge_properties,
                         edge_variable,
+                        edge.expression_properties.clone(),
                     ));
                 }
 
@@ -3821,6 +3905,7 @@ impl QueryPlanner {
             EdgeType,
             HashMap<String, PropertyValue>,
             Option<String>,
+            Vec<(String, Expression)>,
         )>,
     ) {
         let mut node_specs = Vec::new();
@@ -3894,6 +3979,7 @@ impl QueryPlanner {
                             et.clone(),
                             edge_props,
                             seg.edge.variable.clone(),
+                            seg.edge.expression_properties.clone(),
                         ));
                     }
                     prev_var = target_name;

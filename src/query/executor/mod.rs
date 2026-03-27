@@ -494,12 +494,24 @@ fn substitute_params(
     for cc in &mut query.create_clauses {
         substitute_pattern_nodes(&mut cc.pattern.paths, params)?;
     }
-    // Substitute in MERGE clause pattern
+    // Substitute in MERGE clause pattern and actions
     if let Some(mc) = &mut query.merge_clause {
         substitute_pattern_nodes(&mut mc.pattern.paths, params)?;
+        for item in &mut mc.on_create_set {
+            substitute_expr(&mut item.value, params)?;
+        }
+        for item in &mut mc.on_match_set {
+            substitute_expr(&mut item.value, params)?;
+        }
     }
     for mc in &mut query.all_merge_clauses {
         substitute_pattern_nodes(&mut mc.pattern.paths, params)?;
+        for item in &mut mc.on_create_set {
+            substitute_expr(&mut item.value, params)?;
+        }
+        for item in &mut mc.on_match_set {
+            substitute_expr(&mut item.value, params)?;
+        }
     }
     // Substitute in WHERE clause
     if let Some(wc) = &mut query.where_clause {
@@ -543,6 +555,12 @@ fn substitute_params(
         }
         for mc in &mut stage.merge_clauses {
             substitute_pattern_nodes(&mut mc.pattern.paths, params)?;
+            for item in &mut mc.on_create_set {
+                substitute_expr(&mut item.value, params)?;
+            }
+            for item in &mut mc.on_match_set {
+                substitute_expr(&mut item.value, params)?;
+            }
         }
         for sc in &mut stage.set_clauses {
             for item in &mut sc.items {
@@ -8815,5 +8833,132 @@ mod tests {
         let executor = QueryExecutor::new(&store);
         let result = executor.execute(&query).unwrap();
         assert_eq!(result.records.len(), 2);
+    }
+
+    // === Bug reproduction tests ===
+
+    #[test]
+    fn test_bug3_merge_relationship_after_match() {
+        let mut store = GraphStore::new();
+        exec_mut(&mut store, "CREATE (s:Skill {name: 'my-skill'})");
+        exec_mut(&mut store, "CREATE (p:Project {name: 'helpdesk'})");
+        exec_mut(
+            &mut store,
+            "MATCH (s:Skill {name: 'my-skill'}), (p:Project {name: 'helpdesk'}) MERGE (s)-[:BELONGS_TO]->(p)",
+        );
+        assert!(
+            store.edge_count() >= 1,
+            "MERGE should create relationship, got {} edges",
+            store.edge_count()
+        );
+    }
+
+    #[test]
+    fn test_bug4_match_create_new_node_and_edge() {
+        let mut store = GraphStore::new();
+        exec_mut(&mut store, "CREATE (t:Trace {name: 'trace1'})");
+        let before_nodes = store.node_count();
+        exec_mut(
+            &mut store,
+            "MATCH (t:Trace {name: 'trace1'}) CREATE (t)-[:USED]->(tc:Tool {name: 'test'})",
+        );
+        assert!(
+            store.node_count() > before_nodes,
+            "Should create Tool node, node count {} -> {}",
+            before_nodes,
+            store.node_count()
+        );
+        assert!(
+            store.edge_count() >= 1,
+            "Should create USED edge, got {}",
+            store.edge_count()
+        );
+    }
+
+    #[test]
+    fn test_relationship_properties_on_create() {
+        let mut store = GraphStore::new();
+        exec_mut(
+            &mut store,
+            "CREATE (a:Person {name: 'Alice'})-[r:KNOWS {since: 2020, source: 'manual'}]->(b:Person {name: 'Bob'})",
+        );
+        let result = exec_read(
+            &store,
+            "MATCH (a:Person)-[r:KNOWS]->(b:Person) RETURN r.since, r.source",
+        );
+        assert!(!result.records.is_empty(), "Should find relationship");
+        let since = result.records[0].get("r.since");
+        assert_eq!(
+            since,
+            Some(&Value::Property(PropertyValue::Integer(2020))),
+            "Edge should have since=2020, got {:?}",
+            since
+        );
+    }
+
+    #[test]
+    fn test_edge_property_with_timestamp() {
+        let mut store = GraphStore::new();
+        exec_mut(
+            &mut store,
+            "CREATE (a:Person {name: 'A'})-[r:KNOWS {ts: timestamp()}]->(b:Person {name: 'B'})",
+        );
+        let result = exec_read(&store, "MATCH ()-[r:KNOWS]->() RETURN r.ts");
+        assert!(!result.records.is_empty(), "Should find edge");
+        let ts = result.records[0].get("r.ts");
+        match ts {
+            Some(Value::Property(PropertyValue::Integer(v))) => {
+                assert!(*v > 0, "timestamp should be positive")
+            }
+            other => panic!("Expected integer timestamp on edge, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_merge_on_create_set_with_params() {
+        let mut store = GraphStore::new();
+        let query = parse_query(
+            "MERGE (s:Skill {name: $name}) ON CREATE SET s.description = $description RETURN s.name, s.description",
+        )
+        .unwrap();
+        let mut params = std::collections::HashMap::new();
+        params.insert(
+            "name".to_string(),
+            PropertyValue::String("search".to_string()),
+        );
+        params.insert(
+            "description".to_string(),
+            PropertyValue::String("semantic search".to_string()),
+        );
+        let mut executor =
+            MutQueryExecutor::new(&mut store, "default".to_string()).with_params(params);
+        let result = executor.execute(&query);
+        assert!(
+            result.is_ok(),
+            "MERGE ON CREATE SET with params should work: {:?}",
+            result.err()
+        );
+        let batch = result.unwrap();
+        assert!(!batch.records.is_empty(), "Should return a record");
+    }
+
+    #[test]
+    fn test_create_vector_index_if_not_exists() {
+        let engine = crate::query::QueryEngine::new();
+        let mut store = GraphStore::new();
+        // Create the index
+        let r1 = engine.execute_mut(
+            "CREATE VECTOR INDEX myIdx FOR (n:Doc) ON (n.emb) OPTIONS {dimensions: 3, similarity: 'cosine'}",
+            &mut store,
+            "default",
+        );
+        assert!(r1.is_ok());
+        // Create again with IF NOT EXISTS — should not error
+        let r2 = engine.execute_mut(
+            "CREATE VECTOR INDEX myIdx IF NOT EXISTS FOR (n:Doc) ON (n.emb) OPTIONS {dimensions: 3, similarity: 'cosine'}",
+            &mut store,
+            "default",
+        );
+        assert!(r2.is_ok(), "IF NOT EXISTS should not error: {:?}", r2.err());
     }
 }

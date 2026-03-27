@@ -300,6 +300,7 @@ mod tests {
                 direction: dir,
                 length: None,
                 properties: None,
+                expression_properties: Vec::new(),
             },
             node: NodePattern {
                 variable: Some(node_var.to_string()),

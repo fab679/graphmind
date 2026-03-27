@@ -163,6 +163,7 @@ pub struct MultiPartStage {
 #[derive(Debug, Clone, PartialEq)]
 pub struct CreateVectorIndexClause {
     pub index_name: Option<String>,
+    pub if_not_exists: bool,
     pub label: Label,
     pub property_key: String,
     pub dimensions: usize,
@@ -303,8 +304,10 @@ pub struct EdgePattern {
     pub direction: Direction,
     /// Variable length pattern
     pub length: Option<LengthPattern>,
-    /// Property constraints
+    /// Property constraints (static values)
     pub properties: Option<HashMap<String, PropertyValue>>,
+    /// Expression properties (e.g., {ts: timestamp(), id: randomUUID()})
+    pub expression_properties: Vec<(String, Expression)>,
 }
 
 /// Edge direction

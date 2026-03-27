@@ -5953,16 +5953,24 @@ pub struct CreateVectorIndexOperator {
     property_key: String,
     dimensions: usize,
     similarity: String,
+    if_not_exists: bool,
     executed: bool,
 }
 
 impl CreateVectorIndexOperator {
-    pub fn new(label: Label, property_key: String, dimensions: usize, similarity: String) -> Self {
+    pub fn new(
+        label: Label,
+        property_key: String,
+        dimensions: usize,
+        similarity: String,
+        if_not_exists: bool,
+    ) -> Self {
         Self {
             label,
             property_key,
             dimensions,
             similarity,
+            if_not_exists,
             executed: false,
         }
     }
@@ -5983,6 +5991,17 @@ impl PhysicalOperator for CreateVectorIndexOperator {
     ) -> ExecutionResult<Option<Record>> {
         if self.executed {
             return Ok(None);
+        }
+
+        // IF NOT EXISTS: skip if index already exists
+        if self.if_not_exists {
+            let existing = store
+                .vector_index
+                .get_index(self.label.as_str(), &self.property_key);
+            if existing.is_some() {
+                self.executed = true;
+                return Ok(Some(Record::new()));
+            }
         }
 
         let metric = match self.similarity.to_lowercase().as_str() {
@@ -6725,13 +6744,14 @@ pub struct PerRowCreateOperator {
         Vec<(String, Expression)>,
         Option<String>,
     )>,
-    /// Edges to create: (source_var, target_var, edge_type, properties, edge_var)
+    /// Edges to create: (source_var, target_var, edge_type, properties, edge_var, expression_properties)
     edge_specs: Vec<(
         String,
         String,
         EdgeType,
         HashMap<String, PropertyValue>,
         Option<String>,
+        Vec<(String, Expression)>,
     )>,
 }
 
@@ -6750,6 +6770,7 @@ impl PerRowCreateOperator {
             EdgeType,
             HashMap<String, PropertyValue>,
             Option<String>,
+            Vec<(String, Expression)>,
         )>,
     ) -> Self {
         Self {
@@ -6811,7 +6832,7 @@ impl PhysicalOperator for PerRowCreateOperator {
         }
 
         // Create edges for this row
-        for (source_var, target_var, edge_type, props, edge_var) in &self.edge_specs {
+        for (source_var, target_var, edge_type, props, edge_var, expr_props) in &self.edge_specs {
             let source_id = record.get(source_var).and_then(|v| v.node_id());
             let target_id = record.get(target_var).and_then(|v| v.node_id());
             if let (Some(src), Some(tgt)) = (source_id, target_id) {
@@ -6823,6 +6844,16 @@ impl PhysicalOperator for PerRowCreateOperator {
                 for (k, v) in props {
                     if let Some(edge) = store.get_edge_mut(edge_id) {
                         edge.set_property(k.clone(), v.clone());
+                    }
+                }
+                // Evaluate expression properties (e.g., timestamp(), randomUUID())
+                for (k, expr) in expr_props {
+                    let store_ref: &GraphStore = store;
+                    let val = eval_expression(expr, &record, store_ref)?;
+                    if let Value::Property(pv) = val {
+                        if let Some(edge) = store.get_edge_mut(edge_id) {
+                            edge.set_property(k.clone(), pv);
+                        }
                     }
                 }
                 if let Some(ev) = edge_var {
@@ -7281,13 +7312,14 @@ impl PhysicalOperator for CreateEdgeOperator {
 pub struct CreateNodesAndEdgesOperator {
     /// Node creation operator
     node_operator: OperatorBox,
-    /// Edges to create: (source_var, target_var, edge_type, properties, edge_var)
+    /// Edges to create: (source_var, target_var, edge_type, properties, edge_var, expression_properties)
     edges_to_create: Vec<(
         String,
         String,
         EdgeType,
         HashMap<String, PropertyValue>,
         Option<String>,
+        Vec<(String, Expression)>,
     )>,
     /// Variable to NodeId mapping (built during node creation)
     var_to_node_id: HashMap<String, NodeId>,
@@ -7311,6 +7343,7 @@ impl CreateNodesAndEdgesOperator {
             EdgeType,
             HashMap<String, PropertyValue>,
             Option<String>,
+            Vec<(String, Expression)>,
         )>,
     ) -> Self {
         Self {
@@ -7355,7 +7388,9 @@ impl PhysicalOperator for CreateNodesAndEdgesOperator {
 
         // Phase 1: Create all edges
         if self.phase == 1 {
-            for (source_var, target_var, edge_type, properties, edge_var) in &self.edges_to_create {
+            for (source_var, target_var, edge_type, properties, edge_var, expr_props) in
+                &self.edges_to_create
+            {
                 let source_id = self
                     .var_to_node_id
                     .get(source_var)
@@ -7369,10 +7404,21 @@ impl PhysicalOperator for CreateNodesAndEdgesOperator {
                     .create_edge(*source_id, *target_id, edge_type.clone())
                     .map_err(|e| ExecutionError::GraphError(e.to_string()))?;
 
-                // Set properties on edge
+                // Set static properties on edge
                 if let Some(edge) = store.get_edge_mut(edge_id) {
                     for (key, value) in properties {
                         edge.set_property(key.clone(), value.clone());
+                    }
+                }
+                // Evaluate expression properties (e.g., timestamp(), randomUUID())
+                let empty_record = Record::new();
+                for (key, expr) in expr_props {
+                    let store_ref: &GraphStore = store;
+                    let val = eval_expression(expr, &empty_record, store_ref)?;
+                    if let Value::Property(pv) = val {
+                        if let Some(edge) = store.get_edge_mut(edge_id) {
+                            edge.set_property(key.clone(), pv);
+                        }
                     }
                 }
 
@@ -7422,7 +7468,7 @@ impl PhysicalOperator for CreateNodesAndEdgesOperator {
         let edge_descs: Vec<String> = self
             .edges_to_create
             .iter()
-            .map(|(src, tgt, et, _, _)| format!("({})-[:{}]->({})", src, et.as_str(), tgt))
+            .map(|(src, tgt, et, _, _, _)| format!("({})-[:{}]->({})", src, et.as_str(), tgt))
             .collect();
         OperatorDescription {
             name: "CreateNodesAndEdges".to_string(),
@@ -7438,13 +7484,14 @@ impl PhysicalOperator for CreateNodesAndEdgesOperator {
 pub struct MatchCreateEdgeOperator {
     /// Input operator (MATCH results)
     input: OperatorBox,
-    /// Edges to create: (source_var, target_var, edge_type, properties, edge_var)
+    /// Edges to create: (source_var, target_var, edge_type, properties, edge_var, expression_properties)
     edges_to_create: Vec<(
         String,
         String,
         EdgeType,
         HashMap<String, PropertyValue>,
         Option<String>,
+        Vec<(String, Expression)>,
     )>,
     /// Whether edges have been created for current batch
     done: bool,
@@ -7464,6 +7511,7 @@ impl MatchCreateEdgeOperator {
             EdgeType,
             HashMap<String, PropertyValue>,
             Option<String>,
+            Vec<(String, Expression)>,
         )>,
     ) -> Self {
         Self {
@@ -7493,7 +7541,7 @@ impl PhysicalOperator for MatchCreateEdgeOperator {
         if !self.done {
             while let Some(record) = self.input.next_mut(store, tenant_id)? {
                 // For each matched record, create the specified edges
-                for (source_var, target_var, edge_type, properties, _edge_var) in
+                for (source_var, target_var, edge_type, properties, _edge_var, expr_props) in
                     &self.edges_to_create
                 {
                     // Get source node ID from record bindings
@@ -7513,10 +7561,20 @@ impl PhysicalOperator for MatchCreateEdgeOperator {
                         .create_edge(source_id, target_id, edge_type.clone())
                         .map_err(|e| ExecutionError::GraphError(e.to_string()))?;
 
-                    // Set properties on edge
+                    // Set static properties on edge
                     if let Some(edge) = store.get_edge_mut(edge_id) {
                         for (key, value) in properties {
                             edge.set_property(key.clone(), value.clone());
+                        }
+                    }
+                    // Evaluate and set expression properties (e.g., timestamp(), randomUUID())
+                    for (key, expr) in expr_props {
+                        let store_ref: &GraphStore = store;
+                        let val = eval_expression(expr, &record, store_ref)?;
+                        if let Value::Property(pv) = val {
+                            if let Some(edge) = store.get_edge_mut(edge_id) {
+                                edge.set_property(key.clone(), pv);
+                            }
                         }
                     }
 
@@ -7556,7 +7614,7 @@ impl PhysicalOperator for MatchCreateEdgeOperator {
         let edge_descs: Vec<String> = self
             .edges_to_create
             .iter()
-            .map(|(src, tgt, et, _, _)| format!("({})-[:{}]->({})", src, et.as_str(), tgt))
+            .map(|(src, tgt, et, _, _, _)| format!("({})-[:{}]->({})", src, et.as_str(), tgt))
             .collect();
         OperatorDescription {
             name: "MatchCreateEdge".to_string(),
