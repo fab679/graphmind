@@ -211,17 +211,17 @@ See [`dist/config.toml`](dist/config.toml) for a full config file example.
 
 github: [fab679]
 
-# Optional platforms (uncomment when you actually use them)
+## ❤️ Sponsor GraphMind
 
-# patreon: your-patreon
+If GraphMind is useful to you, consider sponsoring:
 
-# open_collective: your-collective
+👉 https://github.com/sponsors/fab679
 
-# ko_fi: your-kofi
+Your support helps:
 
-custom:
-
-- "https://github.com/sponsors/fab679"
+- Improve performance & scaling
+- Expand OpenCypher support
+- Build LLM-native graph features
 
 ## License
 
