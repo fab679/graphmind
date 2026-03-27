@@ -135,9 +135,17 @@ client = GraphmindClient.connect("http://localhost:8080",
 ```typescript
 import { GraphmindClient } from "graphmind-sdk";
 
+// Token auth
 const client = new GraphmindClient({
   url: "http://localhost:8080",
-  token: "my-secret-token",  // or use Basic auth
+  token: "my-secret-token",
+});
+
+// Username/password auth
+const client2 = new GraphmindClient({
+  url: "http://localhost:8080",
+  username: "admin",
+  password: "secret",
 });
 ```
 

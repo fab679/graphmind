@@ -5058,6 +5058,24 @@ impl PhysicalOperator for IndexScanOperator {
     }
 }
 
+/// Resolve an expression against a record — used by VectorSearchOperator for deferred vectors.
+fn resolve_expression_for_record(
+    expr: &Expression,
+    record: &Record,
+    store: &GraphStore,
+) -> Option<Value> {
+    match expr {
+        Expression::Variable(var) => record.get(var).cloned(),
+        Expression::Property { variable, property } => {
+            let val = record.get(variable)?;
+            let prop = val.resolve_property(property, store);
+            Some(Value::Property(prop))
+        }
+        Expression::Literal(lit) => Some(Value::Property(lit.clone())),
+        _ => None,
+    }
+}
+
 /// Vector search operator: supports both CALL db.index.vector.queryNodes(...)
 /// and SEARCH clause within MATCH.
 /// Returns nodes ordered by similarity (highest first) with optional SCORE AS alias.
@@ -5066,14 +5084,19 @@ pub struct VectorSearchOperator {
     label: String,
     /// Property key to search in
     property_key: String,
-    /// Query vector
+    /// Query vector (resolved at plan time from a literal/parameter)
     query_vector: Vec<f32>,
+    /// Deferred query vector expression — for property access (e.g., snowWhite.embedding)
+    /// that must be resolved at runtime from a prior MATCH result
+    deferred_vector_expr: Option<crate::query::ast::Expression>,
     /// Number of neighbors to return
     k: usize,
     /// Variable name for matched nodes
     node_var: String,
     /// Variable name for similarity scores (optional)
     score_var: Option<String>,
+    /// Optional input operator (for correlated subquery — prior MATCH result)
+    input: Option<OperatorBox>,
     /// Search results: (NodeId, similarity_score) — score in [0, 1], higher = more similar
     results: Vec<(NodeId, f32)>,
     /// Current index in results
@@ -5093,9 +5116,36 @@ impl VectorSearchOperator {
             label,
             property_key,
             query_vector,
+            deferred_vector_expr: None,
             k,
             node_var,
             score_var,
+            input: None,
+            results: Vec::new(),
+            current: 0,
+        }
+    }
+
+    /// Create a VectorSearchOperator with a deferred expression (e.g., property access).
+    /// The expression is resolved at runtime from the input operator's records.
+    pub fn new_deferred(
+        label: String,
+        property_key: String,
+        expr: crate::query::ast::Expression,
+        k: usize,
+        node_var: String,
+        score_var: Option<String>,
+        input: OperatorBox,
+    ) -> Self {
+        Self {
+            label,
+            property_key,
+            query_vector: Vec::new(),
+            deferred_vector_expr: Some(expr),
+            k,
+            node_var,
+            score_var,
+            input: Some(input),
             results: Vec::new(),
             current: 0,
         }
@@ -5133,6 +5183,34 @@ impl VectorSearchOperator {
 
 impl PhysicalOperator for VectorSearchOperator {
     fn next(&mut self, store: &GraphStore) -> ExecutionResult<Option<Record>> {
+        // If we have a deferred expression, resolve it from the input operator
+        if self.deferred_vector_expr.is_some() && self.results.is_empty() && self.current == 0 {
+            let expr = self.deferred_vector_expr.clone().unwrap();
+            if let Some(ref mut input) = self.input {
+                if let Some(input_record) = input.next(store)? {
+                    // Resolve the expression against the input record
+                    let resolved = resolve_expression_for_record(&expr, &input_record, store);
+                    self.query_vector = match resolved {
+                        Some(Value::Property(PropertyValue::Vector(v))) => v,
+                        Some(Value::Property(PropertyValue::Array(arr))) => arr
+                            .iter()
+                            .map(|v| match v {
+                                PropertyValue::Float(f) => *f as f32,
+                                PropertyValue::Integer(i) => *i as f32,
+                                _ => 0.0,
+                            })
+                            .collect(),
+                        _ => {
+                            // Null query vector — MATCH returns empty, OPTIONAL MATCH returns null
+                            return Ok(None);
+                        }
+                    };
+                } else {
+                    return Ok(None);
+                }
+            }
+        }
+
         self.initialize(store)?;
 
         if self.current >= self.results.len() {

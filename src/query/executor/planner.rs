@@ -2633,34 +2633,52 @@ impl QueryPlanner {
                     };
 
                     // Extract query vector from expression
-                    let query_vec: Vec<f32> = match query_vector_expr {
-                        Expression::Literal(PropertyValue::Vector(v)) => v.clone(),
-                        Expression::Literal(PropertyValue::Array(arr)) => arr
-                            .iter()
-                            .map(|v| match v {
-                                PropertyValue::Float(f) => *f as f32,
-                                PropertyValue::Integer(i) => *i as f32,
-                                _ => 0.0,
-                            })
-                            .collect(),
-                        _ => {
-                            return Err(ExecutionError::PlanningError(
-                                "SEARCH query vector must be a literal vector/list".to_string(),
-                            ))
-                        }
-                    };
-
                     let score_var = search.score_alias.clone();
                     let in_index_where = search.where_clause.clone();
 
-                    search_op = Some(Box::new(VectorSearchOperator::new(
-                        search_label,
-                        search_property,
-                        query_vec,
-                        k,
-                        start_var.clone(),
-                        score_var,
-                    )));
+                    // Try to resolve the query vector at plan time (literal/parameter).
+                    // If it's a property access or other expression, defer to runtime.
+                    let query_vec_opt: Option<Vec<f32>> = match query_vector_expr {
+                        Expression::Literal(PropertyValue::Vector(v)) => Some(v.clone()),
+                        Expression::Literal(PropertyValue::Array(arr)) => Some(
+                            arr.iter()
+                                .map(|v| match v {
+                                    PropertyValue::Float(f) => *f as f32,
+                                    PropertyValue::Integer(i) => *i as f32,
+                                    _ => 0.0,
+                                })
+                                .collect(),
+                        ),
+                        _ => None, // Defer to runtime (e.g., property access, function call)
+                    };
+
+                    if let Some(query_vec) = query_vec_opt {
+                        search_op = Some(Box::new(VectorSearchOperator::new(
+                            search_label,
+                            search_property,
+                            query_vec,
+                            k,
+                            start_var.clone(),
+                            score_var,
+                        )));
+                    } else {
+                        // Deferred: the query vector expression (e.g., snowWhite.embedding)
+                        // will be resolved at runtime from the prior MATCH result.
+                        // We need an input operator to feed the prior record.
+                        // Use a no-op placeholder; the Apply operator in multi-part queries
+                        // will pipe the prior result in. For single-query, use NodeScan as input.
+                        let input_op: OperatorBox =
+                            Box::new(NodeScanOperator::new(start_var.clone(), vec![]));
+                        search_op = Some(Box::new(VectorSearchOperator::new_deferred(
+                            search_label,
+                            search_property,
+                            query_vector_expr.clone(),
+                            k,
+                            start_var.clone(),
+                            score_var,
+                            input_op,
+                        )));
+                    }
 
                     // If there's an in-index WHERE clause, we need to over-fetch and filter
                     // We store the in-index filter for post-search filtering

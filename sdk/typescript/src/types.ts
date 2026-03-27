@@ -140,4 +140,8 @@ export interface ClientOptions {
   graph?: string;
   /** Bearer token for authentication */
   token?: string;
+  /** Username for Basic Auth (requires password) */
+  username?: string;
+  /** Password for Basic Auth (requires username) */
+  password?: string;
 }

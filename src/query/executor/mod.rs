@@ -478,6 +478,14 @@ fn substitute_params(
     // Substitute in MATCH clause pattern nodes (e.g., MATCH (n:Person {id: $id}))
     for mc in &mut query.match_clauses {
         substitute_pattern_nodes(&mut mc.pattern.paths, params)?;
+        // Substitute in SEARCH clause (query vector, limit, in-index WHERE)
+        if let Some(ref mut search) = mc.search_clause {
+            substitute_expr(&mut search.query_vector, params)?;
+            substitute_expr(&mut search.limit, params)?;
+            if let Some(ref mut wc) = search.where_clause {
+                substitute_expr(&mut wc.predicate, params)?;
+            }
+        }
     }
     // Substitute in CREATE clause patterns
     if let Some(cc) = &mut query.create_clause {

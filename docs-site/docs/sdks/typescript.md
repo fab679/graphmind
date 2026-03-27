@@ -59,7 +59,9 @@ const client2 = GraphmindClient.connectHttp("http://localhost:8080");
 
 ## Authentication
 
-If the server requires authentication, pass a bearer token:
+### Token Auth
+
+If the server requires token authentication, pass a bearer token:
 
 ```typescript
 const client = new GraphmindClient({
@@ -69,6 +71,20 @@ const client = new GraphmindClient({
 ```
 
 The token is sent as an `Authorization: Bearer <token>` header on every request.
+
+### Username / Password Auth
+
+For servers configured with username/password authentication:
+
+```typescript
+const client = new GraphmindClient({
+  url: "http://localhost:8080",
+  username: "admin",
+  password: "secret",
+});
+```
+
+Credentials are sent as an `Authorization: Basic <base64>` header on every request. If both `token` and `username`/`password` are provided, the token takes precedence.
 
 ## CRUD Operations
 

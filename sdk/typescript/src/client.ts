@@ -45,6 +45,9 @@ export class GraphmindClient {
     const headers: Record<string, string> = {};
     if (options?.token) {
       headers["Authorization"] = `Bearer ${options.token}`;
+    } else if (options?.username && options?.password) {
+      const credentials = btoa(`${options.username}:${options.password}`);
+      headers["Authorization"] = `Basic ${credentials}`;
     }
     this.http = new HttpTransport(url, headers);
   }
