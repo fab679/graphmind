@@ -8,16 +8,16 @@
 
 ## Screenshots
 
-| Graph Explorer | Shortest Path | Node Inspector |
-|:-:|:-:|:-:|
+|                  Graph Explorer                   |                  Shortest Path                  |                  Node Inspector                   |
+| :-----------------------------------------------: | :---------------------------------------------: | :-----------------------------------------------: |
 | ![Graph Explorer](screenshots/graph-explorer.png) | ![Shortest Path](screenshots/shortest-path.png) | ![Node Inspector](screenshots/node-inspector.png) |
 
-| Circular Layout | Hierarchical Layout | Query Editor |
-|:-:|:-:|:-:|
+|               Circular Layout                |                 Hierarchical Layout                  |                 Query Editor                  |
+| :------------------------------------------: | :--------------------------------------------------: | :-------------------------------------------: |
 | ![Circular](screenshots/circular-layout.png) | ![Hierarchical](screenshots/hierarchical-layout.png) | ![Query Editor](screenshots/query-editor.png) |
 
-| Schema Browser | Admin Panel | Settings |
-|:-:|:-:|:-:|
+|              Schema Browser               |              Admin Panel              |               Settings                |
+| :---------------------------------------: | :-----------------------------------: | :-----------------------------------: |
 | ![Schema](screenshots/schema-browser.png) | ![Admin](screenshots/admin-panel.png) | ![Settings](screenshots/settings.png) |
 
 ## Install
@@ -123,9 +123,9 @@ npm install graphmind-sdk
 ```
 
 ```typescript
-import { GraphmindClient } from 'graphmind-sdk';
+import { GraphmindClient } from "graphmind-sdk";
 
-const client = new GraphmindClient({ url: 'http://localhost:8080' });
+const client = new GraphmindClient({ url: "http://localhost:8080" });
 
 await client.query(`
   CREATE (a:Person {name: "Alice", age: 30});
@@ -134,7 +134,7 @@ await client.query(`
   CREATE (a)-[:KNOWS]->(b)
 `);
 
-const result = await client.query('MATCH (n:Person) RETURN n.name, n.age');
+const result = await client.query("MATCH (n:Person) RETURN n.name, n.age");
 ```
 
 ### Rust
@@ -181,14 +181,14 @@ curl -X POST http://localhost:8080/api/query \
 
 ## Configuration
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `GRAPHMIND_HOST` | `127.0.0.1` | RESP server bind address |
-| `GRAPHMIND_PORT` | `6379` | RESP server port |
-| `GRAPHMIND_HTTP_PORT` | `8080` | HTTP/visualizer port |
-| `GRAPHMIND_DATA_DIR` | `./graphmind_data` | Data directory |
-| `GRAPHMIND_AUTH_TOKEN` | *(none)* | Enable auth with this token |
-| `GRAPHMIND_LOG_LEVEL` | `info` | Log level |
+| Variable               | Default            | Description                 |
+| ---------------------- | ------------------ | --------------------------- |
+| `GRAPHMIND_HOST`       | `127.0.0.1`        | RESP server bind address    |
+| `GRAPHMIND_PORT`       | `6379`             | RESP server port            |
+| `GRAPHMIND_HTTP_PORT`  | `8080`             | HTTP/visualizer port        |
+| `GRAPHMIND_DATA_DIR`   | `./graphmind_data` | Data directory              |
+| `GRAPHMIND_AUTH_TOKEN` | _(none)_           | Enable auth with this token |
+| `GRAPHMIND_LOG_LEVEL`  | `info`             | Log level                   |
 
 See [`dist/config.toml`](dist/config.toml) for a full config file example.
 
@@ -208,6 +208,20 @@ See [`dist/config.toml`](dist/config.toml) for a full config file example.
 
 - [Full Documentation](https://fab679.github.io/graphmind/)
 - [Releases & Changelog](https://github.com/fab679/graphmind/releases)
+
+github: [fab679]
+
+# Optional platforms (uncomment when you actually use them)
+
+# patreon: your-patreon
+
+# open_collective: your-collective
+
+# ko_fi: your-kofi
+
+custom:
+
+- "https://github.com/sponsors/fab679"
 
 ## License
 
