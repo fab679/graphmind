@@ -8538,10 +8538,12 @@ impl PhysicalOperator for SetPropertyOperator {
                 if let Some(node_val) = record.get(var) {
                     match node_val {
                         Value::NodeRef(id) | Value::Node(id, _) => {
+                            let node_id = *id;
+                            let idx = node_id.as_u64() as usize;
                             if prop == "__labels__" {
                                 // SET n:Label — add labels
                                 if let PropertyValue::Array(labels) = &val {
-                                    if let Some(node) = store.get_node_mut(*id) {
+                                    if let Some(node) = store.get_node_mut(node_id) {
                                         for l in labels {
                                             if let PropertyValue::String(s) = l {
                                                 node.add_label(Label::new(s));
@@ -8552,7 +8554,12 @@ impl PhysicalOperator for SetPropertyOperator {
                             } else if prop == "__map_replace__" {
                                 // SET n = {map} — replace all properties
                                 if let PropertyValue::Map(map) = &val {
-                                    if let Some(node) = store.get_node_mut(*id) {
+                                    // Collect old keys to clear from columnar store
+                                    let old_keys: Vec<String> = store
+                                        .get_node(node_id)
+                                        .map(|n| n.properties.keys().cloned().collect())
+                                        .unwrap_or_default();
+                                    if let Some(node) = store.get_node_mut(node_id) {
                                         node.properties.clear();
                                         for (k, v) in map {
                                             if !matches!(v, PropertyValue::Null) {
@@ -8560,11 +8567,24 @@ impl PhysicalOperator for SetPropertyOperator {
                                             }
                                         }
                                     }
+                                    // Sync columnar storage after releasing node borrow
+                                    for k in &old_keys {
+                                        store.node_columns.set_property(
+                                            idx,
+                                            k,
+                                            PropertyValue::Null,
+                                        );
+                                    }
+                                    for (k, v) in map {
+                                        if !matches!(v, PropertyValue::Null) {
+                                            store.node_columns.set_property(idx, k, v.clone());
+                                        }
+                                    }
                                 }
                             } else if prop == "__map_merge__" {
                                 // SET n += {map} — merge properties
                                 if let PropertyValue::Map(map) = &val {
-                                    if let Some(node) = store.get_node_mut(*id) {
+                                    if let Some(node) = store.get_node_mut(node_id) {
                                         for (k, v) in map {
                                             if matches!(v, PropertyValue::Null) {
                                                 node.properties.remove(k);
@@ -8573,15 +8593,29 @@ impl PhysicalOperator for SetPropertyOperator {
                                             }
                                         }
                                     }
+                                    // Sync columnar storage after releasing node borrow
+                                    for (k, v) in map {
+                                        store.node_columns.set_property(idx, k, v.clone());
+                                    }
                                 }
-                            } else if let Some(node) = store.get_node_mut(*id) {
-                                node.set_property(prop, val.clone());
+                            } else {
+                                if let Some(node) = store.get_node_mut(node_id) {
+                                    node.set_property(prop, val.clone());
+                                }
+                                // Sync columnar storage
+                                store.node_columns.set_property(idx, prop, val.clone());
                             }
                         }
                         Value::EdgeRef(id, ..) | Value::Edge(id, _) => {
+                            let edge_id = *id;
+                            let idx = edge_id.as_u64() as usize;
                             if prop == "__map_replace__" {
                                 if let PropertyValue::Map(map) = &val {
-                                    if let Some(edge) = store.get_edge_mut(*id) {
+                                    let old_keys: Vec<String> = store
+                                        .get_edge(edge_id)
+                                        .map(|e| e.properties.keys().cloned().collect())
+                                        .unwrap_or_default();
+                                    if let Some(edge) = store.get_edge_mut(edge_id) {
                                         edge.properties.clear();
                                         for (k, v) in map {
                                             if !matches!(v, PropertyValue::Null) {
@@ -8589,10 +8623,22 @@ impl PhysicalOperator for SetPropertyOperator {
                                             }
                                         }
                                     }
+                                    for k in &old_keys {
+                                        store.edge_columns.set_property(
+                                            idx,
+                                            k,
+                                            PropertyValue::Null,
+                                        );
+                                    }
+                                    for (k, v) in map {
+                                        if !matches!(v, PropertyValue::Null) {
+                                            store.edge_columns.set_property(idx, k, v.clone());
+                                        }
+                                    }
                                 }
                             } else if prop == "__map_merge__" {
                                 if let PropertyValue::Map(map) = &val {
-                                    if let Some(edge) = store.get_edge_mut(*id) {
+                                    if let Some(edge) = store.get_edge_mut(edge_id) {
                                         for (k, v) in map {
                                             if matches!(v, PropertyValue::Null) {
                                                 edge.properties.remove(k);
@@ -8601,9 +8647,15 @@ impl PhysicalOperator for SetPropertyOperator {
                                             }
                                         }
                                     }
+                                    for (k, v) in map {
+                                        store.edge_columns.set_property(idx, k, v.clone());
+                                    }
                                 }
-                            } else if let Some(edge) = store.get_edge_mut(*id) {
-                                edge.set_property(prop, val.clone());
+                            } else {
+                                if let Some(edge) = store.get_edge_mut(edge_id) {
+                                    edge.set_property(prop, val.clone());
+                                }
+                                store.edge_columns.set_property(idx, prop, val.clone());
                             }
                         }
                         _ => {}
@@ -8673,14 +8725,22 @@ impl PhysicalOperator for RemovePropertyOperator {
                 if let Some(node_val) = record.get(var) {
                     match node_val {
                         Value::NodeRef(id) | Value::Node(id, _) => {
+                            let idx = id.as_u64() as usize;
                             if let Some(node) = store.get_node_mut(*id) {
                                 node.remove_property(prop);
                             }
+                            store
+                                .node_columns
+                                .set_property(idx, prop, PropertyValue::Null);
                         }
                         Value::EdgeRef(id, ..) | Value::Edge(id, _) => {
+                            let idx = id.as_u64() as usize;
                             if let Some(edge) = store.get_edge_mut(*id) {
                                 edge.remove_property(prop);
                             }
+                            store
+                                .edge_columns
+                                .set_property(idx, prop, PropertyValue::Null);
                         }
                         _ => {}
                     }

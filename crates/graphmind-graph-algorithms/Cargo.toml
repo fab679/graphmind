@@ -1,6 +1,6 @@
 [package]
 name = "graphmind-graph-algorithms"
-version = "0.8.3"
+version = "0.8.4"
 edition = "2021"
 authors = ["Graphmind Team"]
 description = "Graph algorithms (PageRank, WCC, BFS, Dijkstra) for Graphmind Graph Database"

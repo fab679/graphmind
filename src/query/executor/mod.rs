@@ -7004,6 +7004,42 @@ mod tests {
         assert!(result.records.len() >= 1, "Should find the edge");
     }
 
+    #[test]
+    fn test_set_property_return_reflects_update() {
+        // Bug report: SET x.val = 'updated' RETURN x.val returns 'original'
+        let mut store = GraphStore::new();
+        exec_mut(&mut store, "CREATE (x:TestNode {val: 'original'})");
+
+        // SET with RETURN should reflect the updated value
+        let result = exec_mut(
+            &mut store,
+            "MATCH (x:TestNode) SET x.val = 'updated' RETURN x.val",
+        );
+        assert!(!result.records.is_empty(), "Should return a record");
+        let val = result.records[0].get("x.val");
+        assert_eq!(
+            val,
+            Some(&Value::Property(PropertyValue::String(
+                "updated".to_string()
+            ))),
+            "RETURN in SET query should reflect the updated value, got: {:?}",
+            val
+        );
+
+        // Subsequent read should also see the update
+        let result2 = exec_read(&store, "MATCH (x:TestNode) RETURN x.val");
+        assert!(!result2.records.is_empty());
+        let val2 = result2.records[0].get("x.val");
+        assert_eq!(
+            val2,
+            Some(&Value::Property(PropertyValue::String(
+                "updated".to_string()
+            ))),
+            "Subsequent read should see the updated value, got: {:?}",
+            val2
+        );
+    }
+
     // --- 8. REMOVE operations ---
 
     #[test]
