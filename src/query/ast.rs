@@ -218,6 +218,26 @@ pub struct MatchClause {
     pub pattern: Pattern,
     /// Whether this is an optional match
     pub optional: bool,
+    /// SEARCH clause for ANN vector search within MATCH
+    pub search_clause: Option<SearchClause>,
+}
+
+/// SEARCH clause: constrains a MATCH pattern via approximate nearest neighbor vector search.
+/// Syntax: SEARCH var IN (VECTOR INDEX idx FOR query_vec [WHERE ...] LIMIT k) [SCORE AS alias]
+#[derive(Debug, Clone, PartialEq)]
+pub struct SearchClause {
+    /// Binding variable — must match a node/relationship variable in the MATCH pattern
+    pub binding_variable: String,
+    /// Name of the vector index to search
+    pub index_name: String,
+    /// Query vector expression (literal, parameter, property, etc.)
+    pub query_vector: Expression,
+    /// Optional in-index WHERE filter (restricted: only property predicates with AND)
+    pub where_clause: Option<WhereClause>,
+    /// LIMIT: number of approximate nearest neighbors to return
+    pub limit: Expression,
+    /// Optional SCORE AS alias — returns similarity score as a named column
+    pub score_alias: Option<String>,
 }
 
 /// Graph pattern

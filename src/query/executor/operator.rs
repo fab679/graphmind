@@ -5058,7 +5058,9 @@ impl PhysicalOperator for IndexScanOperator {
     }
 }
 
-/// Vector search operator: CALL db.index.vector.queryNodes(...)
+/// Vector search operator: supports both CALL db.index.vector.queryNodes(...)
+/// and SEARCH clause within MATCH.
+/// Returns nodes ordered by similarity (highest first) with optional SCORE AS alias.
 pub struct VectorSearchOperator {
     /// Label to search in
     label: String,
@@ -5072,7 +5074,7 @@ pub struct VectorSearchOperator {
     node_var: String,
     /// Variable name for similarity scores (optional)
     score_var: Option<String>,
-    /// Search results
+    /// Search results: (NodeId, similarity_score) — score in [0, 1], higher = more similar
     results: Vec<(NodeId, f32)>,
     /// Current index in results
     current: usize,
@@ -5104,9 +5106,26 @@ impl VectorSearchOperator {
             return Ok(());
         }
 
-        self.results = store
+        let raw_results = store
             .vector_search(&self.label, &self.property_key, &self.query_vector, self.k)
             .map_err(|e| ExecutionError::GraphError(e.to_string()))?;
+
+        // Convert distance to similarity score:
+        // HNSW returns distance (lower = more similar), we want similarity (higher = more similar).
+        // For cosine distance d in [0, 2]: similarity = 1.0 - d
+        // For L2 distance: similarity = 1.0 / (1.0 + d)
+        // Clamp to [0, 1] range.
+        self.results = raw_results
+            .into_iter()
+            .map(|(node_id, distance)| {
+                let similarity = (1.0 - distance).clamp(0.0, 1.0);
+                (node_id, similarity)
+            })
+            .collect();
+
+        // Sort by similarity descending (most similar first)
+        self.results
+            .sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
         Ok(())
     }
@@ -5120,7 +5139,7 @@ impl PhysicalOperator for VectorSearchOperator {
             return Ok(None);
         }
 
-        let (node_id, score) = &self.results[self.current];
+        let (node_id, similarity) = &self.results[self.current];
         self.current += 1;
 
         let mut record = Record::new();
@@ -5129,7 +5148,7 @@ impl PhysicalOperator for VectorSearchOperator {
         if let Some(score_var) = &self.score_var {
             record.bind(
                 score_var.clone(),
-                Value::Property(PropertyValue::Float(*score as f64)),
+                Value::Property(PropertyValue::Float(*similarity as f64)),
             );
         }
 
@@ -5141,9 +5160,17 @@ impl PhysicalOperator for VectorSearchOperator {
     }
 
     fn describe(&self) -> OperatorDescription {
+        let score_detail = self
+            .score_var
+            .as_ref()
+            .map(|s| format!(" SCORE AS {}", s))
+            .unwrap_or_default();
         OperatorDescription {
             name: "VectorSearch".to_string(),
-            details: format!("{}.{}, k={}", self.label, self.property_key, self.k),
+            details: format!(
+                "SEARCH {} IN (VECTOR INDEX {}.{} LIMIT {}){}",
+                self.node_var, self.label, self.property_key, self.k, score_detail
+            ),
             children: Vec::new(),
         }
     }

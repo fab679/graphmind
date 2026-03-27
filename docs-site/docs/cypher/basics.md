@@ -115,6 +115,22 @@ RETURN p.name, c.name AS company
 
 If a person has no `WORKS_AT` relationship, they still appear with `null` for the company column.
 
+## SEARCH Clause (Vector Search)
+
+Use the `SEARCH` subclause within `MATCH` to constrain patterns by approximate nearest neighbor vector similarity:
+
+```cypher
+MATCH (movie:Movie)
+  SEARCH movie IN (
+    VECTOR INDEX moviePlots
+    FOR [1, 2, 3]
+    LIMIT 4
+  ) SCORE AS similarity
+RETURN movie.title, similarity
+```
+
+See [Vector Search](/docs/advanced/vector-search) for full documentation.
+
 ## WHERE Clause
 
 Filter results with `WHERE`:

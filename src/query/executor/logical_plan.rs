@@ -264,6 +264,7 @@ mod tests {
         MatchClause {
             pattern: Pattern { paths },
             optional: false,
+            search_clause: None,
         }
     }
 

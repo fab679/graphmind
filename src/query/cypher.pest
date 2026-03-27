@@ -113,7 +113,26 @@ reading_clause = { match_clause | unwind | in_query_call }
 // SP after OPTIONAL is required per spec (OPTIONAL SP MATCH).
 // pattern is non-atomic and handles its own internal whitespace.
 // where_clause is compound-atomic; sp? before it must be explicit here.
-match_clause = { kw_optional? ~ kw_match ~ pattern ~ where_clause? }
+// search_clause is optional — constrains the MATCH pattern via ANN vector search.
+// WHERE and SEARCH subclauses may appear in either order.
+match_clause = { kw_optional? ~ kw_match ~ pattern ~ (where_clause | search_clause)* }
+
+// SEARCH clause: ANN vector search subclause within MATCH/OPTIONAL MATCH.
+// Syntax: SEARCH variable IN ( VECTOR INDEX index_name FOR query_vector [WHERE ...] LIMIT k ) [SCORE AS alias]
+search_clause = {
+    kw_search ~ variable ~ kw_in ~ "(" ~
+        kw_vector ~ kw_index ~ symbolic_name ~
+        kw_for ~ expression ~
+        search_where_clause? ~
+        kw_limit ~ expression ~
+    ")" ~ search_score_clause?
+}
+
+// Restricted WHERE inside SEARCH — only property predicates with AND.
+search_where_clause = { kw_where ~ expression }
+
+// SCORE AS alias — returns similarity score as a named column.
+search_score_clause = { kw_score ~ kw_as ~ variable }
 
 // Compound-atomic: sp after UNWIND is mandatory; sp? before kw_as is
 // explicit because compound-atomic mode does not insert WHITESPACE* between
@@ -735,6 +754,8 @@ kw_or         = @{ ^"OR"         ~ !identifier_part }
 kw_order      = @{ ^"ORDER"      ~ !identifier_part }
 kw_remove     = @{ ^"REMOVE"     ~ !identifier_part }
 kw_return     = @{ ^"RETURN"     ~ !identifier_part }
+kw_score      = @{ ^"SCORE"      ~ !identifier_part }
+kw_search     = @{ ^"SEARCH"     ~ !identifier_part }
 kw_set        = @{ ^"SET"        ~ !identifier_part }
 kw_single     = @{ ^"SINGLE"     ~ !identifier_part }
 kw_skip       = @{ ^"SKIP"       ~ !identifier_part }

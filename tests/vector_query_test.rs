@@ -52,7 +52,7 @@ fn test_vector_call_query() {
             .as_string(),
         Some("Alice")
     );
-    // score should be small
+    // score should be high (similarity, not distance — 1.0 = identical)
     let score = record
         .get("score")
         .unwrap()
@@ -60,7 +60,11 @@ fn test_vector_call_query() {
         .unwrap()
         .as_float()
         .unwrap();
-    assert!(score < 0.1);
+    assert!(
+        score > 0.9,
+        "Similarity score should be high, got {}",
+        score
+    );
 }
 
 #[test]

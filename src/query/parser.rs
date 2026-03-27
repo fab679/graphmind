@@ -876,6 +876,7 @@ fn parse_match_clause(
     let mut optional = false;
     let mut pattern = None;
     let mut where_clause = None;
+    let mut search_clause = None;
 
     for inner in pair.into_inner() {
         match inner.as_rule() {
@@ -888,6 +889,9 @@ fn parse_match_clause(
             Rule::where_clause => {
                 where_clause = Some(parse_where_clause(inner)?);
             }
+            Rule::search_clause => {
+                search_clause = Some(parse_search_clause(inner)?);
+            }
             _ => {} // kw_match
         }
     }
@@ -899,9 +903,82 @@ fn parse_match_clause(
         MatchClause {
             pattern: pat,
             optional,
+            search_clause,
         },
         where_clause,
     ))
+}
+
+// ============================================================
+// SEARCH clause (ANN vector search subclause within MATCH)
+// search_clause = { kw_search ~ variable ~ kw_in ~ "(" ~
+//     kw_vector ~ kw_index ~ symbolic_name ~
+//     kw_for ~ expression ~
+//     search_where_clause? ~
+//     kw_limit ~ expression ~
+// ")" ~ search_score_clause? }
+// ============================================================
+
+fn parse_search_clause(pair: pest::iterators::Pair<Rule>) -> ParseResult<SearchClause> {
+    let mut binding_variable = None;
+    let mut index_name = None;
+    let mut query_vector = None;
+    let mut where_clause = None;
+    let mut limit = None;
+    let mut score_alias = None;
+
+    for inner in pair.into_inner() {
+        match inner.as_rule() {
+            Rule::variable => {
+                if binding_variable.is_none() {
+                    binding_variable = Some(inner.as_str().to_string());
+                }
+            }
+            Rule::symbolic_name => {
+                index_name = Some(inner.as_str().to_string());
+            }
+            Rule::expression => {
+                if query_vector.is_none() {
+                    query_vector = Some(parse_expression(inner)?);
+                } else {
+                    limit = Some(parse_expression(inner)?);
+                }
+            }
+            Rule::search_where_clause => {
+                // The search_where_clause contains: kw_where ~ expression
+                for wc_inner in inner.into_inner() {
+                    if wc_inner.as_rule() == Rule::expression {
+                        where_clause = Some(WhereClause {
+                            predicate: parse_expression(wc_inner)?,
+                        });
+                    }
+                }
+            }
+            Rule::search_score_clause => {
+                // search_score_clause = { kw_score ~ kw_as ~ variable }
+                for sc_inner in inner.into_inner() {
+                    if sc_inner.as_rule() == Rule::variable {
+                        score_alias = Some(sc_inner.as_str().to_string());
+                    }
+                }
+            }
+            _ => {} // keywords: kw_search, kw_in, kw_vector, kw_index, kw_for, kw_limit
+        }
+    }
+
+    Ok(SearchClause {
+        binding_variable: binding_variable.ok_or_else(|| {
+            ParseError::SemanticError("SEARCH missing binding variable".to_string())
+        })?,
+        index_name: index_name
+            .ok_or_else(|| ParseError::SemanticError("SEARCH missing index name".to_string()))?,
+        query_vector: query_vector
+            .ok_or_else(|| ParseError::SemanticError("SEARCH missing query vector".to_string()))?,
+        where_clause,
+        limit: limit
+            .ok_or_else(|| ParseError::SemanticError("SEARCH missing LIMIT".to_string()))?,
+        score_alias,
+    })
 }
 
 // ============================================================

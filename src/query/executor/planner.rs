@@ -661,6 +661,12 @@ impl QueryPlanner {
                             }
                         }
                     }
+                    // SEARCH clause SCORE AS alias introduces a new variable
+                    if let Some(ref sc) = mc.search_clause {
+                        if let Some(ref alias) = sc.score_alias {
+                            defined_vars.insert(alias.clone());
+                        }
+                    }
                 }
                 if let Some(wc) = &query.with_clause {
                     for item in &wc.items {
@@ -2586,6 +2592,84 @@ impl QueryPlanner {
                 });
             }
 
+            // SEARCH clause: if present, use VectorSearchScanOperator instead of NodeScan
+            let mut search_op: Option<OperatorBox> = None;
+            if let Some(ref search) = match_clause.search_clause {
+                if search.binding_variable == start_var {
+                    // Evaluate the query vector expression
+                    let query_vector_expr = &search.query_vector;
+                    // Evaluate limit expression
+                    let k = match &search.limit {
+                        Expression::Literal(PropertyValue::Integer(i)) => *i as usize,
+                        _ => {
+                            return Err(ExecutionError::PlanningError(
+                                "SEARCH LIMIT must be a literal integer".to_string(),
+                            ))
+                        }
+                    };
+
+                    // Get the label from the vector index (needed for the search)
+                    // The index name is used to find the correct vector index
+                    let index_label = path
+                        .start
+                        .labels
+                        .first()
+                        .map(|l| l.as_str().to_string())
+                        .unwrap_or_default();
+
+                    // Look up the vector index to find the property key
+                    let index_keys = store.vector_index.list_indices();
+                    let matching_index = index_keys.iter().find(|ik| {
+                        // Match by index name convention: label_property or by label
+                        ik.label == index_label
+                            || format!("{}_{}", ik.label, ik.property_key) == search.index_name
+                    });
+
+                    let (search_label, search_property) = if let Some(ik) = matching_index {
+                        (ik.label.clone(), ik.property_key.clone())
+                    } else {
+                        // Use the index_name as label and "embedding" as default property
+                        (index_label.clone(), "embedding".to_string())
+                    };
+
+                    // Extract query vector from expression
+                    let query_vec: Vec<f32> = match query_vector_expr {
+                        Expression::Literal(PropertyValue::Vector(v)) => v.clone(),
+                        Expression::Literal(PropertyValue::Array(arr)) => arr
+                            .iter()
+                            .map(|v| match v {
+                                PropertyValue::Float(f) => *f as f32,
+                                PropertyValue::Integer(i) => *i as f32,
+                                _ => 0.0,
+                            })
+                            .collect(),
+                        _ => {
+                            return Err(ExecutionError::PlanningError(
+                                "SEARCH query vector must be a literal vector/list".to_string(),
+                            ))
+                        }
+                    };
+
+                    let score_var = search.score_alias.clone();
+                    let in_index_where = search.where_clause.clone();
+
+                    search_op = Some(Box::new(VectorSearchOperator::new(
+                        search_label,
+                        search_property,
+                        query_vec,
+                        k,
+                        start_var.clone(),
+                        score_var,
+                    )));
+
+                    // If there's an in-index WHERE clause, we need to over-fetch and filter
+                    // We store the in-index filter for post-search filtering
+                    if let Some(ref wc) = in_index_where {
+                        per_path_preds[path_idx].push(wc.predicate.clone());
+                    }
+                }
+            }
+
             // Optimization: Check for index usage (using this path's assigned predicates)
             let mut index_op: Option<OperatorBox> = None;
             let mut remaining_predicates: Vec<Expression> = Vec::new();
@@ -2639,7 +2723,7 @@ impl QueryPlanner {
                 }
             }
 
-            let mut path_operator = index_op.unwrap_or_else(|| {
+            let mut path_operator = search_op.or(index_op).unwrap_or_else(|| {
                 Box::new(NodeScanOperator::new(
                     start_var.clone(),
                     path.start.labels.clone(),
