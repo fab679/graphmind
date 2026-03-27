@@ -85,20 +85,26 @@ pub async fn query_handler(
     State(state): State<AppState>,
     Json(payload): Json<QueryRequest>,
 ) -> impl IntoResponse {
-    // Check if query is write or read
-    let query_upper = payload.query.trim().to_uppercase();
-    let is_write = query_upper.starts_with("CREATE")
-        || query_upper.starts_with("MERGE")
-        || query_upper.starts_with("DELETE")
-        || query_upper.starts_with("DETACH")
-        || query_upper.starts_with("CALL")
-        || query_upper.contains(" CREATE ")
-        || query_upper.contains(" DELETE ")
-        || query_upper.contains(" SET ")
-        || query_upper.contains(" MERGE ")
-        || query_upper.contains(" REMOVE ")
-        || query_upper.contains(" CALL ")
-        || query_upper.contains(';');
+    // Check if query is write or read.
+    // Strip comments first so "// CREATE" prefixes don't mask the real first keyword.
+    let cleaned_for_detect = crate::query::QueryEngine::strip_line_comments(&payload.query);
+    let trimmed_upper = cleaned_for_detect.trim().to_uppercase();
+    let is_write = trimmed_upper.starts_with("CREATE")
+        || trimmed_upper.starts_with("MERGE")
+        || trimmed_upper.starts_with("DELETE")
+        || trimmed_upper.starts_with("DETACH")
+        || trimmed_upper.starts_with("CALL")
+        || trimmed_upper.starts_with("SET")
+        || trimmed_upper.contains(" CREATE ")
+        || trimmed_upper.contains(" DELETE ")
+        || trimmed_upper.contains(" SET ")
+        || trimmed_upper.contains("\nSET ")
+        || trimmed_upper.contains(" MERGE ")
+        || trimmed_upper.contains("\nMERGE ")
+        || trimmed_upper.contains(" REMOVE ")
+        || trimmed_upper.contains("\nREMOVE ")
+        || trimmed_upper.contains(" CALL ")
+        || trimmed_upper.contains(';');
 
     let start = std::time::Instant::now();
     let store = state.stores.get_store(&payload.graph).await;

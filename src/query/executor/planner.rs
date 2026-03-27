@@ -849,103 +849,126 @@ impl QueryPlanner {
         }
 
         // Handle MERGE-only statement (no MATCH needed)
-        if query.match_clauses.is_empty() && query.call_clause.is_none() {
-            if let Some(merge_clause) = &query.merge_clause {
-                let on_create: Vec<(String, String, Expression)> = merge_clause
+        if query.match_clauses.is_empty()
+            && query.call_clause.is_none()
+            && !query.all_merge_clauses.is_empty()
+        {
+            // First MERGE uses MergeOperator (produces its own records)
+            let first_merge = &query.all_merge_clauses[0];
+            let on_create: Vec<(String, String, Expression)> = first_merge
+                .on_create_set
+                .iter()
+                .map(|s| (s.variable.clone(), s.property.clone(), s.value.clone()))
+                .collect();
+            let on_match: Vec<(String, String, Expression)> = first_merge
+                .on_match_set
+                .iter()
+                .map(|s| (s.variable.clone(), s.property.clone(), s.value.clone()))
+                .collect();
+
+            let mut operator: OperatorBox = Box::new(MergeOperator::new(
+                first_merge.pattern.clone(),
+                on_create,
+                on_match,
+            ));
+
+            // Chain remaining MERGEs with PerRowMergeOperator (shares variable bindings)
+            for merge_clause in &query.all_merge_clauses[1..] {
+                let oc: Vec<(String, String, Expression)> = merge_clause
                     .on_create_set
                     .iter()
                     .map(|s| (s.variable.clone(), s.property.clone(), s.value.clone()))
                     .collect();
-                let on_match: Vec<(String, String, Expression)> = merge_clause
+                let om: Vec<(String, String, Expression)> = merge_clause
                     .on_match_set
                     .iter()
                     .map(|s| (s.variable.clone(), s.property.clone(), s.value.clone()))
                     .collect();
-
-                let mut operator: OperatorBox = Box::new(MergeOperator::new(
+                operator = Box::new(PerRowMergeOperator::new(
+                    operator,
                     merge_clause.pattern.clone(),
-                    on_create,
-                    on_match,
+                    oc,
+                    om,
                 ));
-
-                // Apply CREATE clauses after MERGE (Bug 8 fix)
-                if query.create_clause.is_some() || !query.create_clauses.is_empty() {
-                    let mut edges = Vec::new();
-                    for cc in query
-                        .create_clause
-                        .iter()
-                        .chain(query.create_clauses.iter())
-                    {
-                        for path in &cc.pattern.paths {
-                            for seg in &path.segments {
-                                let sv = path.start.variable.clone().unwrap_or_default();
-                                let tv = seg.node.variable.clone().unwrap_or_default();
-                                let et = seg
-                                    .edge
-                                    .types
-                                    .first()
-                                    .cloned()
-                                    .unwrap_or_else(|| EdgeType::new("RELATED"));
-                                let ep = seg.edge.properties.clone().unwrap_or_default();
-                                let ev = seg.edge.variable.clone();
-                                let (s, t) = match seg.edge.direction {
-                                    Direction::Incoming => (tv, sv),
-                                    _ => (sv, tv),
-                                };
-                                edges.push((s, t, et, ep, ev));
-                            }
-                        }
-                    }
-                    if !edges.is_empty() {
-                        operator = Box::new(MatchCreateEdgeOperator::new(operator, edges));
-                    }
-                }
-
-                // Apply SET clauses after MERGE (Bug 6 fix)
-                if !query.set_clauses.is_empty() {
-                    let mut items = Vec::new();
-                    for set_clause in &query.set_clauses {
-                        for item in &set_clause.items {
-                            items.push((
-                                item.variable.clone(),
-                                item.property.clone(),
-                                item.value.clone(),
-                            ));
-                        }
-                    }
-                    operator = Box::new(SetPropertyOperator::new(operator, items));
-                }
-
-                let mut output_columns = Vec::new();
-                if let Some(return_clause) = &query.return_clause {
-                    let projections: Vec<(Expression, String)> = return_clause
-                        .items
-                        .iter()
-                        .enumerate()
-                        .map(|(i, item)| {
-                            let alias =
-                                item.alias
-                                    .clone()
-                                    .unwrap_or_else(|| match &item.expression {
-                                        Expression::Variable(v) => v.clone(),
-                                        Expression::Property { variable, property } => {
-                                            format!("{}.{}", variable, property)
-                                        }
-                                        _ => format!("col_{}", i),
-                                    });
-                            output_columns.push(alias.clone());
-                            (item.expression.clone(), alias)
-                        })
-                        .collect();
-                    operator = Box::new(ProjectOperator::new(operator, projections));
-                }
-
-                return Ok(ExecutionPlan {
-                    root: operator,
-                    output_columns,
-                    is_write: true,
-                });
             }
+
+            // Apply CREATE clauses after MERGE (Bug 8 fix)
+            if query.create_clause.is_some() || !query.create_clauses.is_empty() {
+                let mut edges = Vec::new();
+                for cc in query
+                    .create_clause
+                    .iter()
+                    .chain(query.create_clauses.iter())
+                {
+                    for path in &cc.pattern.paths {
+                        for seg in &path.segments {
+                            let sv = path.start.variable.clone().unwrap_or_default();
+                            let tv = seg.node.variable.clone().unwrap_or_default();
+                            let et = seg
+                                .edge
+                                .types
+                                .first()
+                                .cloned()
+                                .unwrap_or_else(|| EdgeType::new("RELATED"));
+                            let ep = seg.edge.properties.clone().unwrap_or_default();
+                            let ev = seg.edge.variable.clone();
+                            let (s, t) = match seg.edge.direction {
+                                Direction::Incoming => (tv, sv),
+                                _ => (sv, tv),
+                            };
+                            edges.push((s, t, et, ep, ev));
+                        }
+                    }
+                }
+                if !edges.is_empty() {
+                    operator = Box::new(MatchCreateEdgeOperator::new(operator, edges));
+                }
+            }
+
+            // Apply SET clauses after MERGE (Bug 6 fix)
+            if !query.set_clauses.is_empty() {
+                let mut items = Vec::new();
+                for set_clause in &query.set_clauses {
+                    for item in &set_clause.items {
+                        items.push((
+                            item.variable.clone(),
+                            item.property.clone(),
+                            item.value.clone(),
+                        ));
+                    }
+                }
+                operator = Box::new(SetPropertyOperator::new(operator, items));
+            }
+
+            let mut output_columns = Vec::new();
+            if let Some(return_clause) = &query.return_clause {
+                let projections: Vec<(Expression, String)> = return_clause
+                    .items
+                    .iter()
+                    .enumerate()
+                    .map(|(i, item)| {
+                        let alias = item
+                            .alias
+                            .clone()
+                            .unwrap_or_else(|| match &item.expression {
+                                Expression::Variable(v) => v.clone(),
+                                Expression::Property { variable, property } => {
+                                    format!("{}.{}", variable, property)
+                                }
+                                _ => format!("col_{}", i),
+                            });
+                        output_columns.push(alias.clone());
+                        (item.expression.clone(), alias)
+                    })
+                    .collect();
+                operator = Box::new(ProjectOperator::new(operator, projections));
+            }
+
+            return Ok(ExecutionPlan {
+                root: operator,
+                output_columns,
+                is_write: true,
+            });
         }
 
         // Handle CREATE-only queries (no MATCH/CALL required)

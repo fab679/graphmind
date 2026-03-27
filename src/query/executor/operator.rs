@@ -808,6 +808,23 @@ fn eval_expression(
             filter,
             projection,
         } => eval_pattern_comprehension(pattern, filter.as_deref(), projection, record, store),
+        Expression::MapExpression(entries) => {
+            let mut map = HashMap::new();
+            for (key, val_expr) in entries {
+                let val = eval_expression(val_expr, record, store)?;
+                let pv = match val {
+                    Value::Property(pv) => pv,
+                    Value::Null => PropertyValue::Null,
+                    Value::NodeRef(id) => PropertyValue::Integer(id.as_u64() as i64),
+                    Value::Node(id, _) => PropertyValue::Integer(id.as_u64() as i64),
+                    Value::EdgeRef(id, ..) => PropertyValue::Integer(id.as_u64() as i64),
+                    Value::Edge(id, _) => PropertyValue::Integer(id.as_u64() as i64),
+                    Value::Path { .. } => PropertyValue::String("<path>".to_string()),
+                };
+                map.insert(key.clone(), pv);
+            }
+            Ok(Value::Property(PropertyValue::Map(map)))
+        }
         Expression::PathVariable(var) => record
             .get(var)
             .cloned()
@@ -2919,6 +2936,19 @@ impl FilterOperator {
                 filter,
                 projection,
             } => eval_pattern_comprehension(pattern, filter.as_deref(), projection, record, store),
+            Expression::MapExpression(entries) => {
+                let mut map = std::collections::HashMap::new();
+                for (key, val_expr) in entries {
+                    let val = self.evaluate_expression(val_expr, record, store)?;
+                    let pv = match val {
+                        Value::Property(pv) => pv,
+                        Value::Null => PropertyValue::Null,
+                        _ => PropertyValue::Null,
+                    };
+                    map.insert(key.clone(), pv);
+                }
+                Ok(Value::Property(PropertyValue::Map(map)))
+            }
             Expression::PathVariable(var) => record
                 .get(var)
                 .cloned()
@@ -4069,6 +4099,19 @@ impl ProjectOperator {
                 filter,
                 projection,
             } => eval_pattern_comprehension(pattern, filter.as_deref(), projection, record, store),
+            Expression::MapExpression(entries) => {
+                let mut map = std::collections::HashMap::new();
+                for (key, val_expr) in entries {
+                    let val = self.evaluate_expression(val_expr, record, store)?;
+                    let pv = match val {
+                        Value::Property(pv) => pv,
+                        Value::Null => PropertyValue::Null,
+                        _ => PropertyValue::Null,
+                    };
+                    map.insert(key.clone(), pv);
+                }
+                Ok(Value::Property(PropertyValue::Map(map)))
+            }
             Expression::PathVariable(var) => record
                 .get(var)
                 .cloned()
@@ -4437,6 +4480,19 @@ impl AggregateOperator {
                 filter,
                 projection,
             } => eval_pattern_comprehension(pattern, filter.as_deref(), projection, record, store),
+            Expression::MapExpression(entries) => {
+                let mut map = std::collections::HashMap::new();
+                for (key, val_expr) in entries {
+                    let val = Self::evaluate_expression(val_expr, record, store)?;
+                    let pv = match val {
+                        Value::Property(pv) => pv,
+                        Value::Null => PropertyValue::Null,
+                        _ => PropertyValue::Null,
+                    };
+                    map.insert(key.clone(), pv);
+                }
+                Ok(Value::Property(PropertyValue::Map(map)))
+            }
             Expression::PathVariable(var) => record
                 .get(var)
                 .cloned()
@@ -4809,6 +4865,19 @@ impl SortOperator {
                 filter,
                 projection,
             } => eval_pattern_comprehension(pattern, filter.as_deref(), projection, record, store),
+            Expression::MapExpression(entries) => {
+                let mut map = std::collections::HashMap::new();
+                for (key, val_expr) in entries {
+                    let val = Self::evaluate_expression(val_expr, record, store)?;
+                    let pv = match val {
+                        Value::Property(pv) => pv,
+                        Value::Null => PropertyValue::Null,
+                        _ => PropertyValue::Null,
+                    };
+                    map.insert(key.clone(), pv);
+                }
+                Ok(Value::Property(PropertyValue::Map(map)))
+            }
             Expression::PathVariable(var) => record
                 .get(var)
                 .cloned()
@@ -9734,6 +9803,19 @@ impl WithBarrierOperator {
                 filter,
                 projection,
             } => eval_pattern_comprehension(pattern, filter.as_deref(), projection, record, store),
+            Expression::MapExpression(entries) => {
+                let mut map = std::collections::HashMap::new();
+                for (key, val_expr) in entries {
+                    let val = Self::evaluate_expression(val_expr, record, store)?;
+                    let pv = match val {
+                        Value::Property(pv) => pv,
+                        Value::Null => PropertyValue::Null,
+                        _ => PropertyValue::Null,
+                    };
+                    map.insert(key.clone(), pv);
+                }
+                Ok(Value::Property(PropertyValue::Map(map)))
+            }
             Expression::PathVariable(var) => record
                 .get(var)
                 .cloned()

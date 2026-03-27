@@ -2866,8 +2866,23 @@ fn parse_list_literal(pair: pest::iterators::Pair<Rule>) -> ParseResult<Expressi
 }
 
 fn parse_map_literal_expr(pair: pest::iterators::Pair<Rule>) -> ParseResult<Expression> {
-    let props = parse_map_literal_to_props(pair)?;
-    Ok(Expression::Literal(PropertyValue::Map(props)))
+    let (props, expr_props) = parse_map_literal_to_props_with_exprs(pair)?;
+    if expr_props.is_empty() {
+        // All values are static literals — use PropertyValue::Map
+        Ok(Expression::Literal(PropertyValue::Map(props)))
+    } else {
+        // Has dynamic expression values — use MapExpression
+        let mut entries: Vec<(String, Box<Expression>)> = Vec::new();
+        // Add static props as literal expressions
+        for (k, v) in props {
+            entries.push((k, Box::new(Expression::Literal(v))));
+        }
+        // Add expression props
+        for (k, expr) in expr_props {
+            entries.push((k, Box::new(expr)));
+        }
+        Ok(Expression::MapExpression(entries))
+    }
 }
 
 // ============================================================

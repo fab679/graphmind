@@ -1203,4 +1203,60 @@ mod tests {
             .unwrap();
         assert_eq!(result.len(), 1);
     }
+
+    #[test]
+    fn test_multi_merge_script_with_set_and_relationships() {
+        let engine = QueryEngine::new();
+        let mut store = GraphStore::new();
+
+        let script = r#"
+// Projects
+MERGE (p1:Project {name: "GraphMind"})
+MERGE (p2:Project {name: "AI Assistant"})
+// Skills
+MERGE (s1:Skill {name: "Semantic Search"})
+SET s1.description = "Search using embeddings", s1.confidence = 0.9
+MERGE (s2:Skill {name: "Graph Traversal"})
+SET s2.description = "Traverse relationships"
+// Relationships
+MERGE (s1)-[:BELONGS_TO_PROJECT]->(p1)
+MERGE (s2)-[:BELONGS_TO_PROJECT]->(p1)
+"#;
+
+        let result = engine.execute_mut(script, &mut store, "default");
+        assert!(
+            result.is_ok(),
+            "Multi-MERGE script should execute: {:?}",
+            result.err()
+        );
+
+        // Verify nodes created
+        assert!(
+            store.node_count() >= 4,
+            "Should have at least 4 nodes, got {}",
+            store.node_count()
+        );
+
+        // Verify edges created
+        assert!(
+            store.edge_count() >= 2,
+            "Should have at least 2 edges, got {}",
+            store.edge_count()
+        );
+
+        // Verify SET worked
+        let skills = store.get_nodes_by_label(&crate::graph::Label::new("Skill"));
+        let s1 = skills.iter().find(|n| {
+            n.get_property("name")
+                == Some(&crate::graph::PropertyValue::String(
+                    "Semantic Search".into(),
+                ))
+        });
+        assert!(s1.is_some(), "Should find Semantic Search skill");
+        assert_eq!(
+            s1.unwrap().get_property("confidence"),
+            Some(&crate::graph::PropertyValue::Float(0.9)),
+            "SET should have applied confidence"
+        );
+    }
 }

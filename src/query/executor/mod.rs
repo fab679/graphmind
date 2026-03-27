@@ -662,6 +662,11 @@ fn substitute_expr(
             }
             substitute_expr(projection, params)?;
         }
+        Expression::MapExpression(entries) => {
+            for (_key, val_expr) in entries {
+                substitute_expr(val_expr, params)?;
+            }
+        }
         // Leaf expressions — no substitution needed
         Expression::Variable(_)
         | Expression::Property { .. }
@@ -5406,6 +5411,58 @@ mod tests {
             assert_eq!(arr.len(), 2, "Alice knows 2 people");
         } else {
             panic!("Expected array from collect()");
+        }
+    }
+
+    #[test]
+    fn test_return_map_expression() {
+        let mut store = GraphStore::new();
+        exec_mut(&mut store, "CREATE (n:Person {name: 'Alice', age: 30})");
+        let result = exec_read(
+            &store,
+            "MATCH (n:Person) RETURN {name: n.name, age: n.age} AS info",
+        );
+        assert_eq!(result.records.len(), 1);
+        if let Some(Value::Property(PropertyValue::Map(map))) = result.records[0].get("info") {
+            assert_eq!(
+                map.get("name"),
+                Some(&PropertyValue::String("Alice".to_string()))
+            );
+            assert_eq!(map.get("age"), Some(&PropertyValue::Integer(30)));
+        } else {
+            panic!(
+                "Expected map from {{name: n.name, age: n.age}}, got: {:?}",
+                result.records[0].get("info")
+            );
+        }
+    }
+
+    #[test]
+    fn test_collect_map_expression() {
+        let mut store = GraphStore::new();
+        exec_mut(&mut store, "CREATE (a:Person {name: 'Alice', age: 30})");
+        exec_mut(&mut store, "CREATE (b:Person {name: 'Bob', age: 25})");
+        let result = exec_read(
+            &store,
+            "MATCH (n:Person) RETURN collect({name: n.name, age: n.age}) AS people",
+        );
+        assert_eq!(result.records.len(), 1);
+        if let Some(Value::Property(PropertyValue::Array(arr))) = result.records[0].get("people") {
+            assert_eq!(arr.len(), 2, "Should collect 2 maps");
+            // Each element should be a Map
+            for item in arr {
+                if let PropertyValue::Map(map) = item {
+                    assert!(map.contains_key("name"), "Map should have 'name' key");
+                    assert!(map.contains_key("age"), "Map should have 'age' key");
+                } else {
+                    panic!("Expected map in collect() result, got: {:?}", item);
+                }
+            }
+        } else {
+            panic!(
+                "Expected array of maps from collect({{...}}), got: {:?}",
+                result.records[0].get("people")
+            );
         }
     }
 

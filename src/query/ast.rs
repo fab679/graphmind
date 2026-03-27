@@ -449,6 +449,8 @@ pub enum Expression {
         /// Projection expression
         projection: Box<Expression>,
     },
+    /// Map expression with dynamic values: `{key1: expr1, key2: expr2}`
+    MapExpression(Vec<(String, Box<Expression>)>),
     /// Named path reference (for Value::Path)
     PathVariable(String),
     /// Query parameter reference ($name)
