@@ -59,6 +59,8 @@ export const CYPHER_KEYWORDS: string[] = [
   "VECTOR INDEX",
   // Schema commands
   "SHOW INDEXES",
+  "SHOW VECTOR INDEXES",
+  "SHOW VECTOR INDEX",
   "SHOW CONSTRAINTS",
   "CREATE INDEX",
   "DROP INDEX",
@@ -67,6 +69,7 @@ export const CYPHER_KEYWORDS: string[] = [
   "CREATE VECTOR INDEX",
   "IF NOT EXISTS",
   "IF EXISTS",
+  "OPTIONS",
 ];
 
 export const CYPHER_FUNCTIONS: string[] = [

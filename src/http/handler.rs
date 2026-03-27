@@ -546,10 +546,30 @@ pub async fn schema_handler(
     }
 
     let index_list = store_guard.property_index.list_indexes();
-    let indexes: Vec<_> = index_list
+    let mut indexes: Vec<_> = index_list
         .iter()
         .map(|(l, p)| json!({ "label": l.as_str(), "property": p, "type": "BTREE" }))
         .collect();
+
+    // Include vector indexes
+    let vector_keys = store_guard.vector_index.list_indices();
+    for key in &vector_keys {
+        let mut entry = json!({
+            "label": key.label,
+            "property": key.property_key,
+            "type": "VECTOR"
+        });
+        if let Some(idx) = store_guard
+            .vector_index
+            .get_index(&key.label, &key.property_key)
+        {
+            let idx_guard = idx.read().unwrap();
+            entry["dimensions"] = json!(idx_guard.dimensions());
+            entry["similarity"] = json!(format!("{:?}", idx_guard.metric()));
+            entry["vectors"] = json!(idx_guard.len());
+        }
+        indexes.push(entry);
+    }
 
     let constraint_list = store_guard.property_index.list_constraints();
     let constraints: Vec<_> = constraint_list

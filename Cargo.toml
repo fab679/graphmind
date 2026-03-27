@@ -9,7 +9,7 @@ exclude = ["sdk/python"]
 
 [package]
 name = "graphmind"
-version = "0.8.2"
+version = "0.8.3"
 edition = "2021"
 authors = ["Graphmind Team"]
 description = "High-performance distributed graph database with OpenCypher support, RESP protocol, multi-tenancy, vector search, and web visualizer"
@@ -89,8 +89,8 @@ lru = "0.12"
 flate2 = "1.0"
 
 # Optimization Engine (Phase 7)
-graphmind-optimization = { path = "crates/graphmind-optimization", version = "0.8.2", optional = true }
-graphmind-graph-algorithms = { path = "crates/graphmind-graph-algorithms", version = "0.8.2", optional = true }
+graphmind-optimization = { path = "crates/graphmind-optimization", version = "0.8.3", optional = true }
+graphmind-graph-algorithms = { path = "crates/graphmind-graph-algorithms", version = "0.8.3", optional = true }
 ndarray = { version = "0.15", optional = true }
 reqwest = { version = "0.13.1", features = ["json"], optional = true }
 metrics = { version = "0.24", optional = true }

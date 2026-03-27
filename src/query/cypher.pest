@@ -40,7 +40,7 @@
 // Trailing whitespace after the optional semicolon is also consumed explicitly.
 cypher = { SOI ~ explain_prefix? ~ top_statement ~ (";" ~ WHITESPACE*)? ~ EOI }
 
-top_statement = { show_indexes_stmt | show_constraints_stmt | drop_constraint_stmt | drop_index_stmt | create_constraint_stmt | create_vector_index_stmt | create_index_stmt | query }
+top_statement = { show_vector_indexes_stmt | show_indexes_stmt | show_constraints_stmt | drop_constraint_stmt | drop_index_stmt | create_constraint_stmt | create_vector_index_stmt | create_index_stmt | query }
 statement = { query }
 
 // standalone_call is tried first: it is strictly more specific (requires the
@@ -884,8 +884,9 @@ kw_unique     = @{ ^"UNIQUE"     ~ !identifier_part }
 create_vector_index_stmt = { kw_create ~ kw_vector ~ kw_index ~ symbolic_name ~ kw_for ~ "(" ~ variable ~ ":" ~ schema_name ~ ")" ~ kw_on ~ "(" ~ property_expression ~ ")" ~ kw_options ~ map_literal }
 kw_vector  = @{ ^"VECTOR"  ~ !identifier_part }
 kw_options = @{ ^"OPTIONS" ~ !identifier_part }
-show_indexes_stmt     = { kw_show ~ (kw_indexes | kw_index) }
-show_constraints_stmt = { kw_show ~ kw_constraints }
+show_vector_indexes_stmt = { kw_show ~ kw_vector ~ (kw_indexes | kw_index) }
+show_indexes_stmt        = { kw_show ~ (kw_indexes | kw_index) }
+show_constraints_stmt    = { kw_show ~ kw_constraints }
 kw_show        = @{ ^"SHOW"        ~ !identifier_part }
 kw_indexes     = @{ ^"INDEXES"     ~ !identifier_part }
 kw_constraints = @{ ^"CONSTRAINTS" ~ !identifier_part }

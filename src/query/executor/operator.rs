@@ -5936,10 +5936,55 @@ impl PhysicalOperator for CreateVectorIndexOperator {
             )
             .map_err(|e| ExecutionError::GraphError(e.to_string()))?;
 
+        // Backfill: index existing nodes that already have vector data on this property
+        let label_obj = self.label.clone();
+        let existing_nodes = store.get_nodes_by_label(&label_obj);
+        let mut indexed = 0u64;
+        for node in &existing_nodes {
+            if let Some(crate::graph::property::PropertyValue::Vector(vec)) =
+                node.get_property(&self.property_key)
+            {
+                if vec.len() == self.dimensions {
+                    let _ = store.vector_index.add_vector(
+                        self.label.as_str(),
+                        &self.property_key,
+                        node.id,
+                        vec,
+                    );
+                    indexed += 1;
+                }
+            } else if let Some(crate::graph::property::PropertyValue::Array(arr)) =
+                node.get_property(&self.property_key)
+            {
+                // Also handle Array properties that contain numeric values
+                let vec: Vec<f32> = arr
+                    .iter()
+                    .filter_map(|v| match v {
+                        crate::graph::property::PropertyValue::Float(f) => Some(*f as f32),
+                        crate::graph::property::PropertyValue::Integer(i) => Some(*i as f32),
+                        _ => None,
+                    })
+                    .collect();
+                if vec.len() == self.dimensions {
+                    let _ = store.vector_index.add_vector(
+                        self.label.as_str(),
+                        &self.property_key,
+                        node.id,
+                        &vec,
+                    );
+                    indexed += 1;
+                }
+            }
+        }
+
         self.executed = true;
 
-        // Return an empty record or a success record
-        Ok(Some(Record::new()))
+        let mut record = Record::new();
+        record.bind(
+            "indexed".to_string(),
+            Value::Property(PropertyValue::Integer(indexed as i64)),
+        );
+        Ok(Some(record))
     }
 
     fn reset(&mut self) {
@@ -6193,8 +6238,10 @@ impl ShowIndexesOperator {
 impl PhysicalOperator for ShowIndexesOperator {
     fn next(&mut self, store: &GraphStore) -> ExecutionResult<Option<Record>> {
         if self.results.is_none() {
-            let indexes = store.property_index.list_indexes();
             let mut records = Vec::new();
+
+            // Property (BTREE) indexes
+            let indexes = store.property_index.list_indexes();
             for (label, property) in indexes {
                 let mut record = Record::new();
                 record.bind(
@@ -6211,6 +6258,26 @@ impl PhysicalOperator for ShowIndexesOperator {
                 );
                 records.push(record);
             }
+
+            // Vector (HNSW) indexes
+            let vector_keys = store.vector_index.list_indices();
+            for key in vector_keys {
+                let mut record = Record::new();
+                record.bind(
+                    "label".to_string(),
+                    Value::Property(PropertyValue::String(key.label.clone())),
+                );
+                record.bind(
+                    "property".to_string(),
+                    Value::Property(PropertyValue::String(key.property_key.clone())),
+                );
+                record.bind(
+                    "type".to_string(),
+                    Value::Property(PropertyValue::String("VECTOR".to_string())),
+                );
+                records.push(record);
+            }
+
             self.results = Some(records.into_iter());
         }
 
@@ -6224,6 +6291,80 @@ impl PhysicalOperator for ShowIndexesOperator {
     fn describe(&self) -> OperatorDescription {
         OperatorDescription {
             name: "ShowIndexes".to_string(),
+            details: String::new(),
+            children: Vec::new(),
+        }
+    }
+}
+
+/// Show vector indexes operator: SHOW VECTOR INDEX[ES]
+pub struct ShowVectorIndexesOperator {
+    results: Option<std::vec::IntoIter<Record>>,
+}
+
+impl ShowVectorIndexesOperator {
+    pub fn new() -> Self {
+        Self { results: None }
+    }
+}
+
+impl PhysicalOperator for ShowVectorIndexesOperator {
+    fn next(&mut self, store: &GraphStore) -> ExecutionResult<Option<Record>> {
+        if self.results.is_none() {
+            let mut records = Vec::new();
+            let vector_keys = store.vector_index.list_indices();
+            for key in vector_keys {
+                let mut record = Record::new();
+                record.bind(
+                    "name".to_string(),
+                    Value::Property(PropertyValue::String(format!(
+                        "{}_{}",
+                        key.label, key.property_key
+                    ))),
+                );
+                record.bind(
+                    "label".to_string(),
+                    Value::Property(PropertyValue::String(key.label.clone())),
+                );
+                record.bind(
+                    "property".to_string(),
+                    Value::Property(PropertyValue::String(key.property_key.clone())),
+                );
+                // Get index details (dimensions, metric)
+                if let Some(idx) = store.vector_index.get_index(&key.label, &key.property_key) {
+                    let idx_guard = idx.read().unwrap();
+                    record.bind(
+                        "dimensions".to_string(),
+                        Value::Property(PropertyValue::Integer(idx_guard.dimensions() as i64)),
+                    );
+                    record.bind(
+                        "similarity".to_string(),
+                        Value::Property(PropertyValue::String(format!("{:?}", idx_guard.metric()))),
+                    );
+                    record.bind(
+                        "vectors".to_string(),
+                        Value::Property(PropertyValue::Integer(idx_guard.len() as i64)),
+                    );
+                }
+                record.bind(
+                    "type".to_string(),
+                    Value::Property(PropertyValue::String("VECTOR".to_string())),
+                );
+                records.push(record);
+            }
+            self.results = Some(records.into_iter());
+        }
+
+        Ok(self.results.as_mut().unwrap().next())
+    }
+
+    fn reset(&mut self) {
+        self.results = None;
+    }
+
+    fn describe(&self) -> OperatorDescription {
+        OperatorDescription {
+            name: "ShowVectorIndexes".to_string(),
             details: String::new(),
             children: Vec::new(),
         }

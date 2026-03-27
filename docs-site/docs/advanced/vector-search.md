@@ -10,17 +10,32 @@ Graphmind includes a built-in HNSW (Hierarchical Navigable Small World) vector i
 
 ## Creating a Vector Index
 
-Create an index on a specific label and property, specifying the vector dimensionality and distance metric:
+Create an index on a specific label and property, specifying the vector dimensionality and similarity metric:
 
 ```cypher
-CREATE VECTOR INDEX ON :Document(embedding)
-OPTIONS {dimension: 384, metric: 'cosine'}
+CREATE VECTOR INDEX myIdx FOR (n:Document) ON (n.embedding) OPTIONS {dimensions: 384, similarity: 'cosine'}
 ```
 
-Supported distance metrics:
+- **index name** -- a unique identifier for the index (e.g., `myIdx`)
+- **FOR (variable:Label)** -- the node label to index
+- **ON (variable.property)** -- the property containing vector embeddings
+- **OPTIONS** -- `dimensions` (integer) and `similarity` (`'cosine'` or `'l2'`)
+
+Supported similarity metrics:
 - `cosine` -- cosine similarity (most common for text embeddings)
 - `l2` -- Euclidean distance
-- `dot` -- dot product
+
+## Listing Vector Indexes
+
+```cypher
+-- Show only vector indexes (with dimensions, similarity, and vector count)
+SHOW VECTOR INDEXES
+
+-- Show all indexes (property + vector)
+SHOW INDEXES
+```
+
+`SHOW VECTOR INDEXES` returns: `name`, `label`, `property`, `dimensions`, `similarity`, `vectors`, `type`.
 
 ### Via SDK (Embedded Mode)
 
@@ -251,6 +266,7 @@ The HNSW index provides sub-millisecond search latency on datasets up to 1M vect
 
 ## Limitations
 
-- Vector search methods (`create_vector_index`, `add_vector`, `vector_search`) are available only in **embedded mode** (Rust and Python SDKs). The HTTP/RESP protocols support vector queries via Cypher `CALL` syntax.
 - Vectors must all have the same dimensionality within an index.
-- The index is held in memory. Memory usage is approximately `dimension * 4 bytes * num_vectors` plus HNSW graph overhead.
+- The index is held in memory. Memory usage is approximately `dimensions * 4 bytes * num_vectors` plus HNSW graph overhead.
+- The `SEARCH` clause's in-index `WHERE` filter only supports property predicates joined with `AND`. `OR`, `NOT`, `IN`, and string operators are not supported in the in-index filter (use post-filtering with an outer `WHERE` instead).
+- The `SEARCH` clause pattern must have exactly one bound variable (the binding variable).

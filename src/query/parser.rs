@@ -190,6 +190,9 @@ pub fn parse_query(input: &str) -> ParseResult<Query> {
 fn parse_top_statement(pair: pest::iterators::Pair<Rule>, query: &mut Query) -> ParseResult<()> {
     for inner in pair.into_inner() {
         match inner.as_rule() {
+            Rule::show_vector_indexes_stmt => {
+                query.show_vector_indexes = true;
+            }
             Rule::show_indexes_stmt => {
                 query.show_indexes = true;
             }
@@ -3876,6 +3879,29 @@ mod tests {
         );
         let ast = result.unwrap();
         assert!(ast.show_indexes);
+    }
+
+    #[test]
+    fn test_parse_show_vector_indexes() {
+        let query = "SHOW VECTOR INDEXES";
+        let result = parse_query(query);
+        assert!(
+            result.is_ok(),
+            "Failed to parse SHOW VECTOR INDEXES: {:?}",
+            result.err()
+        );
+        let ast = result.unwrap();
+        assert!(ast.show_vector_indexes);
+
+        // Also test singular form
+        let query2 = "SHOW VECTOR INDEX";
+        let result2 = parse_query(query2);
+        assert!(
+            result2.is_ok(),
+            "Failed to parse SHOW VECTOR INDEX: {:?}",
+            result2.err()
+        );
+        assert!(result2.unwrap().show_vector_indexes);
     }
 
     #[test]

@@ -105,6 +105,8 @@ pub struct Query {
     pub create_constraint_clause: Option<CreateConstraintClause>,
     /// SHOW INDEXES flag
     pub show_indexes: bool,
+    /// SHOW VECTOR INDEXES flag
+    pub show_vector_indexes: bool,
     /// SHOW CONSTRAINTS flag
     pub show_constraints: bool,
     /// PROFILE flag
@@ -668,6 +670,7 @@ impl Query {
             drop_index_clause: None,
             create_constraint_clause: None,
             show_indexes: false,
+            show_vector_indexes: false,
             show_constraints: false,
             profile: false,
             params: HashMap::new(),

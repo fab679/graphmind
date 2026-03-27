@@ -71,9 +71,9 @@ use crate::query::executor::{
         NodeScanOperator, PerRowCreateOperator, PerRowMergeOperator, ProjectOperator,
         RemovePropertyOperator, SchemaVisualizationOperator, SetPropertyOperator,
         ShortestPathOperator, ShowConstraintsOperator, ShowIndexesOperator, ShowLabelsOperator,
-        ShowPropertyKeysOperator, ShowRelationshipTypesOperator, SingleRowOperator, SkipOperator,
-        SortOperator, UnwindOperator, VarLengthExpandOperator, VectorSearchOperator,
-        WithBarrierOperator,
+        ShowPropertyKeysOperator, ShowRelationshipTypesOperator, ShowVectorIndexesOperator,
+        SingleRowOperator, SkipOperator, SortOperator, UnwindOperator, VarLengthExpandOperator,
+        VectorSearchOperator, WithBarrierOperator,
     },
     ExecutionError,
     ExecutionResult,
@@ -728,6 +728,23 @@ impl QueryPlanner {
                     }
                 }
             }
+        }
+
+        // Handle SHOW VECTOR INDEXES
+        if query.show_vector_indexes {
+            return Ok(ExecutionPlan {
+                root: Box::new(ShowVectorIndexesOperator::new()),
+                output_columns: vec![
+                    "name".to_string(),
+                    "label".to_string(),
+                    "property".to_string(),
+                    "dimensions".to_string(),
+                    "similarity".to_string(),
+                    "vectors".to_string(),
+                    "type".to_string(),
+                ],
+                is_write: false,
+            });
         }
 
         // Handle SHOW INDEXES
@@ -4815,6 +4832,7 @@ mod tests {
             drop_index_clause: None,
             create_constraint_clause: None,
             show_indexes: false,
+            show_vector_indexes: false,
             show_constraints: false,
             profile: false,
             params: std::collections::HashMap::new(),
