@@ -646,6 +646,38 @@ impl QueryPlanner {
             }
         }
 
+        // Validate: $param used as pattern predicate in MATCH/MERGE (not in property map)
+        for mc in &query.match_clauses {
+            for path in &mc.pattern.paths {
+                if !path.start.expression_properties.is_empty() {
+                    for (_, expr) in &path.start.expression_properties {
+                        if matches!(expr, Expression::Parameter(_)) {
+                            return Err(ExecutionError::PlanningError(
+                                "Parameter maps are not allowed in MATCH".to_string(),
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+
+        // Validate: unaliased non-variable expressions in WITH (WITH a, count(*) is invalid)
+        if let Some(wc) = &query.with_clause {
+            for item in &wc.items {
+                if item.alias.is_none() {
+                    match &item.expression {
+                        Expression::Variable(_) => {} // OK: WITH a
+                        Expression::Property { .. } => {} // OK: WITH a.name
+                        _ => {
+                            return Err(ExecutionError::PlanningError(
+                                "Expression in WITH must be aliased (use AS)".to_string(),
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+
         // Validate: nested aggregation (count(count(*)))
         fn contains_nested_agg(expr: &Expression, depth: usize) -> bool {
             match expr {
