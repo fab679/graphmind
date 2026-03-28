@@ -8881,18 +8881,22 @@ impl PhysicalOperator for SkipOperator {
     ) -> ExecutionResult<Option<RecordBatch>> {
         while self.skipped < self.skip {
             if let Some(batch) = self.input.next_batch(store, batch_size)? {
-                for record in batch.records {
+                let mut iter = batch.records.into_iter();
+                for record in iter.by_ref() {
                     self.skipped += 1;
                     if self.skipped >= self.skip {
-                        // We may have extra records in this batch — collect remaining
-                        let _remaining = [record];
-                        // Continue pulling from current batch not possible since we consumed it,
-                        // but we've finished skipping
+                        // Collect remaining records from this batch
+                        let remaining: Vec<Record> = iter.collect();
+                        if !remaining.is_empty() {
+                            return Ok(Some(RecordBatch {
+                                records: remaining,
+                                columns: Vec::new(),
+                            }));
+                        }
                         break;
                     }
                 }
                 if self.skipped >= self.skip {
-                    // Start fresh from next batch
                     break;
                 }
             } else {
@@ -8926,6 +8930,76 @@ impl PhysicalOperator for SkipOperator {
         OperatorDescription {
             name: "Skip".to_string(),
             details: format!("{}", self.skip),
+            children: vec![self.input.describe()],
+        }
+    }
+}
+
+/// DISTINCT operator: deduplicates output records by all column values.
+/// Materializes all input, deduplicates, then emits unique rows.
+pub struct DistinctOperator {
+    input: OperatorBox,
+    records: Vec<Record>,
+    current: usize,
+    executed: bool,
+}
+
+impl DistinctOperator {
+    pub fn new(input: OperatorBox) -> Self {
+        Self {
+            input,
+            records: Vec::new(),
+            current: 0,
+            executed: false,
+        }
+    }
+
+    fn execute_all(&mut self, store: &GraphStore) -> ExecutionResult<()> {
+        if self.executed { return Ok(()); }
+        let batch_size = 1024;
+        let mut all_records = Vec::new();
+        while let Some(batch) = self.input.next_batch(store, batch_size)? {
+            all_records.extend(batch.records);
+        }
+        // Deduplicate: use a set of stringified values
+        let mut seen: HashSet<Vec<String>> = HashSet::new();
+        for record in all_records {
+            let mut key: Vec<(String, String)> = record.bindings().iter()
+                .map(|(k, v)| (k.clone(), format!("{:?}", v)))
+                .collect();
+            key.sort_by(|a, b| a.0.cmp(&b.0));
+            let vals: Vec<String> = key.into_iter().map(|(_, v)| v).collect();
+            if seen.insert(vals) {
+                self.records.push(record);
+            }
+        }
+        self.executed = true;
+        Ok(())
+    }
+}
+
+impl PhysicalOperator for DistinctOperator {
+    fn next(&mut self, store: &GraphStore) -> ExecutionResult<Option<Record>> {
+        self.execute_all(store)?;
+        if self.current >= self.records.len() {
+            return Ok(None);
+        }
+        let record = self.records[self.current].clone();
+        self.current += 1;
+        Ok(Some(record))
+    }
+
+    fn reset(&mut self) {
+        self.input.reset();
+        self.records.clear();
+        self.current = 0;
+        self.executed = false;
+    }
+
+    fn describe(&self) -> OperatorDescription {
+        OperatorDescription {
+            name: "Distinct".to_string(),
+            details: String::new(),
             children: vec![self.input.describe()],
         }
     }

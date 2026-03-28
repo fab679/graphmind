@@ -72,7 +72,7 @@ use crate::query::executor::{
         RemovePropertyOperator, SchemaVisualizationOperator, SetPropertyOperator,
         ShortestPathOperator, ShowConstraintsOperator, ShowIndexesOperator, ShowLabelsOperator,
         ShowPropertyKeysOperator, ShowRelationshipTypesOperator, ShowVectorIndexesOperator,
-        SingleRowOperator, SkipOperator, SortOperator, UnwindOperator, VarLengthExpandOperator,
+        SingleRowOperator, SkipOperator, SortOperator, DistinctOperator, UnwindOperator, VarLengthExpandOperator,
         VectorSearchOperator, WithBarrierOperator,
     },
     ExecutionError,
@@ -2730,6 +2730,11 @@ impl QueryPlanner {
                 }
 
                 operator = Box::new(ProjectOperator::new(operator, projections));
+            }
+
+            // Apply RETURN DISTINCT
+            if return_clause.distinct {
+                operator = Box::new(DistinctOperator::new(operator));
             }
         } else {
             // No explicit RETURN - return all matched/yielded variables
