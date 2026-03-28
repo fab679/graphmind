@@ -727,6 +727,9 @@ fn eval_expression(
             let val = eval_expression(e, record, store)?;
             eval_unary_op(op, val)
         }
+        Expression::Function { name, args, .. } if name.eq_ignore_ascii_case("$patternPredicate") => {
+            eval_pattern_predicate_from_args(args, record, store)
+        }
         Expression::Function { name, args, .. } => {
             let arg_vals: Vec<Value> = args
                 .iter()
@@ -1188,6 +1191,173 @@ fn eval_pattern_comprehension(
     Ok(Value::Property(PropertyValue::Array(results)))
 }
 
+/// Evaluate a $patternPredicate: WHERE (n)-[:REL]->() or WHERE (n)-[:REL]->(m)
+fn eval_pattern_predicate_from_args(
+    args: &[Expression],
+    record: &Record,
+    store: &GraphStore,
+) -> ExecutionResult<Value> {
+    // args[0] = source var name, args[1] = pattern text
+    let source_var = match &args[0] {
+        Expression::Literal(PropertyValue::String(s)) => s.clone(),
+        _ => return Ok(Value::Property(PropertyValue::Boolean(false))),
+    };
+    let pattern_text = match &args[1] {
+        Expression::Literal(PropertyValue::String(s)) => s.clone(),
+        _ => return Ok(Value::Property(PropertyValue::Boolean(false))),
+    };
+
+    // Resolve source node
+    let source_val = match record.get(&source_var) {
+        Some(v) => v,
+        None => return Ok(Value::Property(PropertyValue::Boolean(false))),
+    };
+    let source_id = match source_val.node_id() {
+        Some(id) => id,
+        None => return Ok(Value::Property(PropertyValue::Boolean(false))),
+    };
+
+    // Parse direction from pattern
+    let is_outgoing = pattern_text.contains("->");
+    let is_incoming = pattern_text.contains("<-");
+
+    // Extract edge types from [...] section
+    let mut edge_types: Vec<String> = Vec::new();
+    let mut is_varlen = false;
+    if let Some(start) = pattern_text.find('[') {
+        if let Some(end) = pattern_text.find(']') {
+            let bracket = &pattern_text[start + 1..end];
+            if bracket.contains('*') {
+                is_varlen = true;
+            }
+            let type_part = bracket.split('*').next().unwrap_or("");
+            if type_part.contains(':') {
+                let after_colon = type_part.split(':').skip(1).collect::<Vec<_>>().join(":");
+                for t in after_colon.split('|') {
+                    let t = t.trim().trim_start_matches(':');
+                    if !t.is_empty() {
+                        edge_types.push(t.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    // Extract target variable from pattern (second parenthesized node)
+    let target_var = {
+        let mut found = Vec::new();
+        let chars: Vec<char> = pattern_text.chars().collect();
+        let mut i = 0;
+        while i < chars.len() {
+            if chars[i] == '(' {
+                let start = i + 1;
+                let mut j = start;
+                while j < chars.len() && chars[j] != ')' && chars[j] != ':' && chars[j] != '{' {
+                    j += 1;
+                }
+                let var = pattern_text[start..j].trim().to_string();
+                if !var.is_empty() {
+                    found.push(var);
+                }
+                while j < chars.len() && chars[j] != ')' {
+                    j += 1;
+                }
+                i = j + 1;
+            } else {
+                i += 1;
+            }
+        }
+        if found.len() >= 2 { Some(found[1].clone()) } else { None }
+    };
+
+    // Resolve target node if specified
+    let target_id = target_var.as_ref().and_then(|tv| {
+        record.get(tv).and_then(|v| v.node_id())
+    });
+
+    // Check edges
+    let check_edges = |edges: &Vec<&crate::graph::edge::Edge>| -> bool {
+        for edge in edges {
+            let type_match = edge_types.is_empty()
+                || edge_types.iter().any(|t| t == edge.edge_type.as_str());
+            if !type_match {
+                continue;
+            }
+            if let Some(tid) = target_id {
+                // Two-node pattern: check specific target
+                if edge.target == tid || edge.source == tid {
+                    return true;
+                }
+            } else {
+                return true;
+            }
+        }
+        false
+    };
+
+    if is_varlen {
+        // Variable-length: BFS reachability check
+        use std::collections::{HashSet, VecDeque};
+        let mut visited = HashSet::new();
+        let mut queue = VecDeque::new();
+        visited.insert(source_id);
+        queue.push_back(source_id);
+
+        while let Some(node) = queue.pop_front() {
+            let mut next_nodes = Vec::new();
+            if !is_incoming {
+                for edge in store.get_outgoing_edges(node) {
+                    let type_match = edge_types.is_empty()
+                        || edge_types.iter().any(|t| t == edge.edge_type.as_str());
+                    if type_match && !visited.contains(&edge.target) {
+                        next_nodes.push(edge.target);
+                    }
+                }
+            }
+            if !is_outgoing {
+                for edge in store.get_incoming_edges(node) {
+                    let type_match = edge_types.is_empty()
+                        || edge_types.iter().any(|t| t == edge.edge_type.as_str());
+                    if type_match && !visited.contains(&edge.source) {
+                        next_nodes.push(edge.source);
+                    }
+                }
+            }
+            for next in next_nodes {
+                if let Some(tid) = target_id {
+                    if next == tid {
+                        return Ok(Value::Property(PropertyValue::Boolean(true)));
+                    }
+                }
+                visited.insert(next);
+                queue.push_back(next);
+            }
+        }
+        // For single-node varlen, any reachable node counts
+        if target_id.is_none() {
+            return Ok(Value::Property(PropertyValue::Boolean(visited.len() > 1)));
+        }
+        return Ok(Value::Property(PropertyValue::Boolean(false)));
+    }
+
+    // Fixed-length edge check
+    let mut found = false;
+    if is_outgoing || (!is_outgoing && !is_incoming) {
+        let outgoing = store.get_outgoing_edges(source_id);
+        if check_edges(&outgoing) {
+            found = true;
+        }
+    }
+    if !found && (is_incoming || (!is_outgoing && !is_incoming)) {
+        let incoming = store.get_incoming_edges(source_id);
+        if check_edges(&incoming) {
+            found = true;
+        }
+    }
+
+    Ok(Value::Property(PropertyValue::Boolean(found)))
+}
+
 /// Shared function evaluation for scalar functions (not aggregates)
 fn eval_function(name: &str, args: &[Value], store: Option<&GraphStore>) -> ExecutionResult<Value> {
     let lower_name = name.to_lowercase();
@@ -1357,6 +1527,50 @@ fn eval_function(name: &str, args: &[Value], store: Option<&GraphStore>) -> Exec
                         items.join(", ")
                     ))))
                 }
+                Value::Property(PropertyValue::DateTime(ts)) => {
+                    // Convert epoch millis to ISO 8601
+                    let secs = ts / 1000;
+                    let nanos = ((ts % 1000) * 1_000_000) as u32;
+                    if let Some(dt) = chrono::DateTime::from_timestamp(secs, nanos) {
+                        Ok(Value::Property(PropertyValue::String(
+                            dt.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string(),
+                        )))
+                    } else {
+                        Ok(Value::Property(PropertyValue::String(format!("datetime({})", ts))))
+                    }
+                }
+                Value::Property(PropertyValue::Duration {
+                    months,
+                    days,
+                    seconds,
+                    nanos,
+                }) => {
+                    let mut parts = String::from("P");
+                    if *months > 0 {
+                        let y = months / 12;
+                        let m = months % 12;
+                        if y > 0 { parts.push_str(&format!("{}Y", y)); }
+                        if m > 0 { parts.push_str(&format!("{}M", m)); }
+                    }
+                    if *days > 0 { parts.push_str(&format!("{}D", days)); }
+                    if *seconds > 0 || *nanos > 0 {
+                        parts.push('T');
+                        let h = seconds / 3600;
+                        let m = (seconds % 3600) / 60;
+                        let s = seconds % 60;
+                        if h > 0 { parts.push_str(&format!("{}H", h)); }
+                        if m > 0 { parts.push_str(&format!("{}M", m)); }
+                        if s > 0 || *nanos > 0 {
+                            if *nanos > 0 {
+                                parts.push_str(&format!("{}.{:09}S", s, nanos));
+                            } else {
+                                parts.push_str(&format!("{}S", s));
+                            }
+                        }
+                    }
+                    if parts == "P" { parts.push_str("T0S"); }
+                    Ok(Value::Property(PropertyValue::String(parts)))
+                }
                 _ => Err(ExecutionError::TypeError(
                     "Cannot convert to string".to_string(),
                 )),
@@ -1442,6 +1656,9 @@ fn eval_function(name: &str, args: &[Value], store: Option<&GraphStore>) -> Exec
             }
             Value::Property(PropertyValue::Map(m)) => {
                 Ok(Value::Property(PropertyValue::Integer(m.len() as i64)))
+            }
+            Value::Property(PropertyValue::Vector(v)) => {
+                Ok(Value::Property(PropertyValue::Integer(v.len() as i64)))
             }
             _ => Err(ExecutionError::TypeError(
                 "size() requires string, list, map, or path".to_string(),
@@ -1626,6 +1843,11 @@ fn eval_function(name: &str, args: &[Value], store: Option<&GraphStore>) -> Exec
                 let tail: Vec<PropertyValue> = arr.iter().skip(1).cloned().collect();
                 Ok(Value::Property(PropertyValue::Array(tail)))
             }
+            Value::Property(PropertyValue::Vector(v)) => {
+                let tail: Vec<PropertyValue> = v.iter().skip(1).map(|f| PropertyValue::Float(*f as f64)).collect();
+                Ok(Value::Property(PropertyValue::Array(tail)))
+            }
+            Value::Null | Value::Property(PropertyValue::Null) => Ok(Value::Null),
             _ => Err(ExecutionError::TypeError(
                 "tail() requires list".to_string(),
             )),
@@ -2092,6 +2314,36 @@ fn eval_function(name: &str, args: &[Value], store: Option<&GraphStore>) -> Exec
                 _ => Err(ExecutionError::TypeError(
                     "duration.between() requires two datetime arguments".to_string(),
                 )),
+            }
+        }
+        // Scalar fallbacks for aggregate functions used outside aggregation context
+        "count" => {
+            if args.is_empty() {
+                Ok(Value::Property(PropertyValue::Integer(1)))
+            } else if matches!(&args[0], Value::Null | Value::Property(PropertyValue::Null)) {
+                Ok(Value::Property(PropertyValue::Integer(0)))
+            } else {
+                Ok(Value::Property(PropertyValue::Integer(1)))
+            }
+        }
+        "collect" => {
+            if args.is_empty() {
+                Ok(Value::Property(PropertyValue::Array(Vec::new())))
+            } else if matches!(&args[0], Value::Null | Value::Property(PropertyValue::Null)) {
+                Ok(Value::Property(PropertyValue::Array(Vec::new())))
+            } else {
+                let pv = match &args[0] {
+                    Value::Property(pv) => pv.clone(),
+                    _ => PropertyValue::Null,
+                };
+                Ok(Value::Property(PropertyValue::Array(vec![pv])))
+            }
+        }
+        "sum" | "avg" | "min" | "max" => {
+            if args.is_empty() {
+                Ok(Value::Null)
+            } else {
+                Ok(args[0].clone())
             }
         }
         _ => Err(ExecutionError::RuntimeError(format!(
@@ -2842,6 +3094,9 @@ impl FilterOperator {
                 let left_val = self.evaluate_expression(left, record, store)?;
                 let right_val = self.evaluate_expression(right, record, store)?;
                 self.evaluate_binary_op(op, left_val, right_val)
+            }
+            Expression::Function { name, args, .. } if name.eq_ignore_ascii_case("$patternPredicate") => {
+                eval_pattern_predicate_from_args(args, record, store)
             }
             Expression::Function { name, args, .. } => {
                 let arg_vals: Vec<Value> = args
@@ -4514,6 +4769,17 @@ impl PhysicalOperator for AggregateOperator {
         Ok(self.results.next())
     }
 
+    fn next_mut(
+        &mut self,
+        store: &mut GraphStore,
+        tenant_id: &str,
+    ) -> ExecutionResult<Option<Record>> {
+        if !self.executed {
+            self.execute_all_mut(store, tenant_id)?;
+        }
+        Ok(self.results.next())
+    }
+
     fn next_batch(
         &mut self,
         store: &GraphStore,
@@ -4642,6 +4908,62 @@ impl AggregateOperator {
                     record.bind(agg.alias.clone(), states[i].result());
                 }
 
+                output_records.push(record);
+            }
+        }
+
+        self.results = output_records.into_iter();
+        self.executed = true;
+        Ok(())
+    }
+
+    fn execute_all_mut(&mut self, store: &mut GraphStore, tenant_id: &str) -> ExecutionResult<()> {
+        let mut groups: HashMap<Vec<Value>, Vec<AggregatorState>> = HashMap::new();
+
+        let batch_size = 1024;
+        while let Some(batch) = self.input.next_batch_mut(store, tenant_id, batch_size)? {
+            for record in batch.records {
+                let store_ref: &GraphStore = store;
+                let mut key = Vec::new();
+                for (expr, _) in &self.group_by {
+                    key.push(Self::evaluate_expression(expr, &record, store_ref)?);
+                }
+
+                let states = groups.entry(key).or_insert_with(|| {
+                    self.aggregates
+                        .iter()
+                        .map(|agg| AggregatorState::new(&agg.func, agg.distinct))
+                        .collect()
+                });
+
+                for (i, agg) in self.aggregates.iter().enumerate() {
+                    let val = Self::evaluate_expression(&agg.expr, &record, store_ref)?;
+                    states[i].update(&val);
+                }
+            }
+        }
+
+        let mut output_records = Vec::new();
+        if groups.is_empty() && self.group_by.is_empty() && !self.aggregates.is_empty() {
+            let mut record = Record::new();
+            let default_states: Vec<AggregatorState> = self
+                .aggregates
+                .iter()
+                .map(|agg| AggregatorState::new(&agg.func, agg.distinct))
+                .collect();
+            for (i, agg) in self.aggregates.iter().enumerate() {
+                record.bind(agg.alias.clone(), default_states[i].result());
+            }
+            output_records.push(record);
+        } else {
+            for (key, states) in groups {
+                let mut record = Record::new();
+                for (i, (_, alias)) in self.group_by.iter().enumerate() {
+                    record.bind(alias.clone(), key[i].clone());
+                }
+                for (i, agg) in self.aggregates.iter().enumerate() {
+                    record.bind(agg.alias.clone(), states[i].result());
+                }
                 output_records.push(record);
             }
         }
@@ -4906,6 +5228,24 @@ impl PhysicalOperator for SortOperator {
         Ok(Some(record))
     }
 
+    fn next_mut(
+        &mut self,
+        store: &mut GraphStore,
+        tenant_id: &str,
+    ) -> ExecutionResult<Option<Record>> {
+        if !self.executed {
+            self.execute_all_mut(store, tenant_id)?;
+        }
+
+        if self.current >= self.records.len() {
+            return Ok(None);
+        }
+
+        let record = self.records[self.current].clone();
+        self.current += 1;
+        Ok(Some(record))
+    }
+
     fn next_batch(
         &mut self,
         store: &GraphStore,
@@ -4974,6 +5314,32 @@ impl SortOperator {
                 let prop_a = val_a.as_property().unwrap_or(&PropertyValue::Null);
                 let prop_b = val_b.as_property().unwrap_or(&PropertyValue::Null);
 
+                let ord = prop_a.cmp(prop_b);
+                if ord != std::cmp::Ordering::Equal {
+                    return if *ascending { ord } else { ord.reverse() };
+                }
+            }
+            std::cmp::Ordering::Equal
+        });
+
+        self.executed = true;
+        Ok(())
+    }
+
+    fn execute_all_mut(&mut self, store: &mut GraphStore, tenant_id: &str) -> ExecutionResult<()> {
+        let batch_size = 1024;
+        while let Some(batch) = self.input.next_batch_mut(store, tenant_id, batch_size)? {
+            self.records.extend(batch.records);
+        }
+
+        let sort_items = &self.sort_items;
+        let store_ref: &GraphStore = store;
+        self.records.sort_by(|a, b| {
+            for (expr, ascending) in sort_items {
+                let val_a = Self::evaluate_expression(expr, a, store_ref).unwrap_or(Value::Null);
+                let val_b = Self::evaluate_expression(expr, b, store_ref).unwrap_or(Value::Null);
+                let prop_a = val_a.as_property().unwrap_or(&PropertyValue::Null);
+                let prop_b = val_b.as_property().unwrap_or(&PropertyValue::Null);
                 let ord = prop_a.cmp(prop_b);
                 if ord != std::cmp::Ordering::Equal {
                     return if *ascending { ord } else { ord.reverse() };
@@ -8564,6 +8930,10 @@ impl PhysicalOperator for DeleteOperator {
                     match val {
                         Value::NodeRef(id) | Value::Node(id, _) => {
                             let node_id = *id;
+                            // Check if node still exists (may have been deleted already)
+                            if store.get_node(node_id).is_none() {
+                                continue;
+                            }
                             if self.detach {
                                 let out_edges: Vec<_> = store
                                     .get_outgoing_edges(node_id)
@@ -8577,6 +8947,15 @@ impl PhysicalOperator for DeleteOperator {
                                     .collect();
                                 for eid in out_edges.into_iter().chain(in_edges) {
                                     let _ = store.delete_edge(eid);
+                                }
+                            } else {
+                                // Non-DETACH: verify no edges exist
+                                let has_out = !store.get_outgoing_edges(node_id).is_empty();
+                                let has_in = !store.get_incoming_edges(node_id).is_empty();
+                                if has_out || has_in {
+                                    return Err(ExecutionError::RuntimeError(
+                                        format!("Cannot delete node with id {} because it still has relationships. To delete this node, you must first delete its relationships, or use DETACH DELETE.", node_id.as_u64())
+                                    ));
                                 }
                             }
                             let _ = store.delete_node(tenant_id, node_id);

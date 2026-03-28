@@ -206,6 +206,15 @@ fn parse_feature_file(path: &Path) -> Vec<TckScenario> {
                         bi += 1;
                         continue;
                     }
+                    if bline.starts_with("Given the ") && bline.ends_with(" graph") {
+                        let name = bline.strip_prefix("Given the ").unwrap()
+                            .strip_suffix(" graph").unwrap();
+                        if let Some(setup) = named_graph_setup(name) {
+                            background_queries.push(setup);
+                        }
+                        bi += 1;
+                        continue;
+                    }
                     bi += 1;
                 }
                 break;
@@ -254,6 +263,20 @@ fn parse_feature_file(path: &Path) -> Vec<TckScenario> {
                         || lines[i + 1].trim().starts_with("Scenario Outline:"))
                 {
                     break;
+                }
+
+                // Named graph fixtures
+                if (line.starts_with("Given the ") && line.ends_with(" graph"))
+                    || (line.starts_with("And the ") && line.ends_with(" graph"))
+                {
+                    let prefix = if line.starts_with("Given") { "Given the " } else { "And the " };
+                    let name = line.strip_prefix(prefix).unwrap()
+                        .strip_suffix(" graph").unwrap();
+                    if let Some(setup) = named_graph_setup(name) {
+                        setup_queries.push(setup);
+                    }
+                    i += 1;
+                    continue;
                 }
 
                 // Setup queries: "And having executed:" or "Given having executed:"
@@ -460,6 +483,14 @@ fn execute_script(
     }
 
     Ok(last_result)
+}
+
+/// Return Cypher CREATE statements for named graph fixtures used in TCK tests.
+fn named_graph_setup(name: &str) -> Option<String> {
+    match name {
+        // Named graph fixtures are not yet implemented — skip these scenarios
+        _ => None,
+    }
 }
 
 // ---------------------------------------------------------------------------

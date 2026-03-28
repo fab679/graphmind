@@ -535,16 +535,113 @@ impl QueryPlanner {
         if let Some(dc) = &query.delete_clause {
             for expr in &dc.expressions {
                 match expr {
-                    Expression::Variable(_v) => {
-                        // Variable validation is complex (path vars, CREATE vars, WITH aliases)
-                        // Skip for now — runtime will catch undefined vars
+                    Expression::Variable(v) => {
+                        // Check that the variable is defined in MATCH scope
+                        let mut defined = HashSet::new();
+                        for mc in &query.match_clauses {
+                            for path in &mc.pattern.paths {
+                                if let Some(pv) = &path.start.variable { defined.insert(pv.clone()); }
+                                if let Some(pv) = &path.path_variable { defined.insert(pv.clone()); }
+                                for seg in &path.segments {
+                                    if let Some(sv) = &seg.node.variable { defined.insert(sv.clone()); }
+                                    if let Some(ev) = &seg.edge.variable { defined.insert(ev.clone()); }
+                                }
+                            }
+                        }
+                        if !defined.is_empty() && !defined.contains(v) {
+                            return Err(ExecutionError::PlanningError(format!(
+                                "Variable `{}` not defined", v
+                            )));
+                        }
                     }
                     Expression::Function { name, .. } if name == "$hasLabel" => {
                         return Err(ExecutionError::PlanningError(
                             "Invalid DELETE of label — use REMOVE instead".to_string(),
                         ));
                     }
+                    Expression::Binary { .. } | Expression::Literal(_) => {
+                        return Err(ExecutionError::PlanningError(
+                            "Type mismatch: expected Node or Relationship but was Integer, Float, Boolean, or String".to_string(),
+                        ));
+                    }
                     _ => {}
+                }
+            }
+        }
+
+        // Validate DELETE of connected nodes (non-DETACH)
+        // Note: actual constraint check happens at runtime in DeleteOperator
+
+        // Validate MERGE with null node properties
+        if let Some(mc) = &query.merge_clause {
+            for path in &mc.pattern.paths {
+                if let Some(ref props) = path.start.properties {
+                    for (k, v) in props {
+                        if matches!(v, PropertyValue::Null) {
+                            return Err(ExecutionError::RuntimeError(format!(
+                                "Cannot merge node using null property value for '{}'", k
+                            )));
+                        }
+                    }
+                }
+            }
+        }
+        for mc in &query.all_merge_clauses {
+            for path in &mc.pattern.paths {
+                if let Some(ref props) = path.start.properties {
+                    for (k, v) in props {
+                        if matches!(v, PropertyValue::Null) {
+                            return Err(ExecutionError::RuntimeError(format!(
+                                "Cannot merge node using null property value for '{}'", k
+                            )));
+                        }
+                    }
+                }
+            }
+        }
+
+        // Validate MERGE variable-length relationships
+        for mc in &query.all_merge_clauses {
+            for path in &mc.pattern.paths {
+                for seg in &path.segments {
+                    if seg.edge.length.is_some() {
+                        return Err(ExecutionError::PlanningError(
+                            "Variable length relationships cannot be used in MERGE".to_string(),
+                        ));
+                    }
+                }
+            }
+        }
+
+        // Validate UNION column consistency — only check explicit aliases
+        if !query.union_queries.is_empty() {
+            if let Some(rc) = &query.return_clause {
+                // Only validate when RETURN items have explicit AS aliases
+                let main_aliases: Vec<Option<&str>> = rc.items.iter()
+                    .map(|item| item.alias.as_deref())
+                    .collect();
+                let all_have_aliases = main_aliases.iter().all(|a| a.is_some());
+                if all_have_aliases {
+                    let main_cols: Vec<&str> = main_aliases.iter().map(|a| a.unwrap()).collect();
+                    for (union_q, _is_all) in &query.union_queries {
+                        if let Some(urc) = &union_q.return_clause {
+                            let union_aliases: Vec<Option<&str>> = urc.items.iter()
+                                .map(|item| item.alias.as_deref())
+                                .collect();
+                            if union_aliases.iter().all(|a| a.is_some()) {
+                                let union_cols: Vec<&str> = union_aliases.iter().map(|a| a.unwrap()).collect();
+                                if main_cols.len() == union_cols.len() {
+                                    for (mc, uc) in main_cols.iter().zip(union_cols.iter()) {
+                                        if mc != uc {
+                                            return Err(ExecutionError::PlanningError(
+                                                "All sub queries in an UNION must have the same column names".to_string(),
+                                            ));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -974,8 +1071,9 @@ impl QueryPlanner {
         }
 
         // Handle CREATE-only queries (no MATCH/CALL required)
+        let has_unwind = query.unwind_clause.is_some() || !query.additional_unwinds.is_empty();
         if query.match_clauses.is_empty() && query.call_clause.is_none() {
-            if !query.create_clauses.is_empty() {
+            if !has_unwind && !query.create_clauses.is_empty() {
                 let mut plan = self.plan_create_only_multi(&query.create_clauses)?;
                 // Apply RETURN, SKIP, LIMIT if present
                 if let Some(rc) = &query.return_clause {
@@ -1008,7 +1106,8 @@ impl QueryPlanner {
                 }
                 return Ok(plan);
             }
-            if let Some(create_clause) = &query.create_clause {
+            if !has_unwind && query.create_clause.is_some() {
+                let create_clause = query.create_clause.as_ref().unwrap();
                 let mut plan = self.plan_create_only_multi(std::slice::from_ref(create_clause))?;
                 if let Some(rc) = &query.return_clause {
                     let projections: Vec<(Expression, String)> = rc
@@ -1072,35 +1171,30 @@ impl QueryPlanner {
                 let mut edge_specs = Vec::new();
 
                 for path in &create_clause.pattern.paths {
-                    let start_var = path.start.variable.clone();
                     let labels = path.start.labels.clone();
                     let static_props = path.start.properties.clone().unwrap_or_default();
-                    // Check for expression properties (UNWIND variable references)
-                    let expr_props: Vec<(String, Expression)> = Vec::new();
-                    node_specs.push((labels, static_props, expr_props, start_var.clone()));
+                    let expr_props = path.start.expression_properties.clone();
+                    // Always generate a name for anonymous nodes so edges can reference them
+                    let effective_start = path.start.variable.clone()
+                        .unwrap_or_else(|| format!("__pcreate_anon_{}", node_specs.len() + 1));
+                    node_specs.push((labels, static_props, expr_props, Some(effective_start.clone())));
 
-                    let mut current_var =
-                        start_var.unwrap_or_else(|| format!("__pcreate_anon_{}", node_specs.len()));
-                    // Rebind the start var name for edge reference
-                    if let Some(ref v) = node_specs.last().unwrap().3 {
-                        current_var = v.clone();
-                    }
+                    let mut current_var = effective_start;
 
                     for seg in &path.segments {
-                        let target_var = seg.node.variable.clone();
                         let seg_labels = seg.node.labels.clone();
                         let seg_props = seg.node.properties.clone().unwrap_or_default();
-                        let seg_expr_props: Vec<(String, Expression)> = Vec::new();
+                        let seg_expr_props = seg.node.expression_properties.clone();
+                        let effective_target = seg.node.variable.clone()
+                            .unwrap_or_else(|| format!("__pcreate_anon_{}", node_specs.len() + 1));
                         node_specs.push((
                             seg_labels,
                             seg_props,
                             seg_expr_props,
-                            target_var.clone(),
+                            Some(effective_target.clone()),
                         ));
 
-                        let target_name = target_var
-                            .clone()
-                            .unwrap_or_else(|| format!("__pcreate_anon_{}", node_specs.len()));
+                        let target_name = effective_target;
 
                         if let Some(et) = seg.edge.types.first() {
                             let edge_props = seg.edge.properties.clone().unwrap_or_default();
@@ -1186,29 +1280,55 @@ impl QueryPlanner {
                     }
                 }
 
-                // Handle RETURN
+                // Handle RETURN (with aggregation detection)
                 let mut output_columns = Vec::new();
                 if let Some(rc) = &query.return_clause {
-                    let projections: Vec<(Expression, String)> = rc
-                        .items
-                        .iter()
-                        .enumerate()
-                        .map(|(i, item)| {
-                            let alias =
-                                item.alias
-                                    .clone()
-                                    .unwrap_or_else(|| match &item.expression {
-                                        Expression::Variable(v) => v.clone(),
-                                        Expression::Property { variable, property } => {
-                                            format!("{}.{}", variable, property)
-                                        }
-                                        _ => format!("col_{}", i),
-                                    });
-                            output_columns.push(alias.clone());
-                            (item.expression.clone(), alias)
-                        })
-                        .collect();
-                    operator = Box::new(ProjectOperator::new(operator, projections));
+                    let mut agg_counter = 0usize;
+                    let mut has_aggregation = false;
+                    let mut ret_item_info: Vec<(String, Expression, Vec<AggregateFunction>)> = Vec::new();
+                    for (idx, item) in rc.items.iter().enumerate() {
+                        let alias = item.alias.clone().unwrap_or_else(|| match &item.expression {
+                            Expression::Variable(v) => v.clone(),
+                            Expression::Property { variable, property } => format!("{}.{}", variable, property),
+                            _ => format!("col_{}", idx),
+                        });
+                        let (rewritten, extracted) = extract_nested_aggregates(&item.expression, &mut agg_counter);
+                        if !extracted.is_empty() { has_aggregation = true; }
+                        output_columns.push(alias.clone());
+                        ret_item_info.push((alias, rewritten, extracted));
+                    }
+
+                    if has_aggregation {
+                        let mut agg_funcs = Vec::new();
+                        let mut group_by = Vec::new();
+                        let mut post_projections = Vec::new();
+                        for (alias, rewritten, extracted) in ret_item_info {
+                            if !extracted.is_empty() {
+                                agg_funcs.extend(extracted);
+                                post_projections.push((rewritten, alias));
+                            } else {
+                                group_by.push((Expression::Variable(alias.clone()), alias.clone()));
+                                post_projections.push((Expression::Variable(alias.clone()), alias));
+                            }
+                        }
+                        operator = Box::new(AggregateOperator::new(operator, group_by, agg_funcs));
+                        operator = Box::new(ProjectOperator::new(operator, post_projections));
+                    } else {
+                        let projections: Vec<(Expression, String)> = rc
+                            .items
+                            .iter()
+                            .enumerate()
+                            .map(|(i, item)| {
+                                let alias = item.alias.clone().unwrap_or_else(|| match &item.expression {
+                                    Expression::Variable(v) => v.clone(),
+                                    Expression::Property { variable, property } => format!("{}.{}", variable, property),
+                                    _ => format!("col_{}", i),
+                                });
+                                (item.expression.clone(), alias)
+                            })
+                            .collect();
+                        operator = Box::new(ProjectOperator::new(operator, projections));
+                    }
 
                     if let Some(skip) = query.skip {
                         operator = Box::new(SkipOperator::new(operator, skip));
@@ -1230,21 +1350,46 @@ impl QueryPlanner {
             if let Some(return_clause) = &query.return_clause {
                 let mut operator: OperatorBox = Box::new(SingleRowOperator::new());
 
-                // Handle standalone UNWIND before RETURN: UNWIND [1,2] AS x RETURN x
-                // Handle all UNWIND clauses (additional first, then primary)
+                // Apply UNWINDs. Split into pre-WITH and post-WITH groups.
+                // An UNWIND referencing a variable defined by WITH must go after the WITH.
+                let with_vars: HashSet<String> = query.with_clause.as_ref()
+                    .map(|wc| wc.items.iter().map(|item| {
+                        item.alias.clone().unwrap_or_else(|| match &item.expression {
+                            Expression::Variable(v) => v.clone(),
+                            _ => String::new(),
+                        })
+                    }).filter(|s| !s.is_empty()).collect())
+                    .unwrap_or_default();
+
+                let refs_with_var = |expr: &Expression| -> bool {
+                    match expr {
+                        Expression::Variable(v) => with_vars.contains(v),
+                        _ => false,
+                    }
+                };
+
+                let mut post_with_unwinds = Vec::new();
                 for unwind in &query.additional_unwinds {
-                    operator = Box::new(UnwindOperator::new(
-                        operator,
-                        unwind.expression.clone(),
-                        unwind.variable.clone(),
-                    ));
+                    if refs_with_var(&unwind.expression) {
+                        post_with_unwinds.push(unwind.clone());
+                    } else {
+                        operator = Box::new(UnwindOperator::new(
+                            operator,
+                            unwind.expression.clone(),
+                            unwind.variable.clone(),
+                        ));
+                    }
                 }
                 if let Some(unwind) = &query.unwind_clause {
-                    operator = Box::new(UnwindOperator::new(
-                        operator,
-                        unwind.expression.clone(),
-                        unwind.variable.clone(),
-                    ));
+                    if refs_with_var(&unwind.expression) {
+                        post_with_unwinds.push(unwind.clone());
+                    } else {
+                        operator = Box::new(UnwindOperator::new(
+                            operator,
+                            unwind.expression.clone(),
+                            unwind.variable.clone(),
+                        ));
+                    }
                 }
 
                 // Handle extra WITH stages
@@ -1363,16 +1508,42 @@ impl QueryPlanner {
                     if let Some(limit) = with_cl.limit {
                         operator = Box::new(LimitOperator::new(operator, limit));
                     }
+
+                    // Apply post-WITH UNWINDs (those that reference WITH-defined variables)
+                    for unwind in &post_with_unwinds {
+                        operator = Box::new(UnwindOperator::new(
+                            operator,
+                            unwind.expression.clone(),
+                            unwind.variable.clone(),
+                        ));
+                    }
                 }
 
-                // Expand RETURN * — collect vars from UNWIND clause
+                // Expand RETURN * — collect vars from UNWIND and WITH clauses
                 let effective_items = if return_clause.star {
                     let mut star_vars: Vec<String> = Vec::new();
+                    // Add WITH-defined vars
+                    if let Some(wc) = &query.with_clause {
+                        for item in &wc.items {
+                            let alias = item.alias.clone().unwrap_or_else(|| match &item.expression {
+                                Expression::Variable(v) => v.clone(),
+                                _ => String::new(),
+                            });
+                            if !alias.is_empty() {
+                                star_vars.push(alias);
+                            }
+                        }
+                    }
+                    // Add UNWIND-defined vars
                     for u in &query.additional_unwinds {
-                        star_vars.push(u.variable.clone());
+                        if !star_vars.contains(&u.variable) {
+                            star_vars.push(u.variable.clone());
+                        }
                     }
                     if let Some(u) = &query.unwind_clause {
-                        star_vars.push(u.variable.clone());
+                        if !star_vars.contains(&u.variable) {
+                            star_vars.push(u.variable.clone());
+                        }
                     }
                     star_vars.sort();
                     let mut items: Vec<crate::query::ast::ReturnItem> = star_vars

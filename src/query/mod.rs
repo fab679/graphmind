@@ -282,6 +282,8 @@ impl QueryEngine {
     /// becomes: `CREATE (a:Person) WITH a CREATE (b:Person) WITH a, b CREATE (a)-[:KNOWS]->(b)`
     /// Expand `UNWIND [1,2,3] AS x CREATE ({num: x})` into individual CREATEs.
     /// Returns None if the query is not an UNWIND+CREATE pattern.
+    /// NOTE: Deprecated — UNWIND+CREATE is now handled natively by the planner.
+    #[allow(dead_code)]
     fn expand_unwind_create(input: &str) -> Option<Vec<String>> {
         let trimmed = input.trim();
         let upper = trimmed.to_uppercase();
@@ -590,18 +592,7 @@ impl QueryEngine {
             // Rewrite multi-CREATE to use WITH for variable sharing
             let rewritten = Self::rewrite_multi_create(stmt);
 
-            // Handle UNWIND+CREATE: expand UNWIND list into per-element CREATEs
-            if let Some(expanded) = Self::expand_unwind_create(&rewritten) {
-                for create_stmt in &expanded {
-                    let query = self.cached_parse(create_stmt)?;
-                    let mut executor = MutQueryExecutor::new(store, tenant_id.to_string());
-                    if !params.is_empty() {
-                        executor = executor.with_params(params.clone());
-                    }
-                    last_result = executor.execute(&query)?;
-                }
-                continue;
-            }
+            // UNWIND+CREATE is handled natively by the planner (PerRowCreateOperator).
 
             let query = self.cached_parse(&rewritten)?;
             let mut executor = MutQueryExecutor::new(store, tenant_id.to_string());

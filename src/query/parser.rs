@@ -662,7 +662,7 @@ fn parse_multi_part_query(pair: pest::iterators::Pair<Rule>, query: &mut Query) 
                             query.where_clause = Some(pw);
                         }
                     }
-                    if let Some(uw) = all_unwinds.into_iter().last() {
+                    for uw in all_unwinds {
                         if let Some(prev) = query.unwind_clause.take() {
                             query.additional_unwinds.push(prev);
                         }
