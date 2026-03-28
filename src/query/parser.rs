@@ -2766,7 +2766,8 @@ fn parse_number_literal(pair: pest::iterators::Pair<Rule>) -> ParseResult<Expres
                 Ok(val) => return Ok(Expression::Literal(PropertyValue::Integer(val))),
                 Err(e) => {
                     // Check if it's exactly i64::MIN magnitude — allow it through
-                    // for unary minus to handle (RETURN -9223372036854775808)
+                    // for unary minus to handle (RETURN -9223372036854775808).
+                    // Bare usage without minus will be caught by the planner.
                     let s = inner.as_str().trim();
                     if s == "9223372036854775808"
                         || s.eq_ignore_ascii_case("0x8000000000000000")
