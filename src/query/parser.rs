@@ -2037,7 +2037,9 @@ fn parse_properties_with_exprs(
                 return parse_map_literal_to_props_with_exprs(inner);
             }
             Rule::parameter => {
-                return Ok((HashMap::new(), Vec::new()));
+                return Err(ParseError::SemanticError(
+                    "Parameter maps are not allowed in MATCH or MERGE".to_string(),
+                ));
             }
             _ => {}
         }
