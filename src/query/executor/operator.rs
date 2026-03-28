@@ -915,26 +915,59 @@ fn eval_exists_subquery(
                     return Ok(Value::Property(PropertyValue::Boolean(true)));
                 }
             } else {
-                // Check edges
+                // Check edges — traverse each segment
+                // For single segment, check all matching edges
                 for segment in &path.segments {
                     let edge_types: Vec<&str> =
                         segment.edge.types.iter().map(|t| t.as_str()).collect();
-                    let outgoing = store.get_outgoing_edges(*node_id);
-                    for edge in &outgoing {
-                        if !edge_types.is_empty() && !edge_types.contains(&edge.edge_type.as_str())
-                        {
-                            continue;
+                    let is_outgoing = !matches!(segment.edge.direction, crate::query::ast::Direction::Incoming);
+                    let is_incoming = !matches!(segment.edge.direction, crate::query::ast::Direction::Outgoing);
+
+                    let mut candidate_edges: Vec<(crate::graph::types::EdgeId, NodeId, NodeId, crate::graph::types::EdgeType, NodeId)> = Vec::new();
+                    if is_outgoing {
+                        for edge in store.get_outgoing_edges(*node_id) {
+                            if !edge_types.is_empty() && !edge_types.contains(&edge.edge_type.as_str()) { continue; }
+                            candidate_edges.push((edge.id, edge.source, edge.target, edge.edge_type.clone(), edge.target));
                         }
+                    }
+                    if is_incoming {
+                        for edge in store.get_incoming_edges(*node_id) {
+                            if !edge_types.is_empty() && !edge_types.contains(&edge.edge_type.as_str()) { continue; }
+                            candidate_edges.push((edge.id, edge.source, edge.target, edge.edge_type.clone(), edge.source));
+                        }
+                    }
+
+                    for (edge_id, edge_src, edge_tgt, edge_type, target_id) in &candidate_edges {
+                        // Check target labels
                         if !segment.node.labels.is_empty() {
-                            if let Some(target) = store.get_node(edge.target) {
-                                let target_matches = segment
-                                    .node
-                                    .labels
-                                    .iter()
-                                    .all(|l| target.labels.contains(l));
-                                if target_matches {
-                                    return Ok(Value::Property(PropertyValue::Boolean(true)));
-                                }
+                            if let Some(target) = store.get_node(*target_id) {
+                                let target_matches = segment.node.labels.iter().all(|l| target.labels.contains(l));
+                                if !target_matches { continue; }
+                            } else { continue; }
+                        }
+                        // Check target properties
+                        if let Some(ref props) = segment.node.properties {
+                            if let Some(target) = store.get_node(*target_id) {
+                                let props_match = props.iter().all(|(k, v)| target.properties.get(k) == Some(v));
+                                if !props_match { continue; }
+                            } else { continue; }
+                        }
+
+                        // Apply WHERE clause if present
+                        if let Some(wc) = where_clause {
+                            let mut temp_record = record.clone();
+                            if let Some(var) = start_var {
+                                temp_record.bind(var.to_string(), Value::NodeRef(*node_id));
+                            }
+                            if let Some(ref edge_var) = segment.edge.variable {
+                                temp_record.bind(edge_var.clone(), Value::EdgeRef(*edge_id, *edge_src, *edge_tgt, edge_type.clone()));
+                            }
+                            if let Some(ref node_var) = segment.node.variable {
+                                temp_record.bind(node_var.clone(), Value::NodeRef(*target_id));
+                            }
+                            let result = eval_expression(&wc.predicate, &temp_record, store)?;
+                            if matches!(result, Value::Property(PropertyValue::Boolean(true))) {
+                                return Ok(Value::Property(PropertyValue::Boolean(true)));
                             }
                         } else {
                             return Ok(Value::Property(PropertyValue::Boolean(true)));
