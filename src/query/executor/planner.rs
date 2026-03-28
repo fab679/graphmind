@@ -487,6 +487,38 @@ impl QueryPlanner {
         for cc in &query.create_clauses {
             validate_create_rebind(cc)?;
         }
+        // Cross-CREATE rebinding: variables from earlier CREATEs can't be rebound with new labels/props
+        if query.create_clauses.len() > 1 {
+            let mut all_create_vars: HashMap<String, bool> = HashMap::new();
+            for cc in &query.create_clauses {
+                for path in &cc.pattern.paths {
+                    if let Some(v) = &path.start.variable {
+                        let has_lp = !path.start.labels.is_empty() || path.start.properties.is_some();
+                        if let Some(&prev) = all_create_vars.get(v) {
+                            if has_lp && prev {
+                                return Err(ExecutionError::PlanningError(format!(
+                                    "Can't create node '{}' with labels or properties here — already declared in a previous CREATE", v
+                                )));
+                            }
+                        }
+                        all_create_vars.insert(v.clone(), has_lp);
+                    }
+                    for seg in &path.segments {
+                        if let Some(v) = &seg.node.variable {
+                            let has_lp = !seg.node.labels.is_empty() || seg.node.properties.is_some();
+                            if let Some(&prev) = all_create_vars.get(v) {
+                                if has_lp && prev {
+                                    return Err(ExecutionError::PlanningError(format!(
+                                        "Can't create node '{}' with labels or properties here — already declared in a previous CREATE", v
+                                    )));
+                                }
+                            }
+                            all_create_vars.insert(v.clone(), has_lp);
+                        }
+                    }
+                }
+            }
+        }
 
         // Validate WITH: no duplicate aliases
         if let Some(wc) = &query.with_clause {
