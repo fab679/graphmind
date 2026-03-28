@@ -2158,10 +2158,10 @@ impl QueryPlanner {
                                     true
                                 }
                             });
-                            let mut join_op = LeftOuterJoinOperator::new(
+                            let mut join_op = LeftOuterJoinOperator::new_multi(
                                 existing,
                                 match_op,
-                                shared[0].clone(),
+                                shared.clone(),
                                 right_only,
                             );
                             if let Some(filter) = join_filter {
@@ -2169,7 +2169,7 @@ impl QueryPlanner {
                             }
                             Box::new(join_op) as OperatorBox
                         } else {
-                            Box::new(JoinOperator::new(existing, match_op, shared[0].clone()))
+                            Box::new(JoinOperator::new_multi(existing, match_op, shared.clone()))
                                 as OperatorBox
                         }
                     } else {
@@ -2431,7 +2431,7 @@ impl QueryPlanner {
                                 right_only,
                             )) as OperatorBox
                         } else {
-                            Box::new(JoinOperator::new(existing, match_op, shared[0].clone()))
+                            Box::new(JoinOperator::new_multi(existing, match_op, shared.clone()))
                                 as OperatorBox
                         }
                     } else {

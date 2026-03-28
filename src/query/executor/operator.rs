@@ -5910,8 +5910,8 @@ impl PhysicalOperator for CartesianProductOperator {
 pub struct JoinOperator {
     left: OperatorBox,
     right: OperatorBox,
-    join_var: String,
-    left_records: HashMap<Value, Vec<Record>>,
+    join_vars: Vec<String>,
+    left_records: HashMap<Vec<Value>, Vec<Record>>,
     right_records: Vec<Record>,
     current_right_index: usize,
     current_left_list_index: usize,
@@ -5923,13 +5923,30 @@ impl JoinOperator {
         Self {
             left,
             right,
-            join_var,
+            join_vars: vec![join_var],
             left_records: HashMap::new(),
             right_records: Vec::new(),
             current_right_index: 0,
             current_left_list_index: 0,
             materialized: false,
         }
+    }
+
+    pub fn new_multi(left: OperatorBox, right: OperatorBox, join_vars: Vec<String>) -> Self {
+        Self {
+            left,
+            right,
+            join_vars,
+            left_records: HashMap::new(),
+            right_records: Vec::new(),
+            current_right_index: 0,
+            current_left_list_index: 0,
+            materialized: false,
+        }
+    }
+
+    fn join_key(record: &Record, vars: &[String]) -> Vec<Value> {
+        vars.iter().map(|v| record.get(v).cloned().unwrap_or(Value::Null)).collect()
     }
 
     fn materialize(&mut self, store: &GraphStore) -> ExecutionResult<()> {
@@ -5940,12 +5957,8 @@ impl JoinOperator {
         // Materialize left into a hash map (with periodic timeout check)
         let mut count = 0u64;
         while let Some(record) = self.left.next(store)? {
-            if let Some(val) = record.get(&self.join_var) {
-                self.left_records
-                    .entry(val.clone())
-                    .or_default()
-                    .push(record);
-            }
+            let key = Self::join_key(&record, &self.join_vars);
+            self.left_records.entry(key).or_default().push(record);
             count += 1;
             if count % 10000 == 0 {
                 check_deadline()?;
@@ -5973,8 +5986,9 @@ impl PhysicalOperator for JoinOperator {
 
         while self.current_right_index < self.right_records.len() {
             let right_record = &self.right_records[self.current_right_index];
-            if let Some(join_val) = right_record.get(&self.join_var) {
-                if let Some(left_list) = self.left_records.get(join_val) {
+            let join_key = Self::join_key(right_record, &self.join_vars);
+            {
+                if let Some(left_list) = self.left_records.get(&join_key) {
                     if self.current_left_list_index < left_list.len() {
                         let left_record = &left_list[self.current_left_list_index];
                         self.current_left_list_index += 1;
@@ -6007,26 +6021,22 @@ impl PhysicalOperator for JoinOperator {
 
         while results.len() < batch_size && self.current_right_index < self.right_records.len() {
             let right_record = &self.right_records[self.current_right_index];
-            if let Some(join_val) = right_record.get(&self.join_var) {
-                if let Some(left_list) = self.left_records.get(join_val) {
-                    let take = (batch_size - results.len())
-                        .min(left_list.len() - self.current_left_list_index);
+            let join_key = Self::join_key(right_record, &self.join_vars);
+            if let Some(left_list) = self.left_records.get(&join_key) {
+                let take = (batch_size - results.len())
+                    .min(left_list.len() - self.current_left_list_index);
 
-                    for i in 0..take {
-                        let left_record = &left_list[self.current_left_list_index + i];
-                        let mut merged = left_record.clone();
-                        for (key, value) in right_record.bindings() {
-                            merged.bind(key.clone(), value.clone());
-                        }
-                        results.push(merged);
+                for i in 0..take {
+                    let left_record = &left_list[self.current_left_list_index + i];
+                    let mut merged = left_record.clone();
+                    for (key, value) in right_record.bindings() {
+                        merged.bind(key.clone(), value.clone());
                     }
+                    results.push(merged);
+                }
 
-                    self.current_left_list_index += take;
-                    if self.current_left_list_index >= left_list.len() {
-                        self.current_right_index += 1;
-                        self.current_left_list_index = 0;
-                    }
-                } else {
+                self.current_left_list_index += take;
+                if self.current_left_list_index >= left_list.len() {
                     self.current_right_index += 1;
                     self.current_left_list_index = 0;
                 }
@@ -6059,7 +6069,7 @@ impl PhysicalOperator for JoinOperator {
     fn describe(&self) -> OperatorDescription {
         OperatorDescription {
             name: "HashJoin".to_string(),
-            details: format!("on={}", self.join_var),
+            details: format!("on={}", self.join_vars.join(",")),
             children: vec![self.left.describe(), self.right.describe()],
         }
     }
@@ -6071,14 +6081,14 @@ impl PhysicalOperator for JoinOperator {
 pub struct LeftOuterJoinOperator {
     left: OperatorBox,
     right: OperatorBox,
-    join_var: String,
+    join_vars: Vec<String>,
     right_only_vars: Vec<String>,
     /// Optional post-join filter. When set, right matches are filtered through this.
     /// If ALL right matches fail the filter, a null row is emitted (preserving LEFT OUTER semantics).
     post_filter: Option<Expression>,
     // Materialized data
     left_records: Vec<Record>,
-    right_hash: HashMap<Value, Vec<Record>>,
+    right_hash: HashMap<Vec<Value>, Vec<Record>>,
     // Iteration state
     current_left_idx: usize,
     current_right_match_idx: usize,
@@ -6094,10 +6104,33 @@ impl LeftOuterJoinOperator {
         join_var: String,
         right_only_vars: Vec<String>,
     ) -> Self {
+        let join_vars = if join_var.is_empty() { vec![] } else { vec![join_var] };
         Self {
             left,
             right,
-            join_var,
+            join_vars,
+            right_only_vars,
+            post_filter: None,
+            left_records: Vec::new(),
+            right_hash: HashMap::new(),
+            current_left_idx: 0,
+            current_right_match_idx: 0,
+            null_emitted: false,
+            had_valid_match: false,
+            materialized: false,
+        }
+    }
+
+    pub fn new_multi(
+        left: OperatorBox,
+        right: OperatorBox,
+        join_vars: Vec<String>,
+        right_only_vars: Vec<String>,
+    ) -> Self {
+        Self {
+            left,
+            right,
+            join_vars,
             right_only_vars,
             post_filter: None,
             left_records: Vec::new(),
@@ -6117,6 +6150,10 @@ impl LeftOuterJoinOperator {
         self
     }
 
+    fn join_key(record: &Record, vars: &[String]) -> Vec<Value> {
+        vars.iter().map(|v| record.get(v).cloned().unwrap_or(Value::Null)).collect()
+    }
+
     fn materialize(&mut self, store: &GraphStore) -> ExecutionResult<()> {
         if self.materialized {
             return Ok(());
@@ -6132,12 +6169,11 @@ impl LeftOuterJoinOperator {
             }
         }
 
-        // Materialize right into a hash map by join variable
+        // Materialize right into a hash map by join variables
         count = 0;
         while let Some(record) = self.right.next(store)? {
-            if let Some(val) = record.get(&self.join_var) {
-                self.right_hash.entry(val.clone()).or_default().push(record);
-            }
+            let key = Self::join_key(&record, &self.join_vars);
+            self.right_hash.entry(key).or_default().push(record);
             count += 1;
             if count % 10000 == 0 {
                 check_deadline()?;
@@ -6156,8 +6192,11 @@ impl PhysicalOperator for LeftOuterJoinOperator {
         while self.current_left_idx < self.left_records.len() {
             let left_record = &self.left_records[self.current_left_idx];
 
-            if let Some(join_val) = left_record.get(&self.join_var) {
-                if let Some(right_list) = self.right_hash.get(join_val) {
+            let join_key = Self::join_key(left_record, &self.join_vars);
+            let has_key = !self.join_vars.is_empty() && join_key.iter().all(|v| !matches!(v, Value::Null));
+
+            if has_key {
+                if let Some(right_list) = self.right_hash.get(&join_key) {
                     // Has right matches — emit merged records (with optional filter)
                     while self.current_right_match_idx < right_list.len() {
                         let right_record = &right_list[self.current_right_match_idx];
@@ -6256,7 +6295,7 @@ impl PhysicalOperator for LeftOuterJoinOperator {
     fn describe(&self) -> OperatorDescription {
         OperatorDescription {
             name: "LeftOuterJoin".to_string(),
-            details: format!("on={}", self.join_var),
+            details: format!("on={}", self.join_vars.join(",")),
             children: vec![self.left.describe(), self.right.describe()],
         }
     }
