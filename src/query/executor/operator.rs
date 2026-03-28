@@ -3965,6 +3965,14 @@ impl PhysicalOperator for ExpandOperator {
                     }
                 };
 
+                // Self-referencing pattern: (b)-->(b) means target must equal source
+                if self.source_var == self.target_var {
+                    let source_id = new_record.get(&self.source_var).and_then(|v| v.node_id());
+                    if source_id != Some(target_id) {
+                        continue; // Skip edges that don't form self-loops
+                    }
+                }
+
                 new_record.bind(self.target_var.clone(), Value::NodeRef(target_id));
 
                 if let Some(edge_var) = &self.edge_var {

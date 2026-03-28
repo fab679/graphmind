@@ -65,7 +65,7 @@ use crate::query::executor::{
         AggregateFunction, AggregateOperator, AggregateType, AlgorithmOperator,
         CartesianProductOperator, CompositeCreateIndexOperator, CreateConstraintOperator,
         CreateEdgeOperator, CreateIndexOperator, CreateNodeOperator, CreateNodesAndEdgesOperator,
-        CreateVectorIndexOperator, DeleteOperator, DropIndexOperator, ExpandOperator,
+        CreateVectorIndexOperator, DeleteOperator, DropIndexOperator, ExpandIntoOperator, ExpandOperator,
         FilterOperator, ForeachOperator, IndexScanOperator, JoinOperator, LeftOuterJoinOperator,
         LimitOperator, MatchCreateEdgeOperator, MergeOperator, MockProcedureOperator,
         NodeScanOperator, PerRowCreateOperator, PerRowMergeOperator, ProjectOperator,
@@ -3614,6 +3614,8 @@ impl QueryPlanner {
             } else {
                 // Normal path: use ExpandOperator for each segment
                 let mut current_var = start_var.clone();
+                let mut bound_vars: HashSet<String> = HashSet::new();
+                bound_vars.insert(start_var.clone());
                 for (seg_idx, segment) in path.segments.iter().enumerate() {
                     let target_var = segment.node.variable.clone().unwrap_or_else(|| {
                         let name = format!("_anon_{}", anon_counter);
@@ -3657,26 +3659,44 @@ impl QueryPlanner {
                             path_var,
                         ));
                     } else {
-                        let mut expand = ExpandOperator::new(
-                            path_operator,
-                            current_var.clone(),
-                            target_var.clone(),
-                            edge_var,
-                            edge_types,
-                            segment.edge.direction.clone(),
-                        );
-
-                        // CY-04: Set path variable for named path materialization
-                        if let Some(ref pv) = path.path_variable {
-                            expand = expand.with_path_variable(pv.clone());
-                        }
-
-                        // Add target label filter if labels specified on target node
-                        path_operator = if !segment.node.labels.is_empty() {
-                            Box::new(expand.with_target_labels(segment.node.labels.clone()))
+                        // Check if target_var is already bound (cyclic pattern like (a)-->...-->(a))
+                        let target_already_bound = bound_vars.contains(&target_var);
+                        if target_already_bound && target_var != current_var {
+                            // Use ExpandIntoOperator: both source and target are bound
+                            let edge_type_single = if segment.edge.types.len() == 1 {
+                                Some(segment.edge.types[0].as_str().to_string())
+                            } else {
+                                None
+                            };
+                            path_operator = Box::new(ExpandIntoOperator::new(
+                                path_operator,
+                                current_var.clone(),
+                                target_var.clone(),
+                                edge_type_single,
+                                edge_var,
+                            ));
                         } else {
-                            Box::new(expand)
-                        };
+                            let mut expand = ExpandOperator::new(
+                                path_operator,
+                                current_var.clone(),
+                                target_var.clone(),
+                                edge_var,
+                                edge_types,
+                                segment.edge.direction.clone(),
+                            );
+
+                            // CY-04: Set path variable for named path materialization
+                            if let Some(ref pv) = path.path_variable {
+                                expand = expand.with_path_variable(pv.clone());
+                            }
+
+                            // Add target label filter if labels specified on target node
+                            path_operator = if !segment.node.labels.is_empty() {
+                                Box::new(expand.with_target_labels(segment.node.labels.clone()))
+                            } else {
+                                Box::new(expand)
+                            };
+                        }
                     }
 
                     // Add property filter for edge if properties specified AND edge has a variable
@@ -3700,6 +3720,7 @@ impl QueryPlanner {
                         }
                     }
 
+                    bound_vars.insert(target_var.clone());
                     current_var = target_var;
                 }
             }
