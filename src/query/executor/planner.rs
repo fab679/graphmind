@@ -387,46 +387,56 @@ impl QueryPlanner {
             }
         }
 
-        // Validate CREATE: re-binding already-bound node variables
-        if !query.match_clauses.is_empty() {
-            let mut match_node_vars = HashSet::new();
-            let mut match_edge_vars = HashSet::new();
+        // Validate CREATE: re-binding already-bound node variables (MATCH, WITH, or earlier CREATE scope)
+        {
+            let mut bound_node_vars = HashSet::new();
+            let mut bound_edge_vars = HashSet::new();
             for mc in &query.match_clauses {
                 for path in &mc.pattern.paths {
-                    if let Some(v) = &path.start.variable {
-                        match_node_vars.insert(v.clone());
-                    }
+                    if let Some(v) = &path.start.variable { bound_node_vars.insert(v.clone()); }
                     for seg in &path.segments {
-                        if let Some(v) = &seg.node.variable {
-                            match_node_vars.insert(v.clone());
-                        }
-                        if let Some(v) = &seg.edge.variable {
-                            match_edge_vars.insert(v.clone());
-                        }
+                        if let Some(v) = &seg.node.variable { bound_node_vars.insert(v.clone()); }
+                        if let Some(v) = &seg.edge.variable { bound_edge_vars.insert(v.clone()); }
                     }
                 }
             }
+            // WITH-defined variables
+            if let Some(wc) = &query.with_clause {
+                for item in &wc.items {
+                    if let Some(a) = &item.alias { bound_node_vars.insert(a.clone()); }
+                    else if let Expression::Variable(v) = &item.expression { bound_node_vars.insert(v.clone()); }
+                }
+            }
 
-            // Check CREATE patterns for re-bound MATCH variables
-            let check_create = |cc: &crate::query::ast::CreateClause| -> ExecutionResult<()> {
+            // Check CREATE patterns for re-bound variables
+            let check_create = |cc: &crate::query::ast::CreateClause, bound: &HashSet<String>, edge_bound: &HashSet<String>| -> ExecutionResult<()> {
                 for path in &cc.pattern.paths {
                     if let Some(v) = &path.start.variable {
-                        if match_node_vars.contains(v)
+                        if bound.contains(v)
                             && (path.segments.is_empty()
                                 || !path.start.labels.is_empty()
                                 || path.start.properties.is_some())
                         {
                             return Err(ExecutionError::PlanningError(format!(
-                                "Variable '{}' already declared in MATCH",
+                                "Variable '{}' already declared",
                                 v
                             )));
                         }
                     }
                     for seg in &path.segments {
                         if let Some(v) = &seg.edge.variable {
-                            if match_edge_vars.contains(v) {
+                            if edge_bound.contains(v) {
                                 return Err(ExecutionError::PlanningError(format!(
                                     "Variable '{}' already declared as a relationship",
+                                    v
+                                )));
+                            }
+                        }
+                        // Check segment node rebinding
+                        if let Some(v) = &seg.node.variable {
+                            if bound.contains(v) && (!seg.node.labels.is_empty() || seg.node.properties.is_some()) {
+                                return Err(ExecutionError::PlanningError(format!(
+                                    "Variable '{}' already declared",
                                     v
                                 )));
                             }
@@ -436,11 +446,13 @@ impl QueryPlanner {
                 Ok(())
             };
 
-            if let Some(cc) = &query.create_clause {
-                check_create(cc)?;
-            }
-            for cc in &query.create_clauses {
-                check_create(cc)?;
+            if !bound_node_vars.is_empty() || !bound_edge_vars.is_empty() {
+                if let Some(cc) = &query.create_clause {
+                    check_create(cc, &bound_node_vars, &bound_edge_vars)?;
+                }
+                for cc in &query.create_clauses {
+                    check_create(cc, &bound_node_vars, &bound_edge_vars)?;
+                }
             }
         }
 
@@ -489,33 +501,31 @@ impl QueryPlanner {
         }
         // Cross-CREATE rebinding: variables from earlier CREATEs can't be rebound with new labels/props
         if query.create_clauses.len() > 1 {
-            let mut all_create_vars: HashMap<String, bool> = HashMap::new();
+            let mut all_create_vars: HashSet<String> = HashSet::new();
             for cc in &query.create_clauses {
+                // Collect vars defined in THIS CREATE first, check against previous CREATEs
+                let mut this_create_vars: Vec<(String, bool)> = Vec::new();
                 for path in &cc.pattern.paths {
                     if let Some(v) = &path.start.variable {
                         let has_lp = !path.start.labels.is_empty() || path.start.properties.is_some();
-                        if let Some(&prev) = all_create_vars.get(v) {
-                            if has_lp && prev {
-                                return Err(ExecutionError::PlanningError(format!(
-                                    "Can't create node '{}' with labels or properties here — already declared in a previous CREATE", v
-                                )));
-                            }
-                        }
-                        all_create_vars.insert(v.clone(), has_lp);
+                        this_create_vars.push((v.clone(), has_lp));
                     }
                     for seg in &path.segments {
                         if let Some(v) = &seg.node.variable {
                             let has_lp = !seg.node.labels.is_empty() || seg.node.properties.is_some();
-                            if let Some(&prev) = all_create_vars.get(v) {
-                                if has_lp && prev {
-                                    return Err(ExecutionError::PlanningError(format!(
-                                        "Can't create node '{}' with labels or properties here — already declared in a previous CREATE", v
-                                    )));
-                                }
-                            }
-                            all_create_vars.insert(v.clone(), has_lp);
+                            this_create_vars.push((v.clone(), has_lp));
                         }
                     }
+                }
+                for (v, has_lp) in &this_create_vars {
+                    if all_create_vars.contains(v) && *has_lp {
+                        return Err(ExecutionError::PlanningError(format!(
+                            "Can't create node '{}' with labels or properties here — already declared in a previous CREATE", v
+                        )));
+                    }
+                }
+                for (v, _) in this_create_vars {
+                    all_create_vars.insert(v);
                 }
             }
         }
@@ -881,21 +891,55 @@ impl QueryPlanner {
             }
         }
 
-        // Validate MERGE re-binding: MATCH (a) MERGE (a) should fail
+        // Validate MERGE re-binding: MATCH/CREATE (a) MERGE (a:NewLabel) should fail
         if let Some(mc) = &query.merge_clause {
-            let m_node_vars: HashSet<String> = query
-                .match_clauses
-                .iter()
-                .flat_map(|m| m.pattern.paths.iter())
-                .filter_map(|p| p.start.variable.clone())
-                .collect();
+            let mut bound_node_vars: HashSet<String> = HashSet::new();
+            for m in &query.match_clauses {
+                for path in &m.pattern.paths {
+                    if let Some(v) = &path.start.variable { bound_node_vars.insert(v.clone()); }
+                    for seg in &path.segments {
+                        if let Some(v) = &seg.node.variable { bound_node_vars.insert(v.clone()); }
+                    }
+                }
+            }
+            if let Some(cc) = &query.create_clause {
+                for path in &cc.pattern.paths {
+                    if let Some(v) = &path.start.variable { bound_node_vars.insert(v.clone()); }
+                    for seg in &path.segments {
+                        if let Some(v) = &seg.node.variable { bound_node_vars.insert(v.clone()); }
+                    }
+                }
+            }
+            for cc in &query.create_clauses {
+                for path in &cc.pattern.paths {
+                    if let Some(v) = &path.start.variable { bound_node_vars.insert(v.clone()); }
+                    for seg in &path.segments {
+                        if let Some(v) = &seg.node.variable { bound_node_vars.insert(v.clone()); }
+                    }
+                }
+            }
             for path in &mc.pattern.paths {
+                // Check start node
                 if let Some(v) = &path.start.variable {
-                    if m_node_vars.contains(v) && path.segments.is_empty() {
-                        return Err(ExecutionError::PlanningError(format!(
-                            "Variable '{}' already declared in MATCH",
-                            v
-                        )));
+                    if bound_node_vars.contains(v) {
+                        let has_new_predicates = !path.start.labels.is_empty() || path.start.properties.is_some();
+                        if has_new_predicates || path.segments.is_empty() {
+                            return Err(ExecutionError::PlanningError(format!(
+                                "Variable '{}' already declared",
+                                v
+                            )));
+                        }
+                    }
+                }
+                // Check segment nodes
+                for seg in &path.segments {
+                    if let Some(v) = &seg.node.variable {
+                        if bound_node_vars.contains(v) && (!seg.node.labels.is_empty() || seg.node.properties.is_some()) {
+                            return Err(ExecutionError::PlanningError(format!(
+                                "Variable '{}' already declared",
+                                v
+                            )));
+                        }
                     }
                 }
             }
