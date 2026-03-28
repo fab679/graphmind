@@ -8882,7 +8882,7 @@ impl PhysicalOperator for SkipOperator {
         while self.skipped < self.skip {
             if let Some(batch) = self.input.next_batch(store, batch_size)? {
                 let mut iter = batch.records.into_iter();
-                for record in iter.by_ref() {
+                for _record in iter.by_ref() {
                     self.skipped += 1;
                     if self.skipped >= self.skip {
                         // Collect remaining records from this batch
