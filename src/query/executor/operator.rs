@@ -8029,6 +8029,8 @@ pub struct MockProcedureOperator {
     name: String,
     args: Vec<Expression>,
     yield_vars: Vec<String>,
+    results: Vec<Record>,
+    current: usize,
     executed: bool,
 }
 
@@ -8038,6 +8040,8 @@ impl MockProcedureOperator {
             name,
             args,
             yield_vars,
+            results: Vec::new(),
+            current: 0,
             executed: false,
         }
     }
@@ -8045,43 +8049,69 @@ impl MockProcedureOperator {
 
 impl PhysicalOperator for MockProcedureOperator {
     fn next(&mut self, store: &GraphStore) -> ExecutionResult<Option<Record>> {
-        if self.executed {
-            return Ok(None);
-        }
-        self.executed = true;
+        if !self.executed {
+            self.executed = true;
+            self.results = Vec::new();
+            self.current = 0;
 
-        if self.name.to_lowercase() == "test.donothing" {
-            return Ok(None);
-        }
-
-        // Determine yield columns — use provided or default based on arg count
-        let yield_cols = if self.yield_vars.is_empty() {
-            // Standalone call without YIELD — use default columns
-            // test.my.proc with 2 args returns (city, country_code)
-            // test.my.proc with 1 arg returns (out)
-            if self.args.len() == 2 {
-                vec!["city".to_string(), "country_code".to_string()]
-            } else {
-                vec!["out".to_string()]
+            let lower = self.name.to_lowercase();
+            if lower == "test.donothing" {
+                // No output
+            } else if lower == "test.labels" {
+                // Returns 3 rows with label column from store labels
+                let labels: Vec<String> = store.all_labels().into_iter()
+                    .map(|l| l.to_string()).collect();
+                if labels.is_empty() {
+                    // Default mock data
+                    for label in &["A", "B", "C"] {
+                        let mut r = Record::new();
+                        r.bind("label".to_string(), Value::Property(PropertyValue::String(label.to_string())));
+                        self.results.push(r);
+                    }
+                } else {
+                    for label in labels {
+                        let mut r = Record::new();
+                        r.bind("label".to_string(), Value::Property(PropertyValue::String(label)));
+                        self.results.push(r);
+                    }
+                }
+            } else if lower == "test.my.proc" {
+                // Returns 1 row with yield columns mapped to args
+                let yield_cols = if self.yield_vars.is_empty() {
+                    if self.args.len() >= 2 {
+                        vec!["city".to_string(), "country_code".to_string()]
+                    } else {
+                        vec!["out".to_string()]
+                    }
+                } else {
+                    self.yield_vars.clone()
+                };
+                let mut r = Record::new();
+                for (i, col) in yield_cols.iter().enumerate() {
+                    if i < self.args.len() {
+                        let val = eval_expression(&self.args[i], &Record::new(), store)?;
+                        r.bind(col.clone(), val);
+                    } else {
+                        r.bind(col.clone(), Value::Null);
+                    }
+                }
+                self.results.push(r);
             }
+        }
+
+        if self.current < self.results.len() {
+            let record = self.results[self.current].clone();
+            self.current += 1;
+            Ok(Some(record))
         } else {
-            self.yield_vars.clone()
-        };
-
-        let mut record = Record::new();
-        for (i, yield_var) in yield_cols.iter().enumerate() {
-            if i < self.args.len() {
-                let val = eval_expression(&self.args[i], &Record::new(), store)?;
-                record.bind(yield_var.clone(), val);
-            } else {
-                record.bind(yield_var.clone(), Value::Null);
-            }
+            Ok(None)
         }
-        Ok(Some(record))
     }
 
     fn reset(&mut self) {
         self.executed = false;
+        self.results.clear();
+        self.current = 0;
     }
 
     fn describe(&self) -> OperatorDescription {
