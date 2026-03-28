@@ -10461,7 +10461,10 @@ impl WithBarrierOperator {
             projected
         } else {
             // Non-aggregation path: project each row
+            // If there's a WHERE filter, keep original records for evaluation
+            let has_where = self.where_predicate.is_some();
             let mut records = Vec::new();
+            let mut originals: Vec<Record> = Vec::new();
             let batch_size = 1024;
             while let Some(batch) = self.input.next_batch(store, batch_size)? {
                 for record in batch.records {
@@ -10470,21 +10473,59 @@ impl WithBarrierOperator {
                         let value = Self::evaluate_expression(expr, &record, store)?;
                         new_record.bind(alias.clone(), value);
                     }
+                    if has_where {
+                        originals.push(record);
+                    }
                     records.push(new_record);
                 }
             }
-            records
+
+            // Apply WHERE filter against merged records (original + projected)
+            if let Some(ref predicate) = self.where_predicate {
+                let mut filtered = Vec::new();
+                for (i, projected) in records.into_iter().enumerate() {
+                    // Merge: original bindings + projected aliases
+                    let mut merged = if i < originals.len() {
+                        originals[i].clone()
+                    } else {
+                        Record::new()
+                    };
+                    for (k, v) in projected.bindings() {
+                        merged.bind(k.clone(), v.clone());
+                    }
+                    let passes = match Self::evaluate_expression(predicate, &merged, store) {
+                        Ok(Value::Property(PropertyValue::Boolean(b))) => b,
+                        Ok(Value::Null) | Ok(Value::Property(PropertyValue::Null)) => false,
+                        _ => false,
+                    };
+                    if passes {
+                        // Only emit the projected columns
+                        let mut out = Record::new();
+                        for (_, alias) in &self.items {
+                            if let Some(v) = merged.get(alias) {
+                                out.bind(alias.clone(), v.clone());
+                            }
+                        }
+                        filtered.push(out);
+                    }
+                }
+                filtered
+            } else {
+                records
+            }
         };
 
-        // Apply WHERE filter (if present in WITH ... WHERE ...)
-        if let Some(ref predicate) = self.where_predicate {
-            output_records.retain(|record| {
-                match Self::evaluate_expression(predicate, record, store) {
-                    Ok(Value::Property(PropertyValue::Boolean(b))) => b,
-                    Ok(Value::Null) | Ok(Value::Property(PropertyValue::Null)) => false,
-                    _ => false,
-                }
-            });
+        // Apply WHERE filter for aggregation path (already has all needed vars)
+        if self.has_aggregation {
+            if let Some(ref predicate) = self.where_predicate {
+                output_records.retain(|record| {
+                    match Self::evaluate_expression(predicate, record, store) {
+                        Ok(Value::Property(PropertyValue::Boolean(b))) => b,
+                        Ok(Value::Null) | Ok(Value::Property(PropertyValue::Null)) => false,
+                        _ => false,
+                    }
+                });
+            }
         }
 
         // Apply DISTINCT

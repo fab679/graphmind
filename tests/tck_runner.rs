@@ -489,63 +489,11 @@ fn execute_script(
 fn named_graph_setup(name: &str) -> Option<String> {
     match name {
         "binary-tree-1" => Some(
-            "CREATE (a:A {name: 'a'})\n\
-             CREATE (b1:X {name: 'b1'})\n\
-             CREATE (b2:X {name: 'b2'})\n\
-             CREATE (b3:X {name: 'b3'})\n\
-             CREATE (b4:X {name: 'b4'})\n\
-             CREATE (c11 {name: 'c11'})\n\
-             CREATE (c12 {name: 'c12'})\n\
-             CREATE (c21 {name: 'c21'})\n\
-             CREATE (c22 {name: 'c22'})\n\
-             CREATE (c31 {name: 'c31'})\n\
-             CREATE (c32 {name: 'c32'})\n\
-             CREATE (c41 {name: 'c41'})\n\
-             CREATE (c42 {name: 'c42'})\n\
-             CREATE (a)-[:KNOWS]->(b1)\n\
-             CREATE (a)-[:KNOWS]->(b2)\n\
-             CREATE (a)-[:FOLLOWS]->(b3)\n\
-             CREATE (a)-[:FOLLOWS]->(b4)\n\
-             CREATE (b1)-[:KNOWS]->(b2)\n\
-             CREATE (b1)-[:KNOWS]->(b3)\n\
-             CREATE (b1)-[:KNOWS]->(c11)\n\
-             CREATE (b1)-[:KNOWS]->(c12)\n\
-             CREATE (b2)-[:KNOWS]->(c21)\n\
-             CREATE (b2)-[:KNOWS]->(c22)\n\
-             CREATE (b3)-[:KNOWS]->(c31)\n\
-             CREATE (b3)-[:KNOWS]->(c32)\n\
-             CREATE (b4)-[:KNOWS]->(c41)\n\
-             CREATE (b4)-[:KNOWS]->(c42)"
+            "CREATE (a:A {name: 'a'}), (b1:X {name: 'b1'}), (b2:X {name: 'b2'}), (b3:X {name: 'b3'}), (b4:X {name: 'b4'}), (c11 {name: 'c11'}), (c12 {name: 'c12'}), (c21 {name: 'c21'}), (c22 {name: 'c22'}), (c31 {name: 'c31'}), (c32 {name: 'c32'}), (c41 {name: 'c41'}), (c42 {name: 'c42'}), (a)-[:KNOWS]->(b1), (a)-[:KNOWS]->(b2), (a)-[:FOLLOWS]->(b3), (a)-[:FOLLOWS]->(b4), (b1)-[:KNOWS]->(b2), (b1)-[:KNOWS]->(b3), (b1)-[:KNOWS]->(c11), (b1)-[:KNOWS]->(c12), (b2)-[:KNOWS]->(c21), (b2)-[:KNOWS]->(c22), (b3)-[:KNOWS]->(c31), (b3)-[:KNOWS]->(c32), (b4)-[:KNOWS]->(c41), (b4)-[:KNOWS]->(c42)"
                 .to_string(),
         ),
         "binary-tree-2" => Some(
-            "CREATE (a:A {name: 'a'})\n\
-             CREATE (b1:X {name: 'b1'})\n\
-             CREATE (b2:X {name: 'b2'})\n\
-             CREATE (b3:X {name: 'b3'})\n\
-             CREATE (b4:X {name: 'b4'})\n\
-             CREATE (c11:X {name: 'c11'})\n\
-             CREATE (c12:Y {name: 'c12'})\n\
-             CREATE (c21:X {name: 'c21'})\n\
-             CREATE (c22:Y {name: 'c22'})\n\
-             CREATE (c31:X {name: 'c31'})\n\
-             CREATE (c32:Y {name: 'c32'})\n\
-             CREATE (c41:X {name: 'c41'})\n\
-             CREATE (c42:Y {name: 'c42'})\n\
-             CREATE (a)-[:KNOWS]->(b1)\n\
-             CREATE (a)-[:KNOWS]->(b2)\n\
-             CREATE (a)-[:FOLLOWS]->(b3)\n\
-             CREATE (a)-[:FOLLOWS]->(b4)\n\
-             CREATE (b1)-[:KNOWS]->(b2)\n\
-             CREATE (b1)-[:KNOWS]->(b3)\n\
-             CREATE (b1)-[:KNOWS]->(c11)\n\
-             CREATE (b1)-[:KNOWS]->(c12)\n\
-             CREATE (b2)-[:KNOWS]->(c21)\n\
-             CREATE (b2)-[:KNOWS]->(c22)\n\
-             CREATE (b3)-[:KNOWS]->(c31)\n\
-             CREATE (b3)-[:KNOWS]->(c32)\n\
-             CREATE (b4)-[:KNOWS]->(c41)\n\
-             CREATE (b4)-[:KNOWS]->(c42)"
+            "CREATE (a:A {name: 'a'}), (b1:X {name: 'b1'}), (b2:X {name: 'b2'}), (b3:X {name: 'b3'}), (b4:X {name: 'b4'}), (c11:X {name: 'c11'}), (c12:Y {name: 'c12'}), (c21:X {name: 'c21'}), (c22:Y {name: 'c22'}), (c31:X {name: 'c31'}), (c32:Y {name: 'c32'}), (c41:X {name: 'c41'}), (c42:Y {name: 'c42'}), (a)-[:KNOWS]->(b1), (a)-[:KNOWS]->(b2), (a)-[:FOLLOWS]->(b3), (a)-[:FOLLOWS]->(b4), (b1)-[:KNOWS]->(b2), (b1)-[:KNOWS]->(b3), (b1)-[:KNOWS]->(c11), (b1)-[:KNOWS]->(c12), (b2)-[:KNOWS]->(c21), (b2)-[:KNOWS]->(c22), (b3)-[:KNOWS]->(c31), (b3)-[:KNOWS]->(c32), (b4)-[:KNOWS]->(c41), (b4)-[:KNOWS]->(c42)"
                 .to_string(),
         ),
         _ => None,
