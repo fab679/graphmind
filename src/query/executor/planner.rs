@@ -3577,9 +3577,39 @@ impl QueryPlanner {
             Expression::Unary { expr: e, .. } => {
                 Self::collect_expression_variables(e, vars);
             }
-            Expression::Function { args, .. } => {
-                for arg in args {
-                    Self::collect_expression_variables(arg, vars);
+            Expression::Function { name, args, .. } => {
+                if name.eq_ignore_ascii_case("$patternPredicate") {
+                    // Extract variable names from the string literal arguments
+                    // arg[0] = source var name, arg[1] = pattern text with target var
+                    if let Some(Expression::Literal(PropertyValue::String(src))) = args.first() {
+                        vars.insert(src.clone());
+                    }
+                    if let Some(Expression::Literal(PropertyValue::String(pattern))) = args.get(1) {
+                        // Extract variable names from parenthesized nodes in pattern text
+                        let chars: Vec<char> = pattern.chars().collect();
+                        let mut i = 0;
+                        while i < chars.len() {
+                            if chars[i] == '(' {
+                                let start = i + 1;
+                                let mut j = start;
+                                while j < chars.len() && chars[j] != ')' && chars[j] != ':' && chars[j] != '{' {
+                                    j += 1;
+                                }
+                                let var = pattern[start..j].trim().to_string();
+                                if !var.is_empty() {
+                                    vars.insert(var);
+                                }
+                                while j < chars.len() && chars[j] != ')' { j += 1; }
+                                i = j + 1;
+                            } else {
+                                i += 1;
+                            }
+                        }
+                    }
+                } else {
+                    for arg in args {
+                        Self::collect_expression_variables(arg, vars);
+                    }
                 }
             }
             _ => {}

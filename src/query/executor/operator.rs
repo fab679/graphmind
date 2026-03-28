@@ -1275,8 +1275,8 @@ fn eval_pattern_predicate_from_args(
         record.get(tv).and_then(|v| v.node_id())
     });
 
-    // Check edges
-    let check_edges = |edges: &Vec<&crate::graph::edge::Edge>| -> bool {
+    // Check edges with direction-aware target matching
+    let check_edges_directed = |edges: &Vec<&crate::graph::edge::Edge>, check_target: bool| -> bool {
         for edge in edges {
             let type_match = edge_types.is_empty()
                 || edge_types.iter().any(|t| t == edge.edge_type.as_str());
@@ -1284,10 +1284,9 @@ fn eval_pattern_predicate_from_args(
                 continue;
             }
             if let Some(tid) = target_id {
-                // Two-node pattern: check specific target
-                if edge.target == tid || edge.source == tid {
-                    return true;
-                }
+                // Two-node pattern: for outgoing, target must match; for incoming, source must match
+                let matches = if check_target { edge.target == tid } else { edge.source == tid };
+                if matches { return true; }
             } else {
                 return true;
             }
@@ -1344,13 +1343,13 @@ fn eval_pattern_predicate_from_args(
     let mut found = false;
     if is_outgoing || (!is_outgoing && !is_incoming) {
         let outgoing = store.get_outgoing_edges(source_id);
-        if check_edges(&outgoing) {
+        if check_edges_directed(&outgoing, true) {
             found = true;
         }
     }
     if !found && (is_incoming || (!is_outgoing && !is_incoming)) {
         let incoming = store.get_incoming_edges(source_id);
-        if check_edges(&incoming) {
+        if check_edges_directed(&incoming, false) {
             found = true;
         }
     }
