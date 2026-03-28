@@ -1521,16 +1521,31 @@ impl QueryPlanner {
                     }).filter(|s| !s.is_empty()).collect())
                     .unwrap_or_default();
 
-                let refs_with_var = |expr: &Expression| -> bool {
+                fn expr_refs_any(expr: &Expression, vars: &HashSet<String>) -> bool {
                     match expr {
-                        Expression::Variable(v) => with_vars.contains(v),
+                        Expression::Variable(v) => vars.contains(v),
+                        Expression::Binary { left, right, .. } => {
+                            expr_refs_any(left, vars) || expr_refs_any(right, vars)
+                        }
+                        Expression::Unary { expr, .. } => expr_refs_any(expr, vars),
+                        Expression::Function { args, .. } => args.iter().any(|a| expr_refs_any(a, vars)),
+                        Expression::ListComprehension { list_expr, .. } => expr_refs_any(list_expr, vars),
                         _ => false,
                     }
+                }
+                let refs_with_var = |expr: &Expression| -> bool {
+                    expr_refs_any(expr, &with_vars)
                 };
 
-                let mut post_with_unwinds = Vec::new();
-                for unwind in &query.additional_unwinds {
-                    if refs_with_var(&unwind.expression) {
+                let mut post_with_unwinds: Vec<crate::query::ast::UnwindClause> = Vec::new();
+                let mut post_vars = with_vars.clone(); // vars available after WITH
+                // Process all UNWINDs: if expression references a post-WITH var, put after WITH
+                let all_unwinds: Vec<_> = query.additional_unwinds.iter()
+                    .chain(query.unwind_clause.iter())
+                    .cloned().collect();
+                for unwind in &all_unwinds {
+                    if expr_refs_any(&unwind.expression, &post_vars) {
+                        post_vars.insert(unwind.variable.clone()); // this var is now post-WITH too
                         post_with_unwinds.push(unwind.clone());
                     } else {
                         operator = Box::new(UnwindOperator::new(
@@ -1540,17 +1555,7 @@ impl QueryPlanner {
                         ));
                     }
                 }
-                if let Some(unwind) = &query.unwind_clause {
-                    if refs_with_var(&unwind.expression) {
-                        post_with_unwinds.push(unwind.clone());
-                    } else {
-                        operator = Box::new(UnwindOperator::new(
-                            operator,
-                            unwind.expression.clone(),
-                            unwind.variable.clone(),
-                        ));
-                    }
-                }
+                // (all UNWINDs processed above via all_unwinds iterator)
 
                 // Handle extra WITH stages
                 for (with_cl, unwind_opt, _post_matches, _post_where) in &query.extra_with_stages {
