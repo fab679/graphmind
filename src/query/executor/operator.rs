@@ -9167,17 +9167,22 @@ impl PhysicalOperator for SetPropertyOperator {
         if let Some(record) = self.input.next_mut(store, tenant_id)? {
             for (var, prop, expr) in &self.items {
                 // Evaluate the expression
-                let val = match expr {
-                    Expression::Literal(lit) => lit.clone(),
-                    Expression::Property { variable, property } => {
-                        if let Some(v) = record.get(variable) {
-                            v.resolve_property(property, store)
-                        } else {
-                            PropertyValue::Null
-                        }
-                    }
+                let store_ref: &GraphStore = store;
+                let evaluated = eval_expression(expr, &record, store_ref)?;
+                let val = match evaluated {
+                    Value::Property(pv) => pv,
+                    Value::Null => PropertyValue::Null,
                     _ => PropertyValue::Null,
                 };
+
+                // Reject list-of-maps as property value
+                if let PropertyValue::Array(arr) = &val {
+                    if arr.iter().any(|v| matches!(v, PropertyValue::Map(_))) {
+                        return Err(ExecutionError::TypeError(
+                            "Property values can not contain nested maps".to_string(),
+                        ));
+                    }
+                }
 
                 if let Some(node_val) = record.get(var) {
                     match node_val {
