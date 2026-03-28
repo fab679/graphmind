@@ -2514,37 +2514,46 @@ fn parse_unary_add_or_subtract_expression(
     // The grammar: (("+" | "-") ~ non_arithmetic_operator_expression) | non_arithmetic_operator_expression
     // In both cases, there's exactly 1 child: non_arithmetic_operator_expression
     // The "+" / "-" tokens don't produce pairs. We detect unary ops via the text.
-    let expr = parse_non_arithmetic_operator_expression(children.into_iter().next().unwrap())?;
+    let child = children.into_iter().next().unwrap();
 
     if text.starts_with('-') {
-        // Optimize: directly negate literals
-        match &expr {
-            Expression::Literal(PropertyValue::Integer(i)) => {
-                // Check for i64::MIN case: the positive form overflowed to 0
-                if *i == 0 {
-                    let digits = text.trim_start_matches('-').trim();
-                    if digits == "9223372036854775808"
-                        || digits.eq_ignore_ascii_case("0x8000000000000000")
-                        || digits.eq_ignore_ascii_case("0o1000000000000000000000")
-                    {
+        // Try parsing normally first; if it fails, check for i64::MIN magnitude
+        match parse_non_arithmetic_operator_expression(child) {
+            Ok(expr) => {
+                match &expr {
+                    Expression::Literal(PropertyValue::Integer(i)) => {
+                        if let Some(neg) = i.checked_neg() {
+                            return Ok(Expression::Literal(PropertyValue::Integer(neg)));
+                        }
                         return Ok(Expression::Literal(PropertyValue::Integer(i64::MIN)));
                     }
+                    Expression::Literal(PropertyValue::Float(f)) => {
+                        return Ok(Expression::Literal(PropertyValue::Float(-f)));
+                    }
+                    _ => {}
                 }
-                if let Some(neg) = i.checked_neg() {
-                    return Ok(Expression::Literal(PropertyValue::Integer(neg)));
+                return Ok(Expression::Unary {
+                    op: UnaryOp::Minus,
+                    expr: Box::new(expr),
+                });
+            }
+            Err(_) => {
+                // Check for i64::MIN magnitude (e.g. -9223372036854775808)
+                let digits = text.trim_start_matches('-').trim();
+                if digits == "9223372036854775808"
+                    || digits.eq_ignore_ascii_case("0x8000000000000000")
+                    || digits.eq_ignore_ascii_case("0o1000000000000000000000")
+                {
+                    return Ok(Expression::Literal(PropertyValue::Integer(i64::MIN)));
                 }
-                return Ok(Expression::Literal(PropertyValue::Integer(i64::MIN)));
+                return Err(ParseError::SemanticError(
+                    "Integer overflow".to_string(),
+                ));
             }
-            Expression::Literal(PropertyValue::Float(f)) => {
-                return Ok(Expression::Literal(PropertyValue::Float(-f)));
-            }
-            _ => {}
         }
-        return Ok(Expression::Unary {
-            op: UnaryOp::Minus,
-            expr: Box::new(expr),
-        });
     }
+
+    let expr = parse_non_arithmetic_operator_expression(child)?;
     // Leading + is a no-op, or no unary op at all
     Ok(expr)
 }
@@ -2737,7 +2746,7 @@ fn parse_literal(pair: pest::iterators::Pair<Rule>) -> ParseResult<Expression> {
             }
             Rule::string_literal => {
                 return Ok(Expression::Literal(PropertyValue::String(
-                    parse_string_literal(inner),
+                    parse_string_literal(inner)?,
                 )));
             }
             Rule::list_literal => {
@@ -2767,16 +2776,6 @@ fn parse_number_literal(pair: pest::iterators::Pair<Rule>) -> ParseResult<Expres
             Rule::integer_literal => match parse_integer_literal_checked(inner.as_str()) {
                 Ok(val) => return Ok(Expression::Literal(PropertyValue::Integer(val))),
                 Err(e) => {
-                    // Check if it's exactly i64::MIN magnitude — allow it through
-                    // for unary minus to handle (RETURN -9223372036854775808).
-                    // Bare usage without minus will be caught by the planner.
-                    let s = inner.as_str().trim();
-                    if s == "9223372036854775808"
-                        || s.eq_ignore_ascii_case("0x8000000000000000")
-                        || s.eq_ignore_ascii_case("0o1000000000000000000000")
-                    {
-                        return Ok(Expression::Literal(PropertyValue::Integer(i64::MIN)));
-                    }
                     return Err(ParseError::SemanticError(e));
                 }
             },
@@ -2786,18 +2785,18 @@ fn parse_number_literal(pair: pest::iterators::Pair<Rule>) -> ParseResult<Expres
     Ok(Expression::Literal(PropertyValue::Integer(0)))
 }
 
-fn parse_string_literal(pair: pest::iterators::Pair<Rule>) -> String {
+fn parse_string_literal(pair: pest::iterators::Pair<Rule>) -> ParseResult<String> {
     let s = pair.as_str();
     // Remove outer quotes
     if s.len() < 2 {
-        return String::new();
+        return Ok(String::new());
     }
     let inner = &s[1..s.len() - 1];
     // Process escape sequences
     unescape_string(inner)
 }
 
-fn unescape_string(s: &str) -> String {
+fn unescape_string(s: &str) -> ParseResult<String> {
     let mut result = String::with_capacity(s.len());
     let mut chars = s.chars();
     while let Some(c) = chars.next() {
@@ -2813,18 +2812,34 @@ fn unescape_string(s: &str) -> String {
                 Some('f') => result.push('\u{000C}'),
                 Some('u') => {
                     let hex: String = chars.by_ref().take(4).collect();
-                    if let Ok(code) = u32::from_str_radix(&hex, 16) {
-                        if let Some(ch) = char::from_u32(code) {
-                            result.push(ch);
-                        }
+                    if hex.len() < 4 || u32::from_str_radix(&hex, 16).is_err() {
+                        return Err(ParseError::SemanticError(format!(
+                            "Invalid unicode escape: \\u{}", hex
+                        )));
+                    }
+                    let code = u32::from_str_radix(&hex, 16).unwrap();
+                    if let Some(ch) = char::from_u32(code) {
+                        result.push(ch);
+                    } else {
+                        return Err(ParseError::SemanticError(format!(
+                            "Invalid unicode code point: \\u{}", hex
+                        )));
                     }
                 }
                 Some('U') => {
                     let hex: String = chars.by_ref().take(8).collect();
-                    if let Ok(code) = u32::from_str_radix(&hex, 16) {
-                        if let Some(ch) = char::from_u32(code) {
-                            result.push(ch);
-                        }
+                    if hex.len() < 8 || u32::from_str_radix(&hex, 16).is_err() {
+                        return Err(ParseError::SemanticError(format!(
+                            "Invalid unicode escape: \\U{}", hex
+                        )));
+                    }
+                    let code = u32::from_str_radix(&hex, 16).unwrap();
+                    if let Some(ch) = char::from_u32(code) {
+                        result.push(ch);
+                    } else {
+                        return Err(ParseError::SemanticError(format!(
+                            "Invalid unicode code point: \\U{}", hex
+                        )));
                     }
                 }
                 Some(other) => {
@@ -2837,7 +2852,7 @@ fn unescape_string(s: &str) -> String {
             result.push(c);
         }
     }
-    result
+    Ok(result)
 }
 
 fn parse_list_literal(pair: pest::iterators::Pair<Rule>) -> ParseResult<Expression> {

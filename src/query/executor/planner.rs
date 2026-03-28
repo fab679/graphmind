@@ -1019,6 +1019,208 @@ impl QueryPlanner {
             }
         }
 
+        // Validate: rand() inside aggregation (NonConstantExpression)
+        fn contains_rand_in_agg(expr: &Expression) -> bool {
+            match expr {
+                Expression::Function { name, args, .. } => {
+                    let is_agg = matches!(name.to_lowercase().as_str(), "count" | "sum" | "avg" | "min" | "max" | "collect" | "percentiledisc" | "percentilecont" | "stdev" | "stdevp");
+                    if is_agg {
+                        // Check if any argument contains rand()
+                        fn has_rand(e: &Expression) -> bool {
+                            match e {
+                                Expression::Function { name, args, .. } => {
+                                    if name.to_lowercase() == "rand" { return true; }
+                                    args.iter().any(has_rand)
+                                }
+                                Expression::Binary { left, right, .. } => has_rand(left) || has_rand(right),
+                                Expression::Unary { expr, .. } => has_rand(expr),
+                                _ => false,
+                            }
+                        }
+                        return args.iter().any(has_rand);
+                    }
+                    args.iter().any(contains_rand_in_agg)
+                }
+                Expression::Binary { left, right, .. } => contains_rand_in_agg(left) || contains_rand_in_agg(right),
+                Expression::Unary { expr, .. } => contains_rand_in_agg(expr),
+                _ => false,
+            }
+        }
+        if let Some(rc) = &query.return_clause {
+            for item in &rc.items {
+                if contains_rand_in_agg(&item.expression) {
+                    return Err(ExecutionError::PlanningError(
+                        "Non-constant expression inside aggregation".to_string(),
+                    ));
+                }
+            }
+        }
+
+        // Helper: extract expression key for grouping validation
+        fn expr_to_key(expr: &Expression) -> String {
+            match expr {
+                Expression::Variable(v) => v.clone(),
+                Expression::Property { variable, property } => format!("{}.{}", variable, property),
+                _ => format!("{:?}", expr),
+            }
+        }
+        // Helper: check non-aggregated parts of an expression are simple grouping keys
+        // Only Variable and Property are considered "simple" - complex expressions like a+b are not
+        fn check_non_agg_parts_strict(expr: &Expression, keys: &HashSet<String>) -> Result<(), String> {
+            match expr {
+                Expression::Function { name, args, .. } => {
+                    let is_agg = matches!(name.to_lowercase().as_str(), "count" | "sum" | "avg" | "min" | "max" | "collect" | "percentiledisc" | "percentilecont" | "stdev" | "stdevp");
+                    if is_agg { return Ok(()); }
+                    for arg in args { check_non_agg_parts_strict(arg, keys)?; }
+                    Ok(())
+                }
+                Expression::Binary { left, right, .. } => {
+                    // Always recurse into both sides
+                    check_non_agg_parts_strict(left, keys)?;
+                    check_non_agg_parts_strict(right, keys)?;
+                    Ok(())
+                }
+                Expression::Variable(v) => {
+                    if keys.contains(v) { Ok(()) }
+                    else { Err(v.clone()) }
+                }
+                Expression::Property { variable, property } => {
+                    let key = format!("{}.{}", variable, property);
+                    if keys.contains(&key) { Ok(()) }
+                    else { Err(key) }
+                }
+                Expression::Literal(_) | Expression::Parameter(_) => Ok(()),
+                Expression::Unary { expr, .. } => check_non_agg_parts_strict(expr, keys),
+                _ => Ok(()),
+            }
+        }
+
+        // Validate: ambiguous aggregation expressions in RETURN/WITH
+        fn validate_aggregation_mixing(items: &[crate::query::ast::ReturnItem]) -> ExecutionResult<()> {
+            let has_agg = items.iter().any(|i| contains_aggregation(&i.expression));
+            if !has_agg { return Ok(()); }
+            // Collect grouping keys: only simple Variable and Property references
+            let grouping_keys: HashSet<String> = items.iter()
+                .filter(|i| !contains_aggregation(&i.expression))
+                .filter_map(|i| match &i.expression {
+                    Expression::Variable(v) => Some(v.clone()),
+                    Expression::Property { variable, property } => Some(format!("{}.{}", variable, property)),
+                    _ => None,
+                })
+                .collect();
+            for item in items {
+                if contains_aggregation(&item.expression) {
+                    if let Err(bad) = check_non_agg_parts_strict(&item.expression, &grouping_keys) {
+                        return Err(ExecutionError::PlanningError(format!(
+                            "Ambiguous aggregation expression: '{}' is not a grouping key", bad
+                        )));
+                    }
+                }
+            }
+            Ok(())
+        }
+        if let Some(rc) = &query.return_clause {
+            validate_aggregation_mixing(&rc.items)?;
+        }
+        if let Some(wc) = &query.with_clause {
+            validate_aggregation_mixing(&wc.items)?;
+        }
+
+        // Validate: aggregation in ORDER BY after RETURN
+        if let Some(rc) = &query.return_clause {
+            if let Some(ref order_by) = &query.order_by {
+                let return_has_agg = rc.items.iter().any(|i| contains_aggregation(&i.expression));
+                for ob_item in &order_by.items {
+                    if contains_aggregation(&ob_item.expression) {
+                        if !return_has_agg {
+                            // Aggregation in ORDER BY when RETURN has no aggregation
+                            return Err(ExecutionError::PlanningError(
+                                "Aggregation in ORDER BY is not allowed when RETURN has no aggregation".to_string(),
+                            ));
+                        }
+                        // Collect grouping keys from RETURN (both alias and original expression)
+                        let mut return_keys: HashSet<String> = HashSet::new();
+                        for i in &rc.items {
+                            if !contains_aggregation(&i.expression) {
+                                // Add original expression key
+                                match &i.expression {
+                                    Expression::Variable(v) => { return_keys.insert(v.clone()); }
+                                    Expression::Property { variable, property } => { return_keys.insert(format!("{}.{}", variable, property)); }
+                                    _ => {}
+                                }
+                                // Add alias too
+                                if let Some(a) = &i.alias { return_keys.insert(a.clone()); }
+                            }
+                        }
+                        if let Err(bad) = check_non_agg_parts_strict(&ob_item.expression, &return_keys) {
+                            return Err(ExecutionError::PlanningError(format!(
+                                "Ambiguous aggregation expression in ORDER BY: '{}' is not a returned key", bad
+                            )));
+                        }
+                    }
+                }
+            }
+        }
+
+        // Validate: ORDER BY after RETURN DISTINCT references non-projected vars
+        if let Some(rc) = &query.return_clause {
+            if rc.distinct {
+                if let Some(ref order_by) = &query.order_by {
+                    let mut projected: HashSet<String> = HashSet::new();
+                    for i in &rc.items {
+                        if let Some(a) = &i.alias { projected.insert(a.clone()); }
+                        projected.insert(expr_to_key(&i.expression));
+                    }
+                    for ob_item in &order_by.items {
+                        let key = expr_to_key(&ob_item.expression);
+                        if !projected.contains(&key) {
+                            return Err(ExecutionError::PlanningError(
+                                "In a WITH/RETURN with DISTINCT, ORDER BY expressions must be output columns".to_string(),
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+
+        // Validate: ORDER BY after WITH with aggregation
+        if let Some(wc) = &query.with_clause {
+            if let Some(ref order_by) = wc.order_by {
+                let with_has_agg = wc.items.iter().any(|i| contains_aggregation(&i.expression));
+                for ob_item in &order_by.items {
+                    if contains_aggregation(&ob_item.expression) {
+                        if !with_has_agg {
+                            return Err(ExecutionError::PlanningError(
+                                "Aggregation in ORDER BY is not allowed when WITH has no aggregation".to_string(),
+                            ));
+                        }
+                        let mut projected_keys: HashSet<String> = HashSet::new();
+                        for i in &wc.items {
+                            if !contains_aggregation(&i.expression) {
+                                match &i.expression {
+                                    Expression::Variable(v) => { projected_keys.insert(v.clone()); }
+                                    Expression::Property { variable, property } => { projected_keys.insert(format!("{}.{}", variable, property)); }
+                                    _ => {}
+                                }
+                                if let Some(a) = &i.alias { projected_keys.insert(a.clone()); }
+                            }
+                        }
+                        if let Err(bad) = check_non_agg_parts_strict(&ob_item.expression, &projected_keys) {
+                            return Err(ExecutionError::PlanningError(format!(
+                                "Ambiguous aggregation expression in ORDER BY: '{}' is not projected", bad
+                            )));
+                        }
+                    }
+                }
+            }
+        }
+
+        // Note: CREATE variable validation is handled at runtime, not here,
+        // because CREATE patterns define their own variables simultaneously.
+
+        // Note: MERGE rebinding against prior MERGE clauses is handled contextually
+        // in the planner, not as a blanket validation here.
+
         // Handle SHOW VECTOR INDEXES
         if query.show_vector_indexes {
             return Ok(ExecutionPlan {
