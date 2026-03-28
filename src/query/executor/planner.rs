@@ -646,6 +646,134 @@ impl QueryPlanner {
             }
         }
 
+        // Validate: nested aggregation (count(count(*)))
+        fn contains_nested_agg(expr: &Expression, depth: usize) -> bool {
+            match expr {
+                Expression::Function { name, args, .. } => {
+                    let is_agg = matches!(name.to_lowercase().as_str(), "count" | "sum" | "avg" | "min" | "max" | "collect");
+                    if is_agg && depth > 0 { return true; }
+                    let next_depth = if is_agg { depth + 1 } else { depth };
+                    args.iter().any(|a| contains_nested_agg(a, next_depth))
+                }
+                Expression::Binary { left, right, .. } => {
+                    contains_nested_agg(left, depth) || contains_nested_agg(right, depth)
+                }
+                Expression::Unary { expr, .. } => contains_nested_agg(expr, depth),
+                _ => false,
+            }
+        }
+        if let Some(rc) = &query.return_clause {
+            for item in &rc.items {
+                if contains_nested_agg(&item.expression, 0) {
+                    return Err(ExecutionError::PlanningError(
+                        "Cannot nest aggregate functions".to_string(),
+                    ));
+                }
+            }
+        }
+
+        // Validate: unknown function names in RETURN
+        fn is_known_function(name: &str) -> bool {
+            matches!(name.to_lowercase().as_str(),
+                "toupper" | "tolower" | "trim" | "ltrim" | "rtrim" | "replace" | "substring" |
+                "left" | "right" | "reverse" | "tostring" | "tointeger" | "toint" | "tofloat" |
+                "toboolean" | "abs" | "ceil" | "floor" | "round" | "sqrt" | "sign" | "rand" |
+                "log" | "log10" | "exp" | "e" | "pi" | "sin" | "cos" | "tan" |
+                "asin" | "acos" | "atan" | "atan2" | "degrees" | "radians" | "haversin" |
+                "count" | "sum" | "avg" | "min" | "max" | "collect" |
+                "size" | "length" | "head" | "last" | "tail" | "keys" | "id" | "labels" | "type" |
+                "exists" | "coalesce" | "range" | "nodes" | "relationships" | "rels" |
+                "split" | "timestamp" | "randomuuid" | "properties" | "startnode" | "endnode" |
+                "date" | "localtime" | "time" | "localdatetime" | "datetime" | "duration" |
+                "datetime.fromepoch" | "datetime.fromepochmillis" |
+                "duration.between" | "duration.inseconds" | "duration.inmonths" |
+                "percentiledisc" | "percentilecont" | "stdev" | "stdevp" |
+                "point" | "distance" |
+                "none" | "any" | "all" | "single" |
+                "reduce" | "extract" | "filter" |
+                "$patternpredicate" | "$haslabel"
+            )
+        }
+        fn check_unknown_functions(expr: &Expression) -> Option<String> {
+            match expr {
+                Expression::Function { name, args, .. } => {
+                    if !is_known_function(name) {
+                        return Some(name.clone());
+                    }
+                    for arg in args {
+                        if let Some(n) = check_unknown_functions(arg) { return Some(n); }
+                    }
+                    None
+                }
+                Expression::Binary { left, right, .. } => {
+                    check_unknown_functions(left).or_else(|| check_unknown_functions(right))
+                }
+                Expression::Unary { expr, .. } => check_unknown_functions(expr),
+                _ => None,
+            }
+        }
+        if let Some(rc) = &query.return_clause {
+            for item in &rc.items {
+                if let Some(bad_fn) = check_unknown_functions(&item.expression) {
+                    return Err(ExecutionError::PlanningError(format!(
+                        "Unknown function '{}'", bad_fn
+                    )));
+                }
+            }
+        }
+
+        // Validate: undefined variable in SET value
+        if !query.set_clauses.is_empty() && !query.match_clauses.is_empty() {
+            let mut defined = HashSet::new();
+            for mc in &query.match_clauses {
+                for path in &mc.pattern.paths {
+                    if let Some(v) = &path.start.variable { defined.insert(v.clone()); }
+                    for seg in &path.segments {
+                        if let Some(v) = &seg.node.variable { defined.insert(v.clone()); }
+                        if let Some(v) = &seg.edge.variable { defined.insert(v.clone()); }
+                    }
+                }
+            }
+            for sc in &query.set_clauses {
+                for item in &sc.items {
+                    // Check if the value expression references an undefined variable
+                    if let Expression::Variable(v) = &item.value {
+                        if !defined.contains(v) && !v.starts_with('$') {
+                            return Err(ExecutionError::PlanningError(format!(
+                                "Variable `{}` not defined", v
+                            )));
+                        }
+                    }
+                }
+            }
+        }
+
+        // Validate: undefined variable in MERGE ON CREATE SET / ON MATCH SET
+        if let Some(mc) = &query.merge_clause {
+            let mut merge_vars = HashSet::new();
+            for path in &mc.pattern.paths {
+                if let Some(v) = &path.start.variable { merge_vars.insert(v.clone()); }
+                for seg in &path.segments {
+                    if let Some(v) = &seg.node.variable { merge_vars.insert(v.clone()); }
+                    if let Some(v) = &seg.edge.variable { merge_vars.insert(v.clone()); }
+                }
+            }
+            for item in &mc.on_create_set {
+                if !merge_vars.contains(&item.variable) {
+                    return Err(ExecutionError::PlanningError(format!(
+                        "Variable `{}` not defined", item.variable
+                    )));
+                }
+            }
+            for item in &mc.on_match_set {
+                if !merge_vars.contains(&item.variable) {
+                    return Err(ExecutionError::PlanningError(format!(
+                        "Variable `{}` not defined", item.variable
+                    )));
+                }
+            }
+        }
+
         // Validate MERGE: relationship constraints
         if let Some(mc) = &query.merge_clause {
             for path in &mc.pattern.paths {
