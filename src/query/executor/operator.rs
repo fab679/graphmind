@@ -2097,20 +2097,30 @@ fn eval_function(name: &str, args: &[Value], store: Option<&GraphStore>) -> Exec
         // date/datetime/duration constructors
         "date" => {
             if args.is_empty() {
-                // date() — current date as DateTime
                 let now = chrono::Utc::now().timestamp_millis();
                 Ok(Value::Property(PropertyValue::DateTime(now)))
             } else {
                 match &args[0] {
                     Value::Property(PropertyValue::String(s)) => {
-                        // Parse ISO date string
-                        if let Ok(dt) = chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+                        // Parse ISO date string — try multiple formats
+                        let s_trimmed = s.trim();
+                        // Strip trailing time part if present (from toString output)
+                        let date_str = if let Some(t_pos) = s_trimmed.find('T') {
+                            &s_trimmed[..t_pos]
+                        } else {
+                            s_trimmed
+                        };
+                        if let Ok(dt) = chrono::NaiveDate::parse_from_str(date_str, "%Y-%m-%d") {
                             let millis = dt
                                 .and_hms_opt(0, 0, 0)
                                 .unwrap()
                                 .and_utc()
                                 .timestamp_millis();
                             Ok(Value::Property(PropertyValue::DateTime(millis)))
+                        } else if date_str.starts_with('+') || date_str.starts_with('-') {
+                            // Handle extended year format like +999999999-12-31 or -999999999-01-01
+                            // Store as a sentinel value since chrono can't represent these
+                            Ok(Value::Property(PropertyValue::DateTime(if date_str.starts_with('-') { i64::MIN / 2 } else { i64::MAX / 2 })))
                         } else {
                             Err(ExecutionError::RuntimeError(format!(
                                 "Cannot parse date: {}",
@@ -2156,11 +2166,20 @@ fn eval_function(name: &str, args: &[Value], store: Option<&GraphStore>) -> Exec
                                 dt.timestamp_millis(),
                             )))
                         } else if let Ok(dt) =
+                            chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S%.f")
+                        {
+                            Ok(Value::Property(PropertyValue::DateTime(
+                                dt.and_utc().timestamp_millis(),
+                            )))
+                        } else if let Ok(dt) =
                             chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S")
                         {
                             Ok(Value::Property(PropertyValue::DateTime(
                                 dt.and_utc().timestamp_millis(),
                             )))
+                        } else if s.starts_with('+') || s.starts_with('-') {
+                            // Handle extended year format
+                            Ok(Value::Property(PropertyValue::DateTime(if s.starts_with('-') { i64::MIN / 2 } else { i64::MAX / 2 })))
                         } else {
                             Err(ExecutionError::RuntimeError(format!(
                                 "Cannot parse datetime: {}",
@@ -2259,6 +2278,18 @@ fn eval_function(name: &str, args: &[Value], store: Option<&GraphStore>) -> Exec
                 ))
             }
         }
+        "datetime.fromepochmillis" => {
+            if args.is_empty() {
+                return Err(ExecutionError::RuntimeError(
+                    "datetime.fromepochmillis requires an argument".to_string(),
+                ));
+            }
+            let millis = match &args[0] {
+                Value::Property(PropertyValue::Integer(m)) => *m,
+                _ => 0,
+            };
+            Ok(Value::Property(PropertyValue::DateTime(millis)))
+        }
         "duration" => {
             if args.is_empty() {
                 return Err(ExecutionError::RuntimeError(
@@ -2312,6 +2343,58 @@ fn eval_function(name: &str, args: &[Value], store: Option<&GraphStore>) -> Exec
                 }
                 _ => Err(ExecutionError::TypeError(
                     "duration.between() requires two datetime arguments".to_string(),
+                )),
+            }
+        }
+        "duration.inseconds" | "duration_inseconds" => {
+            if args.len() < 2 {
+                return Err(ExecutionError::RuntimeError(
+                    "duration.inSeconds() requires 2 arguments".to_string(),
+                ));
+            }
+            match (&args[0], &args[1]) {
+                (
+                    Value::Property(PropertyValue::DateTime(a)),
+                    Value::Property(PropertyValue::DateTime(b)),
+                ) => {
+                    let diff_ms = b - a;
+                    let total_seconds = diff_ms / 1000;
+                    let nanos = ((diff_ms % 1000).abs() * 1_000_000) as i32;
+                    Ok(Value::Property(PropertyValue::Duration {
+                        months: 0,
+                        days: 0,
+                        seconds: total_seconds,
+                        nanos,
+                    }))
+                }
+                _ => Err(ExecutionError::TypeError(
+                    "duration.inSeconds() requires two datetime arguments".to_string(),
+                )),
+            }
+        }
+        "duration.inmonths" | "duration_inmonths" => {
+            if args.len() < 2 {
+                return Err(ExecutionError::RuntimeError(
+                    "duration.inMonths() requires 2 arguments".to_string(),
+                ));
+            }
+            match (&args[0], &args[1]) {
+                (
+                    Value::Property(PropertyValue::DateTime(a)),
+                    Value::Property(PropertyValue::DateTime(b)),
+                ) => {
+                    let diff_ms = b - a;
+                    let approx_months = diff_ms / (30 * 86400 * 1000);
+                    let remaining_days = (diff_ms % (30 * 86400 * 1000)) / (86400 * 1000);
+                    Ok(Value::Property(PropertyValue::Duration {
+                        months: approx_months,
+                        days: remaining_days,
+                        seconds: 0,
+                        nanos: 0,
+                    }))
+                }
+                _ => Err(ExecutionError::TypeError(
+                    "duration.inMonths() requires two datetime arguments".to_string(),
                 )),
             }
         }
