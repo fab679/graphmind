@@ -1100,6 +1100,66 @@ impl QueryPlanner {
             }
         }
 
+        // Validate: type() called on node variables, length() on node/relationship
+        // type() is only valid on relationships, length() only on paths/strings
+        {
+            let node_vars: HashSet<String> = query.match_clauses.iter()
+                .flat_map(|mc| mc.pattern.paths.iter())
+                .flat_map(|p| {
+                    let mut vars = Vec::new();
+                    if let Some(v) = &p.start.variable { vars.push(v.clone()); }
+                    for seg in &p.segments {
+                        if let Some(v) = &seg.node.variable { vars.push(v.clone()); }
+                    }
+                    vars
+                })
+                .collect();
+            let edge_vars: HashSet<String> = query.match_clauses.iter()
+                .flat_map(|mc| mc.pattern.paths.iter())
+                .flat_map(|p| p.segments.iter())
+                .filter_map(|seg| seg.edge.variable.clone())
+                .collect();
+            fn check_type_length(expr: &Expression, node_vars: &HashSet<String>, edge_vars: &HashSet<String>) -> ExecutionResult<()> {
+                match expr {
+                    Expression::Function { name, args, .. } => {
+                        let lower = name.to_lowercase();
+                        if lower == "type" {
+                            if let Some(Expression::Variable(v)) = args.first() {
+                                if node_vars.contains(v) {
+                                    return Err(ExecutionError::PlanningError(format!(
+                                        "Type mismatch: expected Relationship but was Node for type({})", v
+                                    )));
+                                }
+                            }
+                        }
+                        if lower == "length" {
+                            if let Some(Expression::Variable(v)) = args.first() {
+                                if node_vars.contains(v) || edge_vars.contains(v) {
+                                    return Err(ExecutionError::PlanningError(format!(
+                                        "Type mismatch: expected Path or String but got Node/Relationship for length({})", v
+                                    )));
+                                }
+                            }
+                        }
+                        for arg in args { check_type_length(arg, node_vars, edge_vars)?; }
+                        Ok(())
+                    }
+                    Expression::Binary { left, right, .. } => {
+                        check_type_length(left, node_vars, edge_vars)?;
+                        check_type_length(right, node_vars, edge_vars)?;
+                        Ok(())
+                    }
+                    Expression::Unary { expr, .. } => check_type_length(expr, node_vars, edge_vars),
+                    _ => Ok(()),
+                }
+            }
+            if let Some(rc) = &query.return_clause {
+                for item in &rc.items {
+                    check_type_length(&item.expression, &node_vars, &edge_vars)?;
+                }
+            }
+        }
+
         // Helper: extract expression key for grouping validation
         fn expr_to_key(expr: &Expression) -> String {
             match expr {
