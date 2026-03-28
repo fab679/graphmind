@@ -5991,6 +5991,9 @@ pub struct LeftOuterJoinOperator {
     right: OperatorBox,
     join_var: String,
     right_only_vars: Vec<String>,
+    /// Optional post-join filter. When set, right matches are filtered through this.
+    /// If ALL right matches fail the filter, a null row is emitted (preserving LEFT OUTER semantics).
+    post_filter: Option<Expression>,
     // Materialized data
     left_records: Vec<Record>,
     right_hash: HashMap<Value, Vec<Record>>,
@@ -5998,6 +6001,7 @@ pub struct LeftOuterJoinOperator {
     current_left_idx: usize,
     current_right_match_idx: usize,
     null_emitted: bool,
+    had_valid_match: bool,
     materialized: bool,
 }
 
@@ -6013,13 +6017,22 @@ impl LeftOuterJoinOperator {
             right,
             join_var,
             right_only_vars,
+            post_filter: None,
             left_records: Vec::new(),
             right_hash: HashMap::new(),
             current_left_idx: 0,
             current_right_match_idx: 0,
             null_emitted: false,
+            had_valid_match: false,
             materialized: false,
         }
+    }
+
+    /// Add a post-join filter for OPTIONAL MATCH WHERE predicates.
+    /// Right matches that fail the filter are skipped; if ALL fail, null row is emitted.
+    pub fn with_filter(mut self, filter: Expression) -> Self {
+        self.post_filter = Some(filter);
+        self
     }
 
     fn materialize(&mut self, store: &GraphStore) -> ExecutionResult<()> {
@@ -6063,8 +6076,8 @@ impl PhysicalOperator for LeftOuterJoinOperator {
 
             if let Some(join_val) = left_record.get(&self.join_var) {
                 if let Some(right_list) = self.right_hash.get(join_val) {
-                    // Has right matches — emit merged records
-                    if self.current_right_match_idx < right_list.len() {
+                    // Has right matches — emit merged records (with optional filter)
+                    while self.current_right_match_idx < right_list.len() {
                         let right_record = &right_list[self.current_right_match_idx];
                         self.current_right_match_idx += 1;
 
@@ -6072,9 +6085,30 @@ impl PhysicalOperator for LeftOuterJoinOperator {
                         for (key, value) in right_record.bindings() {
                             merged.bind(key.clone(), value.clone());
                         }
+
+                        // Apply post-join filter if present
+                        if let Some(ref filter) = self.post_filter {
+                            let passes = match eval_expression(filter, &merged, store)? {
+                                Value::Property(PropertyValue::Boolean(b)) => b,
+                                Value::Null | Value::Property(PropertyValue::Null) => false,
+                                _ => false,
+                            };
+                            if !passes {
+                                continue; // Skip this right match
+                            }
+                        }
+                        self.had_valid_match = true;
                         return Ok(Some(merged));
                     }
-                    // Exhausted right matches for this left record — advance
+                    // Exhausted right matches — if none passed the filter, emit null row
+                    if !self.had_valid_match && !self.null_emitted {
+                        self.null_emitted = true;
+                        let mut merged = left_record.clone();
+                        for var in &self.right_only_vars {
+                            merged.bind(var.clone(), Value::Null);
+                        }
+                        return Ok(Some(merged));
+                    }
                 } else if !self.null_emitted {
                     // No right matches — emit left record with NULLs
                     self.null_emitted = true;
@@ -6098,6 +6132,7 @@ impl PhysicalOperator for LeftOuterJoinOperator {
             self.current_left_idx += 1;
             self.current_right_match_idx = 0;
             self.null_emitted = false;
+            self.had_valid_match = false;
         }
 
         Ok(None)

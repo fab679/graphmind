@@ -1738,12 +1738,37 @@ impl QueryPlanner {
                         if match_clause.optional {
                             let right_only: Vec<String> =
                                 clause_vars.difference(&known_vars).cloned().collect();
-                            Box::new(LeftOuterJoinOperator::new(
+                            // Extract cross-match predicates that reference OPTIONAL MATCH vars
+                            // and attach them as post-join filter (preserving null rows)
+                            let mut join_filter: Option<Expression> = None;
+                            cross_match_predicates.retain(|pred| {
+                                let mut pred_vars = HashSet::new();
+                                Self::collect_expression_variables(pred, &mut pred_vars);
+                                let refs_optional = pred_vars.iter().any(|v| clause_vars.contains(v) && !known_vars.contains(v));
+                                if refs_optional {
+                                    join_filter = Some(match join_filter.take() {
+                                        Some(existing_f) => Expression::Binary {
+                                            left: Box::new(existing_f),
+                                            op: BinaryOp::And,
+                                            right: Box::new(pred.clone()),
+                                        },
+                                        None => pred.clone(),
+                                    });
+                                    false
+                                } else {
+                                    true
+                                }
+                            });
+                            let mut join_op = LeftOuterJoinOperator::new(
                                 existing,
                                 match_op,
                                 shared[0].clone(),
                                 right_only,
-                            )) as OperatorBox
+                            );
+                            if let Some(filter) = join_filter {
+                                join_op = join_op.with_filter(filter);
+                            }
+                            Box::new(join_op) as OperatorBox
                         } else {
                             Box::new(JoinOperator::new(existing, match_op, shared[0].clone()))
                                 as OperatorBox
@@ -2114,9 +2139,10 @@ impl QueryPlanner {
 
         // Add WHERE clause if present.
         // When a WITH clause exists, WHERE predicates were already decomposed and
-        // pushed into per-MATCH/cross-MATCH filters above. Applying them again here
-        // would fail because the WithBarrier projects away referenced variables.
-        if query.with_clause.is_none() {
+        // pushed into per-MATCH/cross-MATCH filters above.
+        // When MATCH clauses exist (pre_with_clauses), predicates were also decomposed
+        // into per-match and cross-match filters — don't apply again (breaks OPTIONAL MATCH null rows).
+        if query.with_clause.is_none() && pre_with_clauses.is_empty() {
             if let Some(where_clause) = &query.where_clause {
                 operator = Box::new(FilterOperator::new(
                     operator,
