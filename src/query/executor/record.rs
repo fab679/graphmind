@@ -107,6 +107,9 @@ impl PartialEq for Value {
             | (Value::EdgeRef(id2, ..), Value::Edge(id1, _)) => id1 == id2,
             // Property and Null
             (Value::Property(p1), Value::Property(p2)) => p1 == p2,
+            // Null equivalence: Value::Null == Value::Property(PropertyValue::Null)
+            (Value::Null, Value::Property(crate::graph::PropertyValue::Null))
+            | (Value::Property(crate::graph::PropertyValue::Null), Value::Null) => true,
             // Path
             (
                 Value::Path {
@@ -139,8 +142,13 @@ impl Hash for Value {
                 id.hash(state);
             }
             Value::Property(p) => {
-                2u8.hash(state);
-                p.hash(state);
+                if matches!(p, crate::graph::PropertyValue::Null) {
+                    // Hash same as Value::Null for consistency
+                    4u8.hash(state);
+                } else {
+                    2u8.hash(state);
+                    p.hash(state);
+                }
             }
             Value::Path { nodes, edges } => {
                 3u8.hash(state);

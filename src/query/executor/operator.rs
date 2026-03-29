@@ -528,33 +528,22 @@ fn eval_binary_op(op: &BinaryOp, left: Value, right: Value) -> ExecutionResult<V
                 PropertyValue::Boolean(l.starts_with(r.as_str()))
             }
             (PropertyValue::Null, _) | (_, PropertyValue::Null) => PropertyValue::Null,
-            _ => {
-                return Err(ExecutionError::TypeError(
-                    "STARTS WITH requires strings".to_string(),
-                ))
-            }
+            // Non-string types return null per Cypher spec
+            _ => PropertyValue::Null,
         },
         BinaryOp::EndsWith => match (&left_prop, &right_prop) {
             (PropertyValue::String(l), PropertyValue::String(r)) => {
                 PropertyValue::Boolean(l.ends_with(r.as_str()))
             }
             (PropertyValue::Null, _) | (_, PropertyValue::Null) => PropertyValue::Null,
-            _ => {
-                return Err(ExecutionError::TypeError(
-                    "ENDS WITH requires strings".to_string(),
-                ))
-            }
+            _ => PropertyValue::Null,
         },
         BinaryOp::Contains => match (&left_prop, &right_prop) {
             (PropertyValue::String(l), PropertyValue::String(r)) => {
                 PropertyValue::Boolean(l.contains(r.as_str()))
             }
             (PropertyValue::Null, _) | (_, PropertyValue::Null) => PropertyValue::Null,
-            _ => {
-                return Err(ExecutionError::TypeError(
-                    "CONTAINS requires strings".to_string(),
-                ))
-            }
+            _ => PropertyValue::Null,
         },
         BinaryOp::In => match &right_prop {
             PropertyValue::Array(arr) => {
@@ -712,9 +701,19 @@ fn eval_expression(
             .cloned()
             .ok_or_else(|| ExecutionError::VariableNotFound(var.clone())),
         Expression::Property { variable, property } => {
-            let val = record
-                .get(variable)
-                .ok_or_else(|| ExecutionError::VariableNotFound(variable.clone()))?;
+            let val = if let Some(v) = record.get(variable) {
+                v.clone()
+            } else if variable.contains('.') {
+                // Handle nested property access: "nestedMap.name" → resolve "nestedMap" then ".name"
+                let parts: Vec<&str> = variable.splitn(2, '.').collect();
+                let base = record
+                    .get(parts[0])
+                    .ok_or_else(|| ExecutionError::VariableNotFound(parts[0].to_string()))?;
+                let intermediate = base.resolve_property(parts[1], store);
+                Value::Property(intermediate)
+            } else {
+                return Err(ExecutionError::VariableNotFound(variable.clone()));
+            };
             Ok(Value::Property(val.resolve_property(property, store)))
         }
         Expression::Literal(lit) => Ok(Value::Property(lit.clone())),
@@ -727,8 +726,23 @@ fn eval_expression(
             let val = eval_expression(e, record, store)?;
             eval_unary_op(op, val)
         }
-        Expression::Function { name, args, .. } if name.eq_ignore_ascii_case("$patternPredicate") => {
+        Expression::Function { name, args, .. }
+            if name.eq_ignore_ascii_case("$patternPredicate") =>
+        {
             eval_pattern_predicate_from_args(args, record, store)
+        }
+        Expression::Function { name, args, .. } if name == "$propertyAccess" => {
+            // Dynamic property access: (expr).prop
+            if args.len() == 2 {
+                let base_val = eval_expression(&args[0], record, store)?;
+                if let Expression::Literal(PropertyValue::String(prop_name)) = &args[1] {
+                    Ok(Value::Property(base_val.resolve_property(prop_name, store)))
+                } else {
+                    Ok(Value::Property(PropertyValue::Null))
+                }
+            } else {
+                Ok(Value::Property(PropertyValue::Null))
+            }
         }
         Expression::Function { name, args, .. } => {
             let arg_vals: Vec<Value> = args
@@ -920,20 +934,52 @@ fn eval_exists_subquery(
                 for segment in &path.segments {
                     let edge_types: Vec<&str> =
                         segment.edge.types.iter().map(|t| t.as_str()).collect();
-                    let is_outgoing = !matches!(segment.edge.direction, crate::query::ast::Direction::Incoming);
-                    let is_incoming = !matches!(segment.edge.direction, crate::query::ast::Direction::Outgoing);
+                    let is_outgoing = !matches!(
+                        segment.edge.direction,
+                        crate::query::ast::Direction::Incoming
+                    );
+                    let is_incoming = !matches!(
+                        segment.edge.direction,
+                        crate::query::ast::Direction::Outgoing
+                    );
 
-                    let mut candidate_edges: Vec<(crate::graph::types::EdgeId, NodeId, NodeId, crate::graph::types::EdgeType, NodeId)> = Vec::new();
+                    let mut candidate_edges: Vec<(
+                        crate::graph::types::EdgeId,
+                        NodeId,
+                        NodeId,
+                        crate::graph::types::EdgeType,
+                        NodeId,
+                    )> = Vec::new();
                     if is_outgoing {
                         for edge in store.get_outgoing_edges(*node_id) {
-                            if !edge_types.is_empty() && !edge_types.contains(&edge.edge_type.as_str()) { continue; }
-                            candidate_edges.push((edge.id, edge.source, edge.target, edge.edge_type.clone(), edge.target));
+                            if !edge_types.is_empty()
+                                && !edge_types.contains(&edge.edge_type.as_str())
+                            {
+                                continue;
+                            }
+                            candidate_edges.push((
+                                edge.id,
+                                edge.source,
+                                edge.target,
+                                edge.edge_type.clone(),
+                                edge.target,
+                            ));
                         }
                     }
                     if is_incoming {
                         for edge in store.get_incoming_edges(*node_id) {
-                            if !edge_types.is_empty() && !edge_types.contains(&edge.edge_type.as_str()) { continue; }
-                            candidate_edges.push((edge.id, edge.source, edge.target, edge.edge_type.clone(), edge.source));
+                            if !edge_types.is_empty()
+                                && !edge_types.contains(&edge.edge_type.as_str())
+                            {
+                                continue;
+                            }
+                            candidate_edges.push((
+                                edge.id,
+                                edge.source,
+                                edge.target,
+                                edge.edge_type.clone(),
+                                edge.source,
+                            ));
                         }
                     }
 
@@ -941,16 +987,30 @@ fn eval_exists_subquery(
                         // Check target labels
                         if !segment.node.labels.is_empty() {
                             if let Some(target) = store.get_node(*target_id) {
-                                let target_matches = segment.node.labels.iter().all(|l| target.labels.contains(l));
-                                if !target_matches { continue; }
-                            } else { continue; }
+                                let target_matches = segment
+                                    .node
+                                    .labels
+                                    .iter()
+                                    .all(|l| target.labels.contains(l));
+                                if !target_matches {
+                                    continue;
+                                }
+                            } else {
+                                continue;
+                            }
                         }
                         // Check target properties
                         if let Some(ref props) = segment.node.properties {
                             if let Some(target) = store.get_node(*target_id) {
-                                let props_match = props.iter().all(|(k, v)| target.properties.get(k) == Some(v));
-                                if !props_match { continue; }
-                            } else { continue; }
+                                let props_match = props
+                                    .iter()
+                                    .all(|(k, v)| target.properties.get(k) == Some(v));
+                                if !props_match {
+                                    continue;
+                                }
+                            } else {
+                                continue;
+                            }
                         }
 
                         // Apply WHERE clause if present
@@ -960,7 +1020,15 @@ fn eval_exists_subquery(
                                 temp_record.bind(var.to_string(), Value::NodeRef(*node_id));
                             }
                             if let Some(ref edge_var) = segment.edge.variable {
-                                temp_record.bind(edge_var.clone(), Value::EdgeRef(*edge_id, *edge_src, *edge_tgt, edge_type.clone()));
+                                temp_record.bind(
+                                    edge_var.clone(),
+                                    Value::EdgeRef(
+                                        *edge_id,
+                                        *edge_src,
+                                        *edge_tgt,
+                                        edge_type.clone(),
+                                    ),
+                                );
                             }
                             if let Some(ref node_var) = segment.node.variable {
                                 temp_record.bind(node_var.clone(), Value::NodeRef(*target_id));
@@ -1204,6 +1272,16 @@ fn eval_pattern_comprehension(
                                 ),
                             );
                         }
+                        // Bind path variable if present (e.g., p in [p = (n)-->() | p])
+                        if let Some(ref path_var) = path.path_variable {
+                            temp_record.bind(
+                                path_var.clone(),
+                                Value::Path {
+                                    nodes: vec![*node_id, target_id],
+                                    edges: vec![edge.id],
+                                },
+                            );
+                        }
                         if let Some(f) = filter {
                             let cond = eval_expression(f, &temp_record, store)?;
                             if !matches!(cond, Value::Property(PropertyValue::Boolean(true))) {
@@ -1213,6 +1291,11 @@ fn eval_pattern_comprehension(
                         let val = eval_expression(projection, &temp_record, store)?;
                         match val {
                             Value::Property(pv) => results.push(pv),
+                            Value::Path { .. } => {
+                                // Path values in pattern comprehensions are returned as-is
+                                // Store as a special array element
+                                results.push(PropertyValue::Null); // Path can't be a PropertyValue directly
+                            }
                             _ => results.push(PropertyValue::Null),
                         }
                     }
@@ -1300,32 +1383,43 @@ fn eval_pattern_predicate_from_args(
                 i += 1;
             }
         }
-        if found.len() >= 2 { Some(found[1].clone()) } else { None }
+        if found.len() >= 2 {
+            Some(found[1].clone())
+        } else {
+            None
+        }
     };
 
     // Resolve target node if specified
-    let target_id = target_var.as_ref().and_then(|tv| {
-        record.get(tv).and_then(|v| v.node_id())
-    });
+    let target_id = target_var
+        .as_ref()
+        .and_then(|tv| record.get(tv).and_then(|v| v.node_id()));
 
     // Check edges with direction-aware target matching
-    let check_edges_directed = |edges: &Vec<&crate::graph::edge::Edge>, check_target: bool| -> bool {
-        for edge in edges {
-            let type_match = edge_types.is_empty()
-                || edge_types.iter().any(|t| t == edge.edge_type.as_str());
-            if !type_match {
-                continue;
+    let check_edges_directed =
+        |edges: &Vec<&crate::graph::edge::Edge>, check_target: bool| -> bool {
+            for edge in edges {
+                let type_match = edge_types.is_empty()
+                    || edge_types.iter().any(|t| t == edge.edge_type.as_str());
+                if !type_match {
+                    continue;
+                }
+                if let Some(tid) = target_id {
+                    // Two-node pattern: for outgoing, target must match; for incoming, source must match
+                    let matches = if check_target {
+                        edge.target == tid
+                    } else {
+                        edge.source == tid
+                    };
+                    if matches {
+                        return true;
+                    }
+                } else {
+                    return true;
+                }
             }
-            if let Some(tid) = target_id {
-                // Two-node pattern: for outgoing, target must match; for incoming, source must match
-                let matches = if check_target { edge.target == tid } else { edge.source == tid };
-                if matches { return true; }
-            } else {
-                return true;
-            }
-        }
-        false
-    };
+            false
+        };
 
     if is_varlen {
         // Variable-length: BFS reachability check
@@ -1374,13 +1468,13 @@ fn eval_pattern_predicate_from_args(
 
     // Fixed-length edge check
     let mut found = false;
-    if is_outgoing || (!is_outgoing && !is_incoming) {
+    if is_outgoing || !is_incoming {
         let outgoing = store.get_outgoing_edges(source_id);
         if check_edges_directed(&outgoing, true) {
             found = true;
         }
     }
-    if !found && (is_incoming || (!is_outgoing && !is_incoming)) {
+    if !found && (is_incoming || !is_outgoing) {
         let incoming = store.get_incoming_edges(source_id);
         if check_edges_directed(&incoming, false) {
             found = true;
@@ -1568,7 +1662,10 @@ fn eval_function(name: &str, args: &[Value], store: Option<&GraphStore>) -> Exec
                             dt.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string(),
                         )))
                     } else {
-                        Ok(Value::Property(PropertyValue::String(format!("datetime({})", ts))))
+                        Ok(Value::Property(PropertyValue::String(format!(
+                            "datetime({})",
+                            ts
+                        ))))
                     }
                 }
                 Value::Property(PropertyValue::Duration {
@@ -1581,17 +1678,27 @@ fn eval_function(name: &str, args: &[Value], store: Option<&GraphStore>) -> Exec
                     if *months > 0 {
                         let y = months / 12;
                         let m = months % 12;
-                        if y > 0 { parts.push_str(&format!("{}Y", y)); }
-                        if m > 0 { parts.push_str(&format!("{}M", m)); }
+                        if y > 0 {
+                            parts.push_str(&format!("{}Y", y));
+                        }
+                        if m > 0 {
+                            parts.push_str(&format!("{}M", m));
+                        }
                     }
-                    if *days > 0 { parts.push_str(&format!("{}D", days)); }
+                    if *days > 0 {
+                        parts.push_str(&format!("{}D", days));
+                    }
                     if *seconds > 0 || *nanos > 0 {
                         parts.push('T');
                         let h = seconds / 3600;
                         let m = (seconds % 3600) / 60;
                         let s = seconds % 60;
-                        if h > 0 { parts.push_str(&format!("{}H", h)); }
-                        if m > 0 { parts.push_str(&format!("{}M", m)); }
+                        if h > 0 {
+                            parts.push_str(&format!("{}H", h));
+                        }
+                        if m > 0 {
+                            parts.push_str(&format!("{}M", m));
+                        }
                         if s > 0 || *nanos > 0 {
                             if *nanos > 0 {
                                 parts.push_str(&format!("{}.{:09}S", s, nanos));
@@ -1600,7 +1707,9 @@ fn eval_function(name: &str, args: &[Value], store: Option<&GraphStore>) -> Exec
                             }
                         }
                     }
-                    if parts == "P" { parts.push_str("T0S"); }
+                    if parts == "P" {
+                        parts.push_str("T0S");
+                    }
                     Ok(Value::Property(PropertyValue::String(parts)))
                 }
                 _ => Err(ExecutionError::TypeError(
@@ -1876,7 +1985,11 @@ fn eval_function(name: &str, args: &[Value], store: Option<&GraphStore>) -> Exec
                 Ok(Value::Property(PropertyValue::Array(tail)))
             }
             Value::Property(PropertyValue::Vector(v)) => {
-                let tail: Vec<PropertyValue> = v.iter().skip(1).map(|f| PropertyValue::Float(*f as f64)).collect();
+                let tail: Vec<PropertyValue> = v
+                    .iter()
+                    .skip(1)
+                    .map(|f| PropertyValue::Float(*f as f64))
+                    .collect();
                 Ok(Value::Property(PropertyValue::Array(tail)))
             }
             Value::Null | Value::Property(PropertyValue::Null) => Ok(Value::Null),
@@ -2153,7 +2266,13 @@ fn eval_function(name: &str, args: &[Value], store: Option<&GraphStore>) -> Exec
                         } else if date_str.starts_with('+') || date_str.starts_with('-') {
                             // Handle extended year format like +999999999-12-31 or -999999999-01-01
                             // Store as a sentinel value since chrono can't represent these
-                            Ok(Value::Property(PropertyValue::DateTime(if date_str.starts_with('-') { i64::MIN / 2 } else { i64::MAX / 2 })))
+                            Ok(Value::Property(PropertyValue::DateTime(
+                                if date_str.starts_with('-') {
+                                    i64::MIN / 2
+                                } else {
+                                    i64::MAX / 2
+                                },
+                            )))
                         } else {
                             Err(ExecutionError::RuntimeError(format!(
                                 "Cannot parse date: {}",
@@ -2212,7 +2331,13 @@ fn eval_function(name: &str, args: &[Value], store: Option<&GraphStore>) -> Exec
                             )))
                         } else if s.starts_with('+') || s.starts_with('-') {
                             // Handle extended year format
-                            Ok(Value::Property(PropertyValue::DateTime(if s.starts_with('-') { i64::MIN / 2 } else { i64::MAX / 2 })))
+                            Ok(Value::Property(PropertyValue::DateTime(
+                                if s.starts_with('-') {
+                                    i64::MIN / 2
+                                } else {
+                                    i64::MAX / 2
+                                },
+                            )))
                         } else {
                             Err(ExecutionError::RuntimeError(format!(
                                 "Cannot parse datetime: {}",
@@ -2442,9 +2567,9 @@ fn eval_function(name: &str, args: &[Value], store: Option<&GraphStore>) -> Exec
             }
         }
         "collect" => {
-            if args.is_empty() {
-                Ok(Value::Property(PropertyValue::Array(Vec::new())))
-            } else if matches!(&args[0], Value::Null | Value::Property(PropertyValue::Null)) {
+            if args.is_empty()
+                || matches!(&args[0], Value::Null | Value::Property(PropertyValue::Null))
+            {
                 Ok(Value::Property(PropertyValue::Array(Vec::new())))
             } else {
                 let pv = match &args[0] {
@@ -2459,6 +2584,22 @@ fn eval_function(name: &str, args: &[Value], store: Option<&GraphStore>) -> Exec
                 Ok(Value::Null)
             } else {
                 Ok(args[0].clone())
+            }
+        }
+        "$propertyAccess" | "$propertyaccess" => {
+            // Dynamic property access: (expr).prop — args[0] = base value, args[1] = property name string
+            if args.len() == 2 {
+                if let Value::Property(PropertyValue::String(ref prop_name)) = args[1] {
+                    if let Some(s) = store {
+                        Ok(Value::Property(args[0].resolve_property(prop_name, s)))
+                    } else {
+                        Ok(Value::Property(PropertyValue::Null))
+                    }
+                } else {
+                    Ok(Value::Property(PropertyValue::Null))
+                }
+            } else {
+                Ok(Value::Property(PropertyValue::Null))
             }
         }
         _ => Err(ExecutionError::RuntimeError(format!(
@@ -3210,7 +3351,9 @@ impl FilterOperator {
                 let right_val = self.evaluate_expression(right, record, store)?;
                 self.evaluate_binary_op(op, left_val, right_val)
             }
-            Expression::Function { name, args, .. } if name.eq_ignore_ascii_case("$patternPredicate") => {
+            Expression::Function { name, args, .. }
+                if name.eq_ignore_ascii_case("$patternPredicate") =>
+            {
                 eval_pattern_predicate_from_args(args, record, store)
             }
             Expression::Function { name, args, .. } => {
@@ -3670,9 +3813,7 @@ impl FilterOperator {
                 Ok(PropertyValue::Boolean(l.starts_with(r.as_str())))
             }
             (PropertyValue::Null, _) | (_, PropertyValue::Null) => Ok(PropertyValue::Null),
-            _ => Err(ExecutionError::TypeError(
-                "STARTS WITH requires string operands".to_string(),
-            )),
+            _ => Ok(PropertyValue::Null), // Non-string types return null per Cypher spec
         }
     }
 
@@ -3686,9 +3827,7 @@ impl FilterOperator {
                 Ok(PropertyValue::Boolean(l.ends_with(r.as_str())))
             }
             (PropertyValue::Null, _) | (_, PropertyValue::Null) => Ok(PropertyValue::Null),
-            _ => Err(ExecutionError::TypeError(
-                "ENDS WITH requires string operands".to_string(),
-            )),
+            _ => Ok(PropertyValue::Null),
         }
     }
 
@@ -3702,9 +3841,7 @@ impl FilterOperator {
                 Ok(PropertyValue::Boolean(l.contains(r.as_str())))
             }
             (PropertyValue::Null, _) | (_, PropertyValue::Null) => Ok(PropertyValue::Null),
-            _ => Err(ExecutionError::TypeError(
-                "CONTAINS requires string operands".to_string(),
-            )),
+            _ => Ok(PropertyValue::Null),
         }
     }
 
@@ -4214,17 +4351,13 @@ impl VarLengthExpandOperator {
                     let mut new_record = record.clone();
                     new_record.bind(self.target_var.clone(), Value::NodeRef(current));
                     if let Some(ref ev) = self.edge_var {
-                        if let Some(&last_edge) = path_edges.last() {
-                            new_record.bind(
-                                ev.clone(),
-                                Value::EdgeRef(
-                                    last_edge,
-                                    path_nodes[path_nodes.len() - 2],
-                                    current,
-                                    EdgeType::new(""),
-                                ),
-                            );
-                        }
+                        // VLP relationship variable is a LIST of edges per Cypher spec
+                        let edge_list: Vec<PropertyValue> = path_edges
+                            .iter()
+                            .map(|eid| PropertyValue::Integer(eid.as_u64() as i64))
+                            .collect();
+                        new_record
+                            .bind(ev.clone(), Value::Property(PropertyValue::Array(edge_list)));
                     }
                     if let Some(ref pv) = self.path_variable {
                         new_record.bind(
@@ -4368,25 +4501,52 @@ impl ProjectOperator {
                 // Materialize refs at projection time (RETURN n)
                 match val {
                     Value::NodeRef(id) => {
-                        let node = store.get_node(id).ok_or_else(|| {
-                            ExecutionError::RuntimeError(format!("Node {:?} not found", id))
-                        })?;
-                        Ok(Value::Node(id, node.clone()))
+                        // Node may have been deleted — return NodeRef as-is if not found
+                        if let Some(node) = store.get_node(id) {
+                            Ok(Value::Node(id, node.clone()))
+                        } else {
+                            Ok(Value::NodeRef(id))
+                        }
                     }
-                    Value::EdgeRef(id, ..) => {
-                        let edge = store.get_edge(id).ok_or_else(|| {
-                            ExecutionError::RuntimeError(format!("Edge {:?} not found", id))
-                        })?;
-                        Ok(Value::Edge(id, edge.clone()))
+                    Value::EdgeRef(id, src, tgt, ref et) => {
+                        // Edge may have been deleted — return EdgeRef as-is if not found
+                        if let Some(edge) = store.get_edge(id) {
+                            Ok(Value::Edge(id, edge.clone()))
+                        } else {
+                            Ok(Value::EdgeRef(id, src, tgt, et.clone()))
+                        }
                     }
                     other => Ok(other),
                 }
             }
             Expression::Property { variable, property } => {
-                let val = record
-                    .get(variable)
-                    .ok_or_else(|| ExecutionError::VariableNotFound(variable.clone()))?;
-
+                let val = if let Some(v) = record.get(variable) {
+                    v.clone()
+                } else if variable.contains('.') {
+                    let parts: Vec<&str> = variable.splitn(2, '.').collect();
+                    let base = record
+                        .get(parts[0])
+                        .ok_or_else(|| ExecutionError::VariableNotFound(parts[0].to_string()))?;
+                    Value::Property(base.resolve_property(parts[1], store))
+                } else {
+                    return Err(ExecutionError::VariableNotFound(variable.clone()));
+                };
+                // Check for deleted entity property access
+                match &val {
+                    Value::NodeRef(id) if store.get_node(*id).is_none() => {
+                        return Err(ExecutionError::RuntimeError(format!(
+                            "Entity not found: Node {} has been deleted",
+                            id.as_u64()
+                        )));
+                    }
+                    Value::EdgeRef(id, ..) if store.get_edge(*id).is_none() => {
+                        return Err(ExecutionError::RuntimeError(format!(
+                            "Entity not found: Relationship {} has been deleted",
+                            id.as_u64()
+                        )));
+                    }
+                    _ => {}
+                }
                 let prop = val.resolve_property(property, store);
                 Ok(Value::Property(prop))
             }
@@ -4697,8 +4857,27 @@ impl AggregatorState {
                 }
             }
             AggregatorState::Collect(items) => {
-                if let Some(prop) = value.as_property() {
-                    items.push(prop.clone());
+                match value {
+                    Value::Null | Value::Property(PropertyValue::Null) => {
+                        // Skip nulls in collect (Cypher spec)
+                    }
+                    Value::Property(prop) => items.push(prop.clone()),
+                    Value::NodeRef(id) | Value::Node(id, _) => {
+                        // Store node references as maps with __nodeId for later materialization
+                        let mut map = std::collections::HashMap::new();
+                        map.insert("__nodeId".to_string(), PropertyValue::Integer(id.0 as i64));
+                        items.push(PropertyValue::Map(map));
+                    }
+                    Value::EdgeRef(id, ..) | Value::Edge(id, _) => {
+                        let mut map = std::collections::HashMap::new();
+                        map.insert("__edgeId".to_string(), PropertyValue::Integer(id.0 as i64));
+                        items.push(PropertyValue::Map(map));
+                    }
+                    _ => {
+                        if let Some(prop) = value.as_property() {
+                            items.push(prop.clone());
+                        }
+                    }
                 }
             }
             AggregatorState::CollectDistinct(set) => {
@@ -5987,7 +6166,9 @@ impl JoinOperator {
     }
 
     fn join_key(record: &Record, vars: &[String]) -> Vec<Value> {
-        vars.iter().map(|v| record.get(v).cloned().unwrap_or(Value::Null)).collect()
+        vars.iter()
+            .map(|v| record.get(v).cloned().unwrap_or(Value::Null))
+            .collect()
     }
 
     fn materialize(&mut self, store: &GraphStore) -> ExecutionResult<()> {
@@ -6145,7 +6326,11 @@ impl LeftOuterJoinOperator {
         join_var: String,
         right_only_vars: Vec<String>,
     ) -> Self {
-        let join_vars = if join_var.is_empty() { vec![] } else { vec![join_var] };
+        let join_vars = if join_var.is_empty() {
+            vec![]
+        } else {
+            vec![join_var]
+        };
         Self {
             left,
             right,
@@ -6192,7 +6377,9 @@ impl LeftOuterJoinOperator {
     }
 
     fn join_key(record: &Record, vars: &[String]) -> Vec<Value> {
-        vars.iter().map(|v| record.get(v).cloned().unwrap_or(Value::Null)).collect()
+        vars.iter()
+            .map(|v| record.get(v).cloned().unwrap_or(Value::Null))
+            .collect()
     }
 
     fn materialize(&mut self, store: &GraphStore) -> ExecutionResult<()> {
@@ -6234,7 +6421,8 @@ impl PhysicalOperator for LeftOuterJoinOperator {
             let left_record = &self.left_records[self.current_left_idx];
 
             let join_key = Self::join_key(left_record, &self.join_vars);
-            let has_key = !self.join_vars.is_empty() && join_key.iter().all(|v| !matches!(v, Value::Null));
+            let has_key =
+                !self.join_vars.is_empty() && join_key.iter().all(|v| !matches!(v, Value::Null));
 
             if has_key {
                 if let Some(right_list) = self.right_hash.get(&join_key) {
@@ -6870,6 +7058,66 @@ impl PhysicalOperator for DropIndexOperator {
         OperatorDescription {
             name: "DropIndex".to_string(),
             details: format!(":{}({})", self.label.as_str(), self.property),
+            children: Vec::new(),
+        }
+    }
+}
+
+/// Drop vector index operator: DROP VECTOR INDEX name
+pub struct DropVectorIndexOperator {
+    index_name: String,
+    executed: bool,
+}
+
+impl DropVectorIndexOperator {
+    pub fn new(index_name: String) -> Self {
+        Self {
+            index_name,
+            executed: false,
+        }
+    }
+}
+
+impl PhysicalOperator for DropVectorIndexOperator {
+    fn next(&mut self, _store: &GraphStore) -> ExecutionResult<Option<Record>> {
+        Err(ExecutionError::RuntimeError(
+            "DropVectorIndexOperator requires mutable store access".to_string(),
+        ))
+    }
+
+    fn next_mut(
+        &mut self,
+        store: &mut GraphStore,
+        _tenant_id: &str,
+    ) -> ExecutionResult<Option<Record>> {
+        if self.executed {
+            return Ok(None);
+        }
+
+        let dropped = store.drop_vector_index(&self.index_name);
+        if !dropped {
+            return Err(ExecutionError::RuntimeError(format!(
+                "Vector index '{}' does not exist",
+                self.index_name
+            )));
+        }
+
+        self.executed = true;
+        Ok(Some(Record::new()))
+    }
+
+    fn reset(&mut self) {
+        self.executed = false;
+    }
+
+    fn is_mutating(&self) -> bool {
+        true
+    }
+
+    fn describe(&self) -> OperatorDescription {
+        OperatorDescription {
+            name: "DropVectorIndex".to_string(),
+            details: self.index_name.clone(),
             children: Vec::new(),
         }
     }
@@ -8222,19 +8470,28 @@ impl PhysicalOperator for MockProcedureOperator {
                 // No output
             } else if lower == "test.labels" {
                 // Returns 3 rows with label column from store labels
-                let labels: Vec<String> = store.all_labels().into_iter()
-                    .map(|l| l.to_string()).collect();
+                let labels: Vec<String> = store
+                    .all_labels()
+                    .into_iter()
+                    .map(|l| l.to_string())
+                    .collect();
                 if labels.is_empty() {
                     // Default mock data
                     for label in &["A", "B", "C"] {
                         let mut r = Record::new();
-                        r.bind("label".to_string(), Value::Property(PropertyValue::String(label.to_string())));
+                        r.bind(
+                            "label".to_string(),
+                            Value::Property(PropertyValue::String(label.to_string())),
+                        );
                         self.results.push(r);
                     }
                 } else {
                     for label in labels {
                         let mut r = Record::new();
-                        r.bind("label".to_string(), Value::Property(PropertyValue::String(label)));
+                        r.bind(
+                            "label".to_string(),
+                            Value::Property(PropertyValue::String(label)),
+                        );
                         self.results.push(r);
                     }
                 }
@@ -9148,7 +9405,9 @@ impl DistinctOperator {
     }
 
     fn execute_all(&mut self, store: &GraphStore) -> ExecutionResult<()> {
-        if self.executed { return Ok(()); }
+        if self.executed {
+            return Ok(());
+        }
         let batch_size = 1024;
         let mut all_records = Vec::new();
         while let Some(batch) = self.input.next_batch(store, batch_size)? {
@@ -9157,7 +9416,9 @@ impl DistinctOperator {
         // Deduplicate: use a set of stringified values
         let mut seen: HashSet<Vec<String>> = HashSet::new();
         for record in all_records {
-            let mut key: Vec<(String, String)> = record.bindings().iter()
+            let mut key: Vec<(String, String)> = record
+                .bindings()
+                .iter()
                 .map(|(k, v)| (k.clone(), format!("{:?}", v)))
                 .collect();
             key.sort_by(|a, b| a.0.cmp(&b.0));
@@ -9644,7 +9905,30 @@ impl PhysicalOperator for UnwindOperator {
             self.buffer_idx = 0;
             for item in items {
                 let mut new_record = record.clone();
-                new_record.bind(self.variable.clone(), Value::Property(item));
+                // Convert collected node/edge references back to NodeRef/EdgeRef
+                let value = match &item {
+                    PropertyValue::Map(map) if map.contains_key("__nodeId") => {
+                        if let Some(PropertyValue::Integer(id)) = map.get("__nodeId") {
+                            Value::NodeRef(crate::graph::types::NodeId(*id as u64))
+                        } else {
+                            Value::Property(item)
+                        }
+                    }
+                    PropertyValue::Map(map) if map.contains_key("__edgeId") => {
+                        if let Some(PropertyValue::Integer(id)) = map.get("__edgeId") {
+                            Value::EdgeRef(
+                                crate::graph::types::EdgeId(*id as u64),
+                                crate::graph::types::NodeId(0),
+                                crate::graph::types::NodeId(0),
+                                crate::graph::EdgeType::new(""),
+                            )
+                        } else {
+                            Value::Property(item)
+                        }
+                    }
+                    _ => Value::Property(item),
+                };
+                new_record.bind(self.variable.clone(), value);
                 self.buffer.push(new_record);
             }
         }
@@ -9969,6 +10253,35 @@ impl PhysicalOperator for MergeOperator {
                     }
                 }
             }
+        }
+
+        // Bind path variable if present (MERGE p = ...)
+        if let Some(ref pv) = path.path_variable {
+            let mut path_nodes = vec![node_id];
+            let mut path_edges = Vec::new();
+            for seg in &path.segments {
+                if let Some(ref tv) = seg.node.variable {
+                    if let Some(val) = record.get(tv) {
+                        if let Some(nid) = val.node_id() {
+                            path_nodes.push(nid);
+                        }
+                    }
+                }
+                if let Some(ref ev) = seg.edge.variable {
+                    if let Some(val) = record.get(ev) {
+                        if let Some(eid) = val.edge_id() {
+                            path_edges.push(eid);
+                        }
+                    }
+                }
+            }
+            record.bind(
+                pv.clone(),
+                Value::Path {
+                    nodes: path_nodes,
+                    edges: path_edges,
+                },
+            );
         }
 
         Ok(Some(record))
@@ -12842,7 +13155,8 @@ mod tests {
             Value::Property(PropertyValue::Integer(1)),
             Value::Property(PropertyValue::String("x".to_string())),
         );
-        assert!(result.is_err());
+        // Non-string operands return null per Cypher spec
+        assert_eq!(result.unwrap(), Value::Property(PropertyValue::Null));
     }
 
     #[test]
@@ -12874,7 +13188,7 @@ mod tests {
             Value::Property(PropertyValue::Integer(1)),
             Value::Property(PropertyValue::String("x".to_string())),
         );
-        assert!(result.is_err());
+        assert_eq!(result.unwrap(), Value::Property(PropertyValue::Null));
     }
 
     #[test]
@@ -12906,7 +13220,7 @@ mod tests {
             Value::Property(PropertyValue::Integer(1)),
             Value::Property(PropertyValue::String("x".to_string())),
         );
-        assert!(result.is_err());
+        assert_eq!(result.unwrap(), Value::Property(PropertyValue::Null));
     }
 
     #[test]

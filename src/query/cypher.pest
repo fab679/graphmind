@@ -40,7 +40,7 @@
 // Trailing whitespace after the optional semicolon is also consumed explicitly.
 cypher = { SOI ~ explain_prefix? ~ top_statement ~ (";" ~ WHITESPACE*)? ~ EOI }
 
-top_statement = { show_vector_indexes_stmt | show_indexes_stmt | show_constraints_stmt | drop_constraint_stmt | drop_index_stmt | create_constraint_stmt | create_vector_index_stmt | create_index_stmt | query }
+top_statement = { show_vector_indexes_stmt | show_indexes_stmt | show_constraints_stmt | drop_vector_index_stmt | drop_constraint_stmt | drop_index_stmt | create_constraint_stmt | create_vector_index_stmt | create_index_stmt | query }
 statement = { query }
 
 // standalone_call is tried first: it is strictly more specific (requires the
@@ -861,6 +861,9 @@ kw_if = @{ ^"IF" ~ !identifier_part }
 //   Old: DROP INDEX ON :Label(prop)
 //   New: DROP INDEX name IF EXISTS
 //   New: DROP CONSTRAINT name IF EXISTS
+drop_vector_index_stmt = {
+    kw_drop ~ kw_vector ~ kw_index ~ symbolic_name ~ kw_if_exists?
+}
 drop_index_stmt = {
     (kw_drop ~ kw_index ~ symbolic_name ~ kw_if_exists?) |
     (kw_drop ~ kw_index ~ kw_on ~ ":" ~ schema_name ~ "(" ~ property_key_name ~ ")")

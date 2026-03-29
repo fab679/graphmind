@@ -29,6 +29,8 @@ struct TckScenario {
     has_parameters: bool,
     is_outline: bool,
     tags: Vec<String>,
+    /// Procedure definitions for this scenario: (name, arg_count, output_names)
+    procedure_defs: Vec<(String, usize, Vec<String>)>,
 }
 
 /// What the scenario expects from the test query.
@@ -207,8 +209,11 @@ fn parse_feature_file(path: &Path) -> Vec<TckScenario> {
                         continue;
                     }
                     if bline.starts_with("Given the ") && bline.ends_with(" graph") {
-                        let name = bline.strip_prefix("Given the ").unwrap()
-                            .strip_suffix(" graph").unwrap();
+                        let name = bline
+                            .strip_prefix("Given the ")
+                            .unwrap()
+                            .strip_suffix(" graph")
+                            .unwrap();
                         if let Some(setup) = named_graph_setup(name) {
                             background_queries.push(setup);
                         }
@@ -246,6 +251,7 @@ fn parse_feature_file(path: &Path) -> Vec<TckScenario> {
             let mut test_query = String::new();
             let mut expected = TckExpected::AnyResult;
             let mut has_parameters = false;
+            let mut procedure_defs: Vec<(String, usize, Vec<String>)> = Vec::new();
             let scenario_tags = tags.clone();
 
             i += 1;
@@ -269,9 +275,16 @@ fn parse_feature_file(path: &Path) -> Vec<TckScenario> {
                 if (line.starts_with("Given the ") && line.ends_with(" graph"))
                     || (line.starts_with("And the ") && line.ends_with(" graph"))
                 {
-                    let prefix = if line.starts_with("Given") { "Given the " } else { "And the " };
-                    let name = line.strip_prefix(prefix).unwrap()
-                        .strip_suffix(" graph").unwrap();
+                    let prefix = if line.starts_with("Given") {
+                        "Given the "
+                    } else {
+                        "And the "
+                    };
+                    let name = line
+                        .strip_prefix(prefix)
+                        .unwrap()
+                        .strip_suffix(" graph")
+                        .unwrap();
                     if let Some(setup) = named_graph_setup(name) {
                         setup_queries.push(setup);
                     }
@@ -284,6 +297,49 @@ fn parse_feature_file(path: &Path) -> Vec<TckScenario> {
                     i += 1;
                     if let Some(query) = extract_query_block(&lines, &mut i) {
                         setup_queries.push(query);
+                    }
+                    continue;
+                }
+
+                // Procedure definitions: "And there exists a procedure test.my.proc(...) :: (...):"
+                if line.starts_with("And there exists a procedure ")
+                    || line.starts_with("Given there exists a procedure ")
+                {
+                    // Parse: "test.my.proc(name :: STRING?, in :: INTEGER?) :: (out :: INTEGER?):"
+                    let proc_part = line.split("procedure ").nth(1).unwrap_or("");
+                    let proc_part = proc_part.trim_end_matches(':');
+                    // Extract procedure name (before first '(')
+                    if let Some(paren_pos) = proc_part.find('(') {
+                        let proc_name = proc_part[..paren_pos].trim().to_string();
+                        // Count arguments: between first ( and matching )
+                        let args_part = &proc_part[paren_pos + 1..];
+                        if let Some(close_pos) = args_part.find(')') {
+                            let args_str = args_part[..close_pos].trim();
+                            let arg_count = if args_str.is_empty() {
+                                0
+                            } else {
+                                args_str.split(',').count()
+                            };
+                            // Extract output names: after :: (
+                            let outputs_part = proc_part.split(":: (").nth(1).unwrap_or("");
+                            let outputs_str = outputs_part.trim_end_matches(')').trim();
+                            let output_names: Vec<String> = if outputs_str.is_empty() {
+                                Vec::new()
+                            } else {
+                                outputs_str
+                                    .split(',')
+                                    .map(|s| {
+                                        s.trim().split("::").next().unwrap_or("").trim().to_string()
+                                    })
+                                    .collect()
+                            };
+                            procedure_defs.push((proc_name, arg_count, output_names));
+                        }
+                    }
+                    i += 1;
+                    // Skip the data table
+                    while i < lines.len() && lines[i].trim().starts_with('|') {
+                        i += 1;
                     }
                     continue;
                 }
@@ -418,6 +474,7 @@ fn parse_feature_file(path: &Path) -> Vec<TckScenario> {
                     has_parameters,
                     is_outline,
                     tags: scenario_tags,
+                    procedure_defs,
                 });
             }
         } else {
@@ -489,11 +546,11 @@ fn execute_script(
 fn named_graph_setup(name: &str) -> Option<String> {
     match name {
         "binary-tree-1" => Some(
-            "CREATE (a:A {name: 'a'}), (b1:X {name: 'b1'}), (b2:X {name: 'b2'}), (b3:X {name: 'b3'}), (b4:X {name: 'b4'}), (c11 {name: 'c11'}), (c12 {name: 'c12'}), (c21 {name: 'c21'}), (c22 {name: 'c22'}), (c31 {name: 'c31'}), (c32 {name: 'c32'}), (c41 {name: 'c41'}), (c42 {name: 'c42'}), (a)-[:KNOWS]->(b1), (a)-[:KNOWS]->(b2), (a)-[:FOLLOWS]->(b3), (a)-[:FOLLOWS]->(b4), (b1)-[:KNOWS]->(b2), (b1)-[:KNOWS]->(b3), (b1)-[:KNOWS]->(c11), (b1)-[:KNOWS]->(c12), (b2)-[:KNOWS]->(c21), (b2)-[:KNOWS]->(c22), (b3)-[:KNOWS]->(c31), (b3)-[:KNOWS]->(c32), (b4)-[:KNOWS]->(c41), (b4)-[:KNOWS]->(c42)"
+            "CREATE (a:A {name: 'a'}), (b1:X {name: 'b1'}), (b2:X {name: 'b2'}), (b3:X {name: 'b3'}), (b4:X {name: 'b4'}), (c11 {name: 'c11'}), (c12 {name: 'c12'}), (c21 {name: 'c21'}), (c22 {name: 'c22'}), (c31 {name: 'c31'}), (c32 {name: 'c32'}), (c41 {name: 'c41'}), (c42 {name: 'c42'}), (a)-[:KNOWS]->(b1), (a)-[:KNOWS]->(b2), (a)-[:FOLLOWS]->(b3), (a)-[:FOLLOWS]->(b4), (b1)-[:KNOWS]->(b2), (b1)-[:KNOWS]->(b3), (b1)-[:KNOWS]->(c11), (b1)-[:KNOWS]->(c12), (b2)-[:KNOWS]->(c21), (b2)-[:KNOWS]->(c22), (b3)-[:KNOWS]->(c31), (b3)-[:KNOWS]->(c32), (b3)-[:KNOWS]->(b4), (b3)-[:KNOWS]->(b1), (b4)-[:KNOWS]->(c41), (b4)-[:KNOWS]->(c42)"
                 .to_string(),
         ),
         "binary-tree-2" => Some(
-            "CREATE (a:A {name: 'a'}), (b1:X {name: 'b1'}), (b2:X {name: 'b2'}), (b3:X {name: 'b3'}), (b4:X {name: 'b4'}), (c11:X {name: 'c11'}), (c12:Y {name: 'c12'}), (c21:X {name: 'c21'}), (c22:Y {name: 'c22'}), (c31:X {name: 'c31'}), (c32:Y {name: 'c32'}), (c41:X {name: 'c41'}), (c42:Y {name: 'c42'}), (a)-[:KNOWS]->(b1), (a)-[:KNOWS]->(b2), (a)-[:FOLLOWS]->(b3), (a)-[:FOLLOWS]->(b4), (b1)-[:KNOWS]->(b2), (b1)-[:KNOWS]->(b3), (b1)-[:KNOWS]->(c11), (b1)-[:KNOWS]->(c12), (b2)-[:KNOWS]->(c21), (b2)-[:KNOWS]->(c22), (b3)-[:KNOWS]->(c31), (b3)-[:KNOWS]->(c32), (b4)-[:KNOWS]->(c41), (b4)-[:KNOWS]->(c42)"
+            "CREATE (a:A {name: 'a'}), (b1:X {name: 'b1'}), (b2:X {name: 'b2'}), (b3:X {name: 'b3'}), (b4:X {name: 'b4'}), (c11:X {name: 'c11'}), (c12:Y {name: 'c12'}), (c21:X {name: 'c21'}), (c22:Y {name: 'c22'}), (c31:X {name: 'c31'}), (c32:Y {name: 'c32'}), (c41:X {name: 'c41'}), (c42:Y {name: 'c42'}), (a)-[:KNOWS]->(b1), (a)-[:KNOWS]->(b2), (a)-[:FOLLOWS]->(b3), (a)-[:FOLLOWS]->(b4), (b1)-[:KNOWS]->(b2), (b1)-[:KNOWS]->(b3), (b1)-[:KNOWS]->(c11), (b1)-[:KNOWS]->(c12), (b2)-[:KNOWS]->(c21), (b2)-[:KNOWS]->(c22), (b3)-[:KNOWS]->(c31), (b3)-[:KNOWS]->(c32), (b3)-[:KNOWS]->(b4), (b3)-[:KNOWS]->(b1), (b4)-[:KNOWS]->(c41), (b4)-[:KNOWS]->(c42)"
                 .to_string(),
         ),
         _ => None,
@@ -525,12 +582,13 @@ fn run_scenario(scenario: &TckScenario) -> Outcome {
     // so parser/executor panics are reported as failures.
     let setup_queries = scenario.setup_queries.clone();
     let test_query = scenario.test_query.clone();
+    let procedure_defs = scenario.procedure_defs.clone();
 
     let result = std::thread::Builder::new()
         .stack_size(16 * 1024 * 1024) // 16 MB stack
         .spawn(move || {
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                run_scenario_inner(&setup_queries, &test_query)
+                run_scenario_inner(&setup_queries, &test_query, &procedure_defs)
             }))
         })
         .unwrap()
@@ -572,9 +630,68 @@ fn run_scenario(scenario: &TckScenario) -> Outcome {
 
 /// Inner scenario runner (may panic — caller catches).
 /// Returns (query_result, expected_check_outcome).
-fn run_scenario_inner(setup_queries: &[String], test_query: &str) -> InnerResult {
+fn run_scenario_inner(
+    setup_queries: &[String],
+    test_query: &str,
+    procedure_defs: &[(String, usize, Vec<String>)],
+) -> InnerResult {
     let mut store = GraphStore::new();
     let engine = QueryEngine::new();
+
+    // Pre-validate CALL queries against procedure definitions
+    if !procedure_defs.is_empty() {
+        // Check if the test query is a CALL that violates procedure signature
+        let upper = test_query.to_uppercase();
+        if upper.contains("CALL ") {
+            for (proc_name, arg_count, output_names) in procedure_defs {
+                let call_prefix = format!("CALL {}", proc_name);
+                if upper.contains(&call_prefix.to_uppercase()) {
+                    // Count actual arguments in the CALL
+                    if let Some(call_pos) =
+                        test_query.to_uppercase().find(&call_prefix.to_uppercase())
+                    {
+                        let after_call = &test_query[call_pos + call_prefix.len()..];
+                        if let Some(paren_start) = after_call.find('(') {
+                            let after_paren = &after_call[paren_start + 1..];
+                            if let Some(paren_end) = after_paren.find(')') {
+                                let args_str = after_paren[..paren_end].trim();
+                                let actual_args = if args_str.is_empty() {
+                                    0
+                                } else {
+                                    args_str.split(',').count()
+                                };
+                                if actual_args != *arg_count {
+                                    return InnerResult::QueryError(format!(
+                                        "Procedure {} requires {} argument(s), got {}",
+                                        proc_name, arg_count, actual_args
+                                    ));
+                                }
+                            }
+                        } else if *arg_count > 0 {
+                            // Implicit invocation (no parens) — unknown procedure
+                            return InnerResult::QueryError(format!(
+                                "There is no procedure with the name `{}` registered",
+                                proc_name
+                            ));
+                        }
+                    }
+
+                    // Check if in-query CALL has YIELD when procedure has outputs
+                    if !output_names.is_empty() {
+                        let has_yield = upper.contains("YIELD");
+                        let is_standalone = !upper.contains("RETURN") && !upper.contains("WITH");
+                        if !has_yield && !is_standalone {
+                            // In-query CALL without YIELD when procedure has outputs
+                            return InnerResult::QueryError(
+                                "In-query CALL must include YIELD when procedure has output fields"
+                                    .to_string(),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     // Run setup queries (each is a single multi-line statement, or a multi-statement script)
     for (idx, setup) in setup_queries.iter().enumerate() {
@@ -610,18 +727,27 @@ fn run_scenario_inner(setup_queries: &[String], test_query: &str) -> InnerResult
             columns: batch.columns.clone(),
         },
         Err(e) => {
+            let err_str = format!("{}", e);
+            // Don't fall back to script if the error is a validation/planning error
+            // (script execution would split statements and bypass cross-statement validation)
+            let is_validation_error = err_str.contains("Planning error")
+                || err_str.contains("already declared")
+                || err_str.contains("not defined")
+                || err_str.contains("not allowed")
+                || err_str.contains("Type mismatch");
             // Fallback: try line-by-line script execution for multi-statement queries
-            if test_query.contains('\n') {
+            // but only if it's a parse error, not a validation error
+            if test_query.contains('\n') && !is_validation_error {
                 match execute_script(&engine, &mut store, test_query) {
                     Ok(batch) => InnerResult::Ok {
                         row_count: batch.len(),
                         col_count: batch.columns.len(),
                         columns: batch.columns.clone(),
                     },
-                    Err(_) => InnerResult::QueryError(format!("{}", e)),
+                    Err(_) => InnerResult::QueryError(err_str),
                 }
             } else {
-                InnerResult::QueryError(format!("{}", e))
+                InnerResult::QueryError(err_str)
             }
         }
     }

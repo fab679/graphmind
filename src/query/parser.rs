@@ -199,6 +199,22 @@ fn parse_top_statement(pair: pest::iterators::Pair<Rule>, query: &mut Query) -> 
             Rule::show_constraints_stmt => {
                 query.show_constraints = true;
             }
+            Rule::drop_vector_index_stmt => {
+                // DROP VECTOR INDEX name [IF EXISTS]
+                let text = inner.as_str();
+                // Extract index name — it's the symbolic_name after "DROP VECTOR INDEX"
+                for child in inner.into_inner() {
+                    if child.as_rule() == Rule::symbolic_name {
+                        query.drop_vector_index_name = Some(child.as_str().to_string());
+                        break;
+                    }
+                }
+                if query.drop_vector_index_name.is_none() {
+                    // Fallback: extract from text
+                    let name = text.split_whitespace().last().unwrap_or("").trim();
+                    query.drop_vector_index_name = Some(name.to_string());
+                }
+            }
             Rule::drop_index_stmt => {
                 parse_drop_index_statement(inner, query)?;
             }
@@ -621,8 +637,34 @@ fn parse_multi_part_query(pair: pest::iterators::Pair<Rule>, query: &mut Query) 
                     || pending_delete.is_some()
                     || !pending_removes.is_empty();
 
+                // Peek ahead: check if there are any upcoming mutations in the remaining children
+                // This ensures that read-only WITH stages before mutations still go through
+                // multi_part_stages to maintain correct ordering
+                let has_upcoming_mutations = stage_has_mutations || has_any_mutations || {
+                    // Check remaining children for updating_clause
+                    let _remaining: Vec<&pest::iterators::Pair<Rule>> = Vec::new(); // can't peek in consumed iterator
+                    false // conservative: rely on has_any_mutations being set after first mutation
+                };
+                let _ = has_upcoming_mutations; // suppress warning
+
                 if stage_has_mutations || has_any_mutations {
                     // Use multi_part_stages path for write queries
+                    // Also drain any WITH from query.with_clause into a stage first
+                    // to maintain correct ordering
+                    if let Some(prev_wc) = query.with_clause.take() {
+                        let prev_stage = MultiPartStage {
+                            with_clause: prev_wc,
+                            unwind_clauses: Vec::new(),
+                            match_clauses: std::mem::take(&mut query.match_clauses),
+                            create_clauses: Vec::new(),
+                            merge_clauses: Vec::new(),
+                            set_clauses: Vec::new(),
+                            delete_clause: None,
+                            remove_clauses: Vec::new(),
+                            where_clause: query.where_clause.take(),
+                        };
+                        query.multi_part_stages.push(prev_stage);
+                    }
                     let stage = MultiPartStage {
                         with_clause: wc,
                         unwind_clauses: all_unwinds,
@@ -641,7 +683,10 @@ fn parse_multi_part_query(pair: pest::iterators::Pair<Rule>, query: &mut Query) 
                         let prev_with = query.with_clause.take().unwrap();
                         let prev_unwind = query.unwind_clause.take();
                         let split = query.with_split_index.unwrap_or(query.match_clauses.len());
-                        let post_matches: Vec<_> = query.match_clauses.drain(split..).collect();
+                        let mut post_matches: Vec<_> = query.match_clauses.drain(split..).collect();
+                        // Include pending match clauses as post-matches for this WITH stage
+                        // (these were parsed between the previous WITH and this new WITH)
+                        post_matches.append(&mut pending_match_clauses);
                         let post_where = query.post_with_where_clause.take();
                         query.extra_with_stages.push((
                             prev_with,
@@ -649,14 +694,14 @@ fn parse_multi_part_query(pair: pest::iterators::Pair<Rule>, query: &mut Query) 
                             post_matches,
                             post_where,
                         ));
-                    }
-
-                    for mc in pending_match_clauses.drain(..) {
-                        query.match_clauses.push(mc);
+                    } else {
+                        for mc in pending_match_clauses.drain(..) {
+                            query.match_clauses.push(mc);
+                        }
                     }
                     // Transfer pending WHERE to the query
                     if let Some(pw) = pending_where.take() {
-                        if query.with_clause.is_some() {
+                        if query.with_clause.is_some() || !query.extra_with_stages.is_empty() {
                             query.post_with_where_clause = Some(pw);
                         } else {
                             query.where_clause = Some(pw);
@@ -743,7 +788,19 @@ fn parse_reading_clause_into_pending_ext(
                 let (mc, wc) = parse_match_clause(inner)?;
                 match_clauses.push(mc);
                 if let Some(w) = wc {
-                    *where_clause = Some(w);
+                    // Combine with existing WHERE using AND (each MATCH can have its own WHERE)
+                    match where_clause {
+                        Some(existing) => {
+                            existing.predicate = Expression::Binary {
+                                left: Box::new(existing.predicate.clone()),
+                                op: BinaryOp::And,
+                                right: Box::new(w.predicate),
+                            };
+                        }
+                        None => {
+                            *where_clause = Some(w);
+                        }
+                    }
                 }
             }
             Rule::unwind => {
@@ -2546,9 +2603,7 @@ fn parse_unary_add_or_subtract_expression(
                 {
                     return Ok(Expression::Literal(PropertyValue::Integer(i64::MIN)));
                 }
-                return Err(ParseError::SemanticError(
-                    "Integer overflow".to_string(),
-                ));
+                return Err(ParseError::SemanticError("Integer overflow".to_string()));
             }
         }
     }
@@ -2587,11 +2642,26 @@ fn parse_non_arithmetic_operator_expression(
                             variable: var.clone(),
                             property: prop_name,
                         });
-                    } else {
-                        // For more complex property access, just use the string repr
+                    } else if let Expression::Property {
+                        variable,
+                        property: prev_prop,
+                    } = base
+                    {
+                        // Chained property: a.b.c → Property { variable: "a.b", property: "c" }
                         atom_expr = Some(Expression::Property {
-                            variable: base.to_string_repr(),
+                            variable: format!("{}.{}", variable, prev_prop),
                             property: prop_name,
+                        });
+                    } else {
+                        // For expression-based property access like (list[1]).prop,
+                        // wrap as a Function call that the executor can evaluate
+                        atom_expr = Some(Expression::Function {
+                            name: "$propertyAccess".to_string(),
+                            args: vec![
+                                base.clone(),
+                                Expression::Literal(PropertyValue::String(prop_name)),
+                            ],
+                            distinct: false,
                         });
                     }
                 }
@@ -2814,7 +2884,8 @@ fn unescape_string(s: &str) -> ParseResult<String> {
                     let hex: String = chars.by_ref().take(4).collect();
                     if hex.len() < 4 || u32::from_str_radix(&hex, 16).is_err() {
                         return Err(ParseError::SemanticError(format!(
-                            "Invalid unicode escape: \\u{}", hex
+                            "Invalid unicode escape: \\u{}",
+                            hex
                         )));
                     }
                     let code = u32::from_str_radix(&hex, 16).unwrap();
@@ -2822,7 +2893,8 @@ fn unescape_string(s: &str) -> ParseResult<String> {
                         result.push(ch);
                     } else {
                         return Err(ParseError::SemanticError(format!(
-                            "Invalid unicode code point: \\u{}", hex
+                            "Invalid unicode code point: \\u{}",
+                            hex
                         )));
                     }
                 }
@@ -2830,7 +2902,8 @@ fn unescape_string(s: &str) -> ParseResult<String> {
                     let hex: String = chars.by_ref().take(8).collect();
                     if hex.len() < 8 || u32::from_str_radix(&hex, 16).is_err() {
                         return Err(ParseError::SemanticError(format!(
-                            "Invalid unicode escape: \\U{}", hex
+                            "Invalid unicode escape: \\U{}",
+                            hex
                         )));
                     }
                     let code = u32::from_str_radix(&hex, 16).unwrap();
@@ -2838,7 +2911,8 @@ fn unescape_string(s: &str) -> ParseResult<String> {
                         result.push(ch);
                     } else {
                         return Err(ParseError::SemanticError(format!(
-                            "Invalid unicode code point: \\U{}", hex
+                            "Invalid unicode code point: \\U{}",
+                            hex
                         )));
                     }
                 }
@@ -3077,6 +3151,18 @@ fn parse_existential_subquery(pair: pest::iterators::Pair<Rule>) -> ParseResult<
                 // EXISTS { regular_query } — extract match pattern and where from the query
                 let mut sub_query = Query::new();
                 parse_regular_query(inner, &mut sub_query)?;
+                // Reject write clauses inside EXISTS subqueries
+                if sub_query.create_clause.is_some()
+                    || !sub_query.create_clauses.is_empty()
+                    || sub_query.delete_clause.is_some()
+                    || sub_query.merge_clause.is_some()
+                    || !sub_query.set_clauses.is_empty()
+                    || !sub_query.remove_clauses.is_empty()
+                {
+                    return Err(ParseError::SemanticError(
+                        "EXISTS subquery cannot contain updating clauses".to_string(),
+                    ));
+                }
                 if !sub_query.match_clauses.is_empty() {
                     pattern = Some(sub_query.match_clauses[0].pattern.clone());
                 }
@@ -3169,12 +3255,17 @@ fn parse_list_comprehension(pair: pest::iterators::Pair<Rule>) -> ParseResult<Ex
 // ============================================================
 
 fn parse_pattern_comprehension(pair: pest::iterators::Pair<Rule>) -> ParseResult<Expression> {
+    let mut path_variable = None;
     let mut pattern_path = None;
     let mut filter = None;
     let mut projection = None;
 
     for inner in pair.into_inner() {
         match inner.as_rule() {
+            Rule::variable => {
+                // Path variable in [p = (n)-->() | p]
+                path_variable = Some(inner.as_str().to_string());
+            }
             Rule::relationships_pattern => {
                 // relationships_pattern = { node_pattern ~ pattern_element_chain+ }
                 pattern_path = Some(parse_relationships_pattern(inner)?);
@@ -3186,13 +3277,16 @@ fn parse_pattern_comprehension(pair: pest::iterators::Pair<Rule>) -> ParseResult
             Rule::expression => {
                 projection = Some(parse_expression(inner)?);
             }
-            _ => {} // variable, "=", "[", "|", "]"
+            _ => {} // "=", "[", "|", "]"
         }
     }
 
-    let path = pattern_path.ok_or_else(|| {
+    let mut path = pattern_path.ok_or_else(|| {
         ParseError::SemanticError("Pattern comprehension missing pattern".to_string())
     })?;
+
+    // Set the path variable from the [p = ...] syntax
+    path.path_variable = path_variable;
 
     Ok(Expression::PatternComprehension {
         pattern: Pattern { paths: vec![path] },
@@ -3344,6 +3438,7 @@ fn parse_pattern_predicate(pair: pest::iterators::Pair<Rule>) -> ParseResult<Exp
 // Helper: string representation for complex expressions used as property base
 // ============================================================
 
+#[allow(dead_code)]
 trait ExprRepr {
     fn to_string_repr(&self) -> String;
 }

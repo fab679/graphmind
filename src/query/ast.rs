@@ -101,6 +101,8 @@ pub struct Query {
     pub create_index_clause: Option<CreateIndexClause>,
     /// DROP INDEX clause (optional)
     pub drop_index_clause: Option<DropIndexClause>,
+    /// DROP VECTOR INDEX name (optional)
+    pub drop_vector_index_name: Option<String>,
     /// CREATE CONSTRAINT clause (optional)
     pub create_constraint_clause: Option<CreateConstraintClause>,
     /// SHOW INDEXES flag
@@ -673,6 +675,7 @@ impl Query {
             create_vector_index_clause: None,
             create_index_clause: None,
             drop_index_clause: None,
+            drop_vector_index_name: None,
             create_constraint_clause: None,
             show_indexes: false,
             show_vector_indexes: false,

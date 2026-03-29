@@ -184,7 +184,27 @@ impl QueryEngine {
         self.stats.record_miss();
 
         // Parse and cache (LRU evicts automatically when full)
-        let query = parse_query(query_str)?;
+        let query = match parse_query(query_str) {
+            Ok(q) => q,
+            Err(e) => {
+                // Provide better error message for common mistakes
+                let upper = query_str.trim().to_uppercase();
+                if upper.starts_with("MATCH")
+                    && !upper.contains("RETURN")
+                    && !upper.contains("CREATE")
+                    && !upper.contains("DELETE")
+                    && !upper.contains("SET ")
+                    && !upper.contains("MERGE")
+                    && !upper.contains("REMOVE")
+                {
+                    return Err(format!(
+                        "MATCH query requires a RETURN clause. Add RETURN at the end, e.g.: {} RETURN *",
+                        query_str.trim()
+                    ).into());
+                }
+                return Err(e.into());
+            }
+        };
         {
             let mut cache = self.ast_cache.lock().unwrap();
             cache.put(normalized, query.clone());
@@ -413,6 +433,61 @@ impl QueryEngine {
         }
     }
 
+    /// Validate that multi-CREATE statements don't rebind variables with new labels/properties.
+    /// This runs BEFORE rewrite_multi_create so the planner can't be fooled by WITH insertion.
+    fn validate_multi_create_rebinding(input: &str) -> Result<(), Box<dyn std::error::Error>> {
+        let upper = input.to_uppercase();
+        if upper.matches("CREATE").count() <= 1 {
+            return Ok(());
+        }
+        // If there's a MATCH or WITH, let the planner handle it
+        if upper.contains("MATCH") || upper.contains("WITH") {
+            return Ok(());
+        }
+
+        // Parse the original multi-CREATE as a single query to check rebinding
+        match crate::query::parser::parse_query(input) {
+            Ok(query) => {
+                if query.create_clauses.len() > 1 {
+                    let mut all_vars: std::collections::HashMap<String, bool> =
+                        std::collections::HashMap::new();
+                    for cc in &query.create_clauses {
+                        let mut this_vars: Vec<(String, bool)> = Vec::new();
+                        for path in &cc.pattern.paths {
+                            if let Some(v) = &path.start.variable {
+                                let has_lp = !path.start.labels.is_empty()
+                                    || path.start.properties.is_some();
+                                this_vars.push((v.clone(), has_lp));
+                            }
+                            for seg in &path.segments {
+                                if let Some(v) = &seg.node.variable {
+                                    let has_lp = !seg.node.labels.is_empty()
+                                        || seg.node.properties.is_some();
+                                    this_vars.push((v.clone(), has_lp));
+                                }
+                            }
+                        }
+                        for (v, has_lp) in &this_vars {
+                            if all_vars.contains_key(v) && *has_lp {
+                                // Current CREATE adds labels/props to an already-declared var
+                                return Err(format!(
+                                    "Planning error: Variable '{}' already declared",
+                                    v
+                                )
+                                .into());
+                            }
+                        }
+                        for (v, has_lp) in this_vars {
+                            all_vars.insert(v, has_lp);
+                        }
+                    }
+                }
+                Ok(())
+            }
+            Err(_) => Ok(()), // Parse error will be caught later
+        }
+    }
+
     fn rewrite_multi_create(input: &str) -> String {
         // Regex-free approach: split on CREATE keyword boundaries (not inside quotes)
         let upper = input.to_uppercase();
@@ -589,6 +664,10 @@ impl QueryEngine {
         };
 
         for stmt in &statements {
+            // Validate cross-CREATE rebinding BEFORE rewrite (rewrite inserts WITH
+            // which hides the multi-CREATE from the planner's validation)
+            Self::validate_multi_create_rebinding(stmt)?;
+
             // Rewrite multi-CREATE to use WITH for variable sharing
             let rewritten = Self::rewrite_multi_create(stmt);
 
