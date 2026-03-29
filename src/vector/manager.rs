@@ -90,6 +90,27 @@ impl VectorIndexManager {
     }
 
     /// List all indices
+    /// Drop a vector index by name (format: "{label}_{property_key}" or by matching label/property)
+    pub fn drop_index(&self, index_name: &str) -> bool {
+        let mut indices = self.indices.write().unwrap();
+        // Try to find by generated name format: {label}_{property}
+        let key_to_remove = indices
+            .keys()
+            .find(|k| {
+                let generated_name = format!("{}_{}", k.label, k.property_key);
+                generated_name == index_name
+                    || k.label == index_name
+                    || k.property_key == index_name
+            })
+            .cloned();
+        if let Some(key) = key_to_remove {
+            indices.remove(&key);
+            true
+        } else {
+            false
+        }
+    }
+
     pub fn list_indices(&self) -> Vec<IndexKey> {
         let indices = self.indices.read().unwrap();
         indices.keys().cloned().collect()

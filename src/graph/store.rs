@@ -1677,6 +1677,12 @@ impl GraphStore {
             .create_index(label, property_key, dimensions, metric)
     }
 
+    /// Drop a vector index by name.
+    /// Returns true if the index was found and dropped, false if not found.
+    pub fn drop_vector_index(&self, index_name: &str) -> bool {
+        self.vector_index.drop_index(index_name)
+    }
+
     /// Search for nearest neighbors using a vector index
     pub fn vector_search(
         &self,
