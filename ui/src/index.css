@@ -174,6 +174,82 @@
   }
 }
 
+/* ── Cytoscape graph theme variables (light) ──────────────────────────────── */
+
+:root {
+  --th-bg: #f8fafc;
+  --th-bg-surface: #ffffff;
+  --th-bg-elevated: #f1f5f9;
+  --th-bg-input: #e2e8f0;
+  --th-border: #e2e8f0;
+  --th-border-subtle: #cbd5e1;
+  --th-text: #0f172a;
+  --th-text-2: #1e293b;
+  --th-text-muted: #64748b;
+  --th-text-faint: #94a3b8;
+  --th-text-dim: #64748b;
+  --th-dot: #cbd5e1;
+  --th-canvas-1: #e8ecf1;
+  --th-canvas-2: #f8fafc;
+  --th-overlay: rgba(241, 245, 249, 0.93);
+  --th-overlay-blur: rgba(241, 245, 249, 0.85);
+  --th-scrollbar: #cbd5e1;
+  --th-scrollbar-hover: #94a3b8;
+  --th-accent: #7c6af7;
+}
+
+.dark {
+  --th-bg: #020810;
+  --th-bg-surface: #060e1a;
+  --th-bg-elevated: #0a1120;
+  --th-bg-input: #0a1020;
+  --th-border: #0f172a;
+  --th-border-subtle: #1e293b;
+  --th-text: #e2e8f0;
+  --th-text-2: #cbd5e1;
+  --th-text-muted: #64748b;
+  --th-text-faint: #334155;
+  --th-text-dim: #475569;
+  --th-dot: #1e293b;
+  --th-canvas-1: #0d1a2e;
+  --th-canvas-2: #020810;
+  --th-overlay: rgba(10, 17, 32, 0.93);
+  --th-overlay-blur: rgba(10, 17, 32, 0.85);
+  --th-scrollbar: #1e293b;
+  --th-scrollbar-hover: #334155;
+  --th-accent: #7c6af7;
+}
+
+/* ── Rotating focus ring for selected nodes ─────────────────────────────── */
+
+@keyframes focus-ring-spin {
+  from { transform: translate(-50%, -50%) rotate(0deg); }
+  to   { transform: translate(-50%, -50%) rotate(360deg); }
+}
+
+/* ── Native colour picker ────────────────────────────────────────────────── */
+
+input[type="color"] {
+  -webkit-appearance: none;
+  appearance: none;
+  border: 1px solid var(--th-border-subtle);
+  border-radius: 4px;
+  cursor: pointer;
+  padding: 0;
+  background: transparent;
+}
+input[type="color"]::-webkit-color-swatch-wrapper {
+  padding: 1px;
+}
+input[type="color"]::-webkit-color-swatch {
+  border: none;
+  border-radius: 3px;
+}
+input[type="color"]::-moz-color-swatch {
+  border: none;
+  border-radius: 3px;
+}
+
 /* Scrollbar styling */
 ::-webkit-scrollbar { width: 8px; height: 8px; }
 ::-webkit-scrollbar-track { background: transparent; }

@@ -9,6 +9,7 @@ interface GraphState {
   selectedNodes: GraphNode[];
 
   setGraphData: (nodes: GraphNode[], edges: GraphEdge[]) => void;
+  addGraphData: (nodes: GraphNode[], edges: GraphEdge[]) => void;
   selectNode: (node: GraphNode | null) => void;
   selectEdge: (edge: GraphEdge | null) => void;
   addToSelection: (node: GraphNode) => void;
@@ -29,6 +30,27 @@ export const useGraphStore = create<GraphState>((set, get) => ({
 
   setGraphData: (nodes, edges) =>
     set({ nodes, edges, selectedNode: null, selectedEdge: null, selectedNodes: [] }),
+
+  addGraphData: (newNodes, newEdges) =>
+    set((state) => {
+      const existingNodeIds = new Set(state.nodes.map((n) => n.id));
+      const existingEdgeIds = new Set(state.edges.map((e) => e.id));
+      const mergedNodes = [...state.nodes];
+      for (const node of newNodes) {
+        if (!existingNodeIds.has(node.id)) {
+          mergedNodes.push(node);
+          existingNodeIds.add(node.id);
+        }
+      }
+      const mergedEdges = [...state.edges];
+      for (const edge of newEdges) {
+        if (!existingEdgeIds.has(edge.id)) {
+          mergedEdges.push(edge);
+          existingEdgeIds.add(edge.id);
+        }
+      }
+      return { nodes: mergedNodes, edges: mergedEdges };
+    }),
 
   selectNode: (node) =>
     set({

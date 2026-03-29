@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useCallback, useEffect } from "react";
 import {
   Play,
   Upload,
@@ -8,18 +8,21 @@ import {
   AlertCircle,
   Terminal,
   X,
+  Maximize2,
 } from "lucide-react";
 import { CypherEditor } from "@/components/editor/CypherEditor";
-import { ForceGraph } from "@/components/graph/ForceGraph";
+import { CytoscapeGraph } from "@/components/graph/CytoscapeGraph";
 import { ResultsTable } from "@/components/results/ResultsTable";
 import { ExplainPlan } from "@/components/results/ExplainPlan";
 import { PropertyInspector } from "@/components/inspector/PropertyInspector";
+import { FullscreenExplorer } from "@/components/graph/FullscreenExplorer";
 import { SavedQueries } from "@/components/editor/SavedQueries";
 import { ParamsPanel } from "@/components/editor/ParamsPanel";
 import { useQueryStore } from "@/stores/queryStore";
 import { useGraphStore } from "@/stores/graphStore";
 import { useUiStore } from "@/stores/uiStore";
-import { executeScript } from "@/api/client";
+import { useTheme } from "@/components/theme-provider";
+import { executeScript, executeQuery } from "@/api/client";
 import type { ScriptResponse } from "@/api/client";
 import { cn } from "@/lib/utils";
 
@@ -29,7 +32,6 @@ interface ScriptResult {
   errors: string[];
 }
 
-/** Format a duration in ms to the most readable unit */
 function formatDuration(ms: number): string {
   if (ms < 0.001) return `${(ms * 1_000_000).toFixed(0)} ns`;
   if (ms < 1) return `${(ms * 1_000).toFixed(1)} \u00B5s`;
@@ -42,7 +44,7 @@ export function QueryTab() {
   const currentParams = useQueryStore((s) => s.currentParams);
   const setQuery = useQueryStore((s) => s.setQuery);
   const setParams = useQueryStore((s) => s.setParams);
-  const executeQuery = useQueryStore((s) => s.executeQuery);
+  const executeQueryAction = useQueryStore((s) => s.executeQuery);
   const isExecuting = useQueryStore((s) => s.isExecuting);
   const error = useQueryStore((s) => s.error);
   const columns = useQueryStore((s) => s.columns);
@@ -54,13 +56,24 @@ export function QueryTab() {
   const selectedNode = useGraphStore((s) => s.selectedNode);
   const selectedEdge = useGraphStore((s) => s.selectedEdge);
 
+  const { theme } = useTheme();
+  const resolvedTheme =
+    theme === "system"
+      ? window.matchMedia("(prefers-color-scheme: dark)").matches
+        ? "dark"
+        : "light"
+      : (theme as "light" | "dark");
+
   const [editorHeight, setEditorHeight] = useState(200);
   const [showHistory, setShowHistory] = useState(false);
   const [showSaved, setShowSaved] = useState(false);
   const [showParams, setShowParams] = useState(false);
-  const [forceView, setForceView] = useState<'auto' | 'graph' | 'table'>('auto');
+  const [forceView, setForceView] = useState<"auto" | "graph" | "table">("auto");
   const [scriptResult, setScriptResult] = useState<ScriptResult | null>(null);
   const [lastExecutedQuery, setLastExecutedQuery] = useState("");
+  const [fullscreenOpen, setFullscreenOpen] = useState(false);
+
+  // (graph view state is in graphViewStore, CytoscapeGraph reads it directly)
 
   // Determine result type
   const hasGraphResult = nodes.length > 0;
@@ -72,14 +85,12 @@ export function QueryTab() {
   const hasError = !!error;
   const hasNoResult =
     !hasGraphResult && !hasTableResult && !hasError && !isExecuting && !lastExecutedQuery;
-
-  // Write result: show success message (only after actual execution)
   const writeSuccess = isWriteQuery && !hasError && records.length === 0 && columns.length === 0 && !isExecuting && nodes.length === 0 && lastExecutedQuery.length > 0;
 
   const handleRun = () => {
     setLastExecutedQuery(currentQuery);
     setScriptResult(null);
-    executeQuery(currentQuery);
+    executeQueryAction(currentQuery);
   };
 
   const handleUpload = () => {
@@ -97,7 +108,6 @@ export function QueryTab() {
         } else {
           setScriptResult({ success: true, executed: result.executed, errors: [] });
         }
-        // Refresh schema and stats (don't load nodes into canvas)
         try {
           const { getSchema, getStatus } = await import("@/api/client");
           const graph = useUiStore.getState().activeGraph;
@@ -105,11 +115,65 @@ export function QueryTab() {
           useUiStore.getState().setSchema(schema);
           const status = await getStatus(graph);
           useUiStore.getState().setServerInfo(status.version, status.storage.nodes, status.storage.edges);
-        } catch { /* ignore refresh errors */ }
+        } catch { /* ignore */ }
       }
     };
     input.click();
   };
+
+  // Context menu for inline graph
+  const [contextMenu, setContextMenu] = useState<{
+    x: number;
+    y: number;
+    nodeId: string | null;
+  } | null>(null);
+
+  const handleContextMenu = useCallback(
+    (x: number, y: number, nodeId: string | null) => {
+      setContextMenu({ x, y, nodeId });
+    },
+    [],
+  );
+
+  const handleExpandNeighbors = useCallback(async (nodeId: string) => {
+    setContextMenu(null);
+    try {
+      const query = `MATCH (n)-[r]-(m) WHERE id(n) = ${nodeId} RETURN n, r, m`;
+      const result = await executeQuery(query);
+      if (result.error) return;
+      useGraphStore.getState().addGraphData(result.nodes, result.edges);
+    } catch (err) {
+      console.error("Expand neighbors failed:", err);
+    }
+  }, []);
+
+  const handleViewAllRelationships = useCallback(async () => {
+    setContextMenu(null);
+    const state = useGraphStore.getState();
+    if (state.nodes.length === 0) return;
+    try {
+      const result = await executeQuery("MATCH (n)-[r]->(m) RETURN n, r, m");
+      if (result.error) return;
+      const canvasNodeIds = new Set(state.nodes.map((n) => n.id));
+      const newEdges = result.edges.filter(
+        (e) => canvasNodeIds.has(e.source) && canvasNodeIds.has(e.target),
+      );
+      useGraphStore.getState().addGraphData([], newEdges);
+    } catch (err) {
+      console.error("View all relationships failed:", err);
+    }
+  }, []);
+
+  // Close context menu
+  useEffect(() => {
+    if (!contextMenu) return;
+    const handler = () => setContextMenu(null);
+    document.addEventListener("click", handler, true);
+    return () => document.removeEventListener("click", handler, true);
+  }, [contextMenu]);
+
+  const showGraph = (forceView === "graph" || (forceView === "auto" && hasGraphResult)) &&
+    !writeSuccess && !hasError && !isExecuting && !(forceView === "auto" && !hasGraphResult);
 
   return (
     <div className="flex h-full flex-col">
@@ -173,24 +237,36 @@ export function QueryTab() {
         {(hasGraphResult || hasTableResult) && !isExecuting && (
           <div className="flex items-center gap-0.5 rounded-md border border-border p-0.5">
             <button
-              onClick={() => setForceView('auto')}
-              className={cn("rounded px-2 py-0.5 text-[10px]", forceView === 'auto' ? "bg-accent text-foreground" : "text-muted-foreground")}
+              onClick={() => setForceView("auto")}
+              className={cn("rounded px-2 py-0.5 text-[10px]", forceView === "auto" ? "bg-accent text-foreground" : "text-muted-foreground")}
             >
               Auto
             </button>
             <button
-              onClick={() => setForceView('graph')}
-              className={cn("rounded px-2 py-0.5 text-[10px]", forceView === 'graph' ? "bg-accent text-foreground" : "text-muted-foreground")}
+              onClick={() => setForceView("graph")}
+              className={cn("rounded px-2 py-0.5 text-[10px]", forceView === "graph" ? "bg-accent text-foreground" : "text-muted-foreground")}
             >
               Graph
             </button>
             <button
-              onClick={() => setForceView('table')}
-              className={cn("rounded px-2 py-0.5 text-[10px]", forceView === 'table' ? "bg-accent text-foreground" : "text-muted-foreground")}
+              onClick={() => setForceView("table")}
+              className={cn("rounded px-2 py-0.5 text-[10px]", forceView === "table" ? "bg-accent text-foreground" : "text-muted-foreground")}
             >
               Table
             </button>
           </div>
+        )}
+
+        {/* Fullscreen button */}
+        {hasGraphResult && !isExecuting && (
+          <button
+            onClick={() => setFullscreenOpen(true)}
+            className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            title="Expand to fullscreen"
+          >
+            <Maximize2 className="h-3 w-3" />
+            Fullscreen
+          </button>
         )}
 
         <div className="flex-1" />
@@ -244,10 +320,7 @@ export function QueryTab() {
 
       {/* Parameters panel */}
       {showParams && (
-        <ParamsPanel
-          value={currentParams}
-          onChange={setParams}
-        />
+        <ParamsPanel value={currentParams} onChange={setParams} />
       )}
 
       {/* Results area */}
@@ -268,11 +341,8 @@ export function QueryTab() {
                   <div className="min-w-0">
                     <h3 className="mb-2 font-semibold text-destructive">Query Error</h3>
                     {(() => {
-                      // Parse error message for better display
                       let msg = error || "";
                       try { const parsed = JSON.parse(msg); msg = parsed.error || msg; } catch { /* not JSON */ }
-
-                      // Extract error type and details
                       const parseMatch = msg.match(/^(Parse error|Type error|Runtime error|Semantic error|Planning error|Variable not found|Constraint violation):\s*(.*)/s);
                       if (parseMatch) {
                         const [, errorType, details] = parseMatch;
@@ -298,58 +368,90 @@ export function QueryTab() {
                   <Check className="mt-0.5 h-5 w-5 shrink-0 text-emerald-500" />
                   <div>
                     <h3 className="mb-2 font-semibold text-foreground">Query Executed Successfully</h3>
-                {writeStats ? (
-                  <div className="space-y-1.5 text-sm">
-                    {writeStats.nodes_created > 0 && (
-                      <div className="flex items-center gap-2">
-                        <span className="inline-block h-2 w-2 rounded-full bg-emerald-500" />
-                        <span className="text-foreground">Created <strong>{writeStats.nodes_created}</strong> node{writeStats.nodes_created !== 1 ? 's' : ''}</span>
+                    {writeStats ? (
+                      <div className="space-y-1.5 text-sm">
+                        {writeStats.nodes_created > 0 && (
+                          <div className="flex items-center gap-2">
+                            <span className="inline-block h-2 w-2 rounded-full bg-emerald-500" />
+                            <span className="text-foreground">Created <strong>{writeStats.nodes_created}</strong> node{writeStats.nodes_created !== 1 ? "s" : ""}</span>
+                          </div>
+                        )}
+                        {writeStats.edges_created > 0 && (
+                          <div className="flex items-center gap-2">
+                            <span className="inline-block h-2 w-2 rounded-full bg-emerald-500" />
+                            <span className="text-foreground">Created <strong>{writeStats.edges_created}</strong> relationship{writeStats.edges_created !== 1 ? "s" : ""}</span>
+                          </div>
+                        )}
+                        {writeStats.nodes_deleted > 0 && (
+                          <div className="flex items-center gap-2">
+                            <span className="inline-block h-2 w-2 rounded-full bg-red-400" />
+                            <span className="text-foreground">Deleted <strong>{writeStats.nodes_deleted}</strong> node{writeStats.nodes_deleted !== 1 ? "s" : ""}</span>
+                          </div>
+                        )}
+                        {writeStats.edges_deleted > 0 && (
+                          <div className="flex items-center gap-2">
+                            <span className="inline-block h-2 w-2 rounded-full bg-red-400" />
+                            <span className="text-foreground">Deleted <strong>{writeStats.edges_deleted}</strong> relationship{writeStats.edges_deleted !== 1 ? "s" : ""}</span>
+                          </div>
+                        )}
+                        {writeStats.nodes_created === 0 && writeStats.edges_created === 0 && writeStats.nodes_deleted === 0 && writeStats.edges_deleted === 0 && (
+                          <p className="text-muted-foreground">No changes made</p>
+                        )}
+                        <div className="mt-2 rounded bg-background/50 px-3 py-1.5 text-xs text-muted-foreground">
+                          Database: <strong>{writeStats.total_nodes}</strong> nodes, <strong>{writeStats.total_edges}</strong> relationships
+                        </div>
                       </div>
+                    ) : (
+                      <p className="text-sm text-muted-foreground">
+                        {useUiStore.getState().nodeCount} nodes,{" "}
+                        {useUiStore.getState().edgeCount} edges in database
+                      </p>
                     )}
-                    {writeStats.edges_created > 0 && (
-                      <div className="flex items-center gap-2">
-                        <span className="inline-block h-2 w-2 rounded-full bg-emerald-500" />
-                        <span className="text-foreground">Created <strong>{writeStats.edges_created}</strong> relationship{writeStats.edges_created !== 1 ? 's' : ''}</span>
-                      </div>
-                    )}
-                    {writeStats.nodes_deleted > 0 && (
-                      <div className="flex items-center gap-2">
-                        <span className="inline-block h-2 w-2 rounded-full bg-red-400" />
-                        <span className="text-foreground">Deleted <strong>{writeStats.nodes_deleted}</strong> node{writeStats.nodes_deleted !== 1 ? 's' : ''}</span>
-                      </div>
-                    )}
-                    {writeStats.edges_deleted > 0 && (
-                      <div className="flex items-center gap-2">
-                        <span className="inline-block h-2 w-2 rounded-full bg-red-400" />
-                        <span className="text-foreground">Deleted <strong>{writeStats.edges_deleted}</strong> relationship{writeStats.edges_deleted !== 1 ? 's' : ''}</span>
-                      </div>
-                    )}
-                    {writeStats.nodes_created === 0 && writeStats.edges_created === 0 && writeStats.nodes_deleted === 0 && writeStats.edges_deleted === 0 && (
-                      <p className="text-muted-foreground">No changes made</p>
-                    )}
-                    <div className="mt-2 rounded bg-background/50 px-3 py-1.5 text-xs text-muted-foreground">
-                      Database: <strong>{writeStats.total_nodes}</strong> nodes, <strong>{writeStats.total_edges}</strong> relationships
-                    </div>
-                  </div>
-                ) : (
-                  <p className="text-sm text-muted-foreground">
-                    {useUiStore.getState().nodeCount} nodes,{" "}
-                    {useUiStore.getState().edgeCount} edges in database
-                  </p>
-                )}
                   </div>
                 </div>
               </div>
             </div>
           )}
 
-          {(forceView === 'graph' || (forceView === 'auto' && hasGraphResult)) &&
-            !writeSuccess &&
-            !hasError &&
-            !isExecuting &&
-            !(forceView === 'auto' && !hasGraphResult) && <ForceGraph />}
+          {showGraph && (
+            <div
+              className="relative h-full w-full"
+              style={{
+                background: "radial-gradient(ellipse at 30% 40%, var(--th-canvas-1) 0%, var(--th-canvas-2) 70%)",
+                ...(fullscreenOpen ? { position: "fixed", inset: 0, zIndex: 51, height: "100vh", width: "100vw" } : {}),
+              }}
+            >
+              {/* Dot grid */}
+              <div style={{ position: "absolute", inset: 0, pointerEvents: "none",
+                backgroundImage: "radial-gradient(circle, var(--th-dot) 1px, transparent 1px)",
+                backgroundSize: "32px 32px", opacity: 0.4, zIndex: 0 }} />
+              <CytoscapeGraph
+                resolvedTheme={resolvedTheme}
+                onContextMenu={handleContextMenu}
+              />
+              {/* Floating fullscreen button on canvas */}
+              {!fullscreenOpen && (
+                <button
+                  onClick={() => setFullscreenOpen(true)}
+                  title="Expand to fullscreen"
+                  style={{
+                    position: "absolute", top: 12, right: 12, zIndex: 20,
+                    width: 32, height: 32, borderRadius: 6,
+                    border: "1px solid var(--th-border-subtle)",
+                    background: "var(--th-overlay-blur)",
+                    backdropFilter: "blur(8px)", WebkitBackdropFilter: "blur(8px)",
+                    color: "var(--th-text-muted)", cursor: "pointer",
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    fontSize: 14, transition: "background-color 0.2s, border-color 0.2s",
+                  }}
+                >
+                  ⛶
+                </button>
+              )}
+            </div>
+          )}
 
-          {(forceView === 'table' || (forceView === 'auto' && hasTableResult && !hasGraphResult)) &&
+          {(forceView === "table" || (forceView === "auto" && hasTableResult && !hasGraphResult)) &&
             !writeSuccess &&
             !hasError &&
             !isExecuting &&
@@ -436,9 +538,7 @@ export function QueryTab() {
               <div className="text-center">
                 <Terminal className="mx-auto mb-3 h-10 w-10 opacity-20" />
                 <p className="text-sm">Run a query to see results</p>
-                <p className="mt-1 text-xs opacity-60">
-                  Ctrl+Enter to execute
-                </p>
+                <p className="mt-1 text-xs opacity-60">Ctrl+Enter to execute</p>
               </div>
             </div>
           )}
@@ -458,9 +558,41 @@ export function QueryTab() {
               <PropertyInspector />
             </div>
           )}
+
+          {/* Context menu for inline graph */}
+          {contextMenu && (
+            <div
+              className="fixed z-[60] min-w-[200px] bg-popover text-popover-foreground border rounded-md shadow-md py-1"
+              style={{ left: contextMenu.x, top: contextMenu.y }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              {contextMenu.nodeId && (
+                <>
+                  <div className="px-3 py-1 text-[10px] font-medium text-muted-foreground uppercase tracking-wider">
+                    Node actions
+                  </div>
+                  <button
+                    type="button"
+                    className="w-full text-left px-3 py-1.5 text-sm hover:bg-accent hover:text-accent-foreground transition-colors"
+                    onClick={() => handleExpandNeighbors(contextMenu.nodeId!)}
+                  >
+                    Expand Neighbors
+                  </button>
+                  <div className="my-1 border-t border-border" />
+                </>
+              )}
+              <button
+                type="button"
+                className="w-full text-left px-3 py-1.5 text-sm hover:bg-accent hover:text-accent-foreground transition-colors"
+                onClick={() => handleViewAllRelationships()}
+              >
+                Load All Relationships
+              </button>
+            </div>
+          )}
         </div>
 
-        {/* History/Saved sidebar (collapsible) */}
+        {/* History/Saved sidebar */}
         {(showHistory || showSaved) && (
           <div className="w-64 shrink-0 overflow-auto border-l border-border bg-card">
             {showHistory && <HistoryPanel />}
@@ -468,6 +600,12 @@ export function QueryTab() {
           </div>
         )}
       </div>
+
+      {/* Fullscreen explorer */}
+      <FullscreenExplorer
+        open={fullscreenOpen}
+        onClose={() => setFullscreenOpen(false)}
+      />
     </div>
   );
 }
@@ -477,7 +615,7 @@ function HistoryPanel() {
   const history = useQueryStore((s) => s.history);
   const setQuery = useQueryStore((s) => s.setQuery);
   const executeQuery = useQueryStore((s) => s.executeQuery);
-  const clearHistory = useQueryStore((s) => s.clearHistory);
+  const deleteHistoryEntry = useQueryStore((s) => s.deleteHistoryEntry);
 
   return (
     <div className="p-2">
@@ -485,14 +623,6 @@ function HistoryPanel() {
         <span className="text-xs font-medium text-muted-foreground">
           History ({history.length})
         </span>
-        {history.length > 0 && (
-          <button
-            onClick={clearHistory}
-            className="text-[10px] text-muted-foreground hover:text-destructive"
-          >
-            Clear
-          </button>
-        )}
       </div>
       {history.length === 0 && (
         <p className="text-xs text-muted-foreground">No history yet</p>
@@ -521,6 +651,16 @@ function HistoryPanel() {
               }}
             >
               Run
+            </button>
+            <button
+              className="text-[10px] text-muted-foreground opacity-0 group-hover:opacity-100 hover:text-destructive"
+              onClick={(e) => {
+                e.stopPropagation();
+                deleteHistoryEntry(entry.timestamp);
+              }}
+              title="Delete"
+            >
+              <X className="h-3 w-3" />
             </button>
           </div>
         </div>

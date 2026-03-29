@@ -3,7 +3,7 @@ import type { SchemaResponse } from "../types/api";
 
 type ConnectionStatus = "connected" | "disconnected" | "checking";
 
-type ActiveTab = "query" | "explore" | "nlq" | "schema" | "admin" | "settings";
+type ActiveTab = "query" | "nlq" | "schema" | "admin" | "settings";
 type ResultView = "auto" | "graph" | "table";
 
 interface UiState {

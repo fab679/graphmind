@@ -1,764 +1,257 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  ChevronDown,
-  ChevronRight,
-  Download,
-  Highlighter,
-  LayoutGrid,
-  Maximize,
-  Route,
-  Search,
-  X,
-  ZoomIn,
-  ZoomOut,
-} from "lucide-react";
+import { createPortal } from "react-dom";
 import { useGraphStore } from "@/stores/graphStore";
-import { useGraphSettingsStore } from "@/stores/graphSettingsStore";
 import { useQueryStore } from "@/stores/queryStore";
-import { getCustomColorForLabel, getCustomEdgeColor } from "@/lib/colors";
-import { NODE_ICON_CATALOG } from "@/lib/icons";
-import { ForceGraph } from "@/components/graph/ForceGraph";
-import type { ForceGraphHandle } from "@/components/graph/ForceGraph";
+import { useGraphViewStore } from "@/stores/graphViewStore";
+import { getNodeCaption } from "@/lib/colors";
+import { LegendPanel } from "@/components/graph/LegendPanel";
 import { PropertyInspector } from "@/components/inspector/PropertyInspector";
-
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
+import { executeQuery } from "@/api/client";
 
 interface FullscreenExplorerProps {
   open: boolean;
   onClose: () => void;
 }
 
-// ---------------------------------------------------------------------------
-// Preset color palette (matches SchemaBrowser)
-// ---------------------------------------------------------------------------
-
-const PRESET_COLORS = [
-  "#6366f1",
-  "#3b82f6",
-  "#10b981",
-  "#f59e0b",
-  "#ef4444",
-  "#8b5cf6",
-  "#ec4899",
-  "#14b8a6",
-  "#f97316",
-  "#06b6d4",
-  "#84cc16",
-  "#64748b",
-];
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function isDark(): boolean {
-  return document.documentElement.classList.contains("dark");
-}
-
-function glassStyle(): React.CSSProperties {
-  return isDark()
-    ? {
-        background: "rgba(20, 20, 30, 0.8)",
-        backdropFilter: "blur(12px)",
-        border: "1px solid rgba(255, 255, 255, 0.1)",
-      }
-    : {
-        background: "rgba(255, 255, 255, 0.8)",
-        backdropFilter: "blur(12px)",
-        border: "1px solid rgba(0, 0, 0, 0.1)",
-      };
-}
-
 function triggerDownload(url: string, filename: string) {
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = filename;
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
+  const a = document.createElement("a"); a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+}
+
+function isDark() { return document.documentElement.classList.contains("dark"); }
+
+function IconButton({ icon, tip, active = false, color, onClick }: {
+  icon: string; tip: string; active?: boolean; color?: string; onClick: () => void;
+}) {
+  const ac = color ?? "var(--th-accent)";
+  return (
+    <button onClick={onClick} title={tip} style={{
+      width: 28, height: 28, borderRadius: 5,
+      border: active ? `1px solid ${ac}` : "1px solid transparent",
+      background: active ? `color-mix(in srgb, ${ac} 15%, transparent)` : "transparent",
+      color: active ? ac : "var(--th-text-muted)",
+      cursor: "pointer", fontSize: 13, display: "flex", alignItems: "center", justifyContent: "center",
+      padding: 0, transition: "all 0.12s",
+    }}>{icon}</button>
+  );
 }
 
 function exportPNG() {
-  const canvas = document.querySelector(
-    "[data-fullscreen-explorer] canvas",
-  ) as HTMLCanvasElement | null;
-  if (!canvas) return;
-  const exportCanvas = document.createElement("canvas");
-  exportCanvas.width = canvas.width;
-  exportCanvas.height = canvas.height;
-  const ctx = exportCanvas.getContext("2d");
-  if (!ctx) return;
-  ctx.fillStyle = isDark() ? "#0a0f1a" : "#ffffff";
-  ctx.fillRect(0, 0, exportCanvas.width, exportCanvas.height);
-  ctx.drawImage(canvas, 0, 0);
-  triggerDownload(exportCanvas.toDataURL("image/png"), "graphmind-export.png");
+  const c = document.querySelector("canvas") as HTMLCanvasElement | null; if (!c) return;
+  const e = document.createElement("canvas"); e.width = c.width; e.height = c.height;
+  const ctx = e.getContext("2d"); if (!ctx) return;
+  ctx.fillStyle = isDark() ? "#020810" : "#f8fafc"; ctx.fillRect(0, 0, e.width, e.height); ctx.drawImage(c, 0, 0);
+  triggerDownload(e.toDataURL("image/png"), "graphmind-export.png");
 }
-
 function exportCSV() {
-  const { columns, records } = useQueryStore.getState();
-  if (columns.length === 0) return;
-
-  const header = columns.join(",");
-  const rows = records.map((row) =>
-    row
-      .map((cell) => {
-        const str = String(cell ?? "");
-        return str.includes(",") || str.includes('"')
-          ? `"${str.replace(/"/g, '""')}"`
-          : str;
-      })
-      .join(","),
-  );
-  const csv = [header, ...rows].join("\n");
-  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-  triggerDownload(URL.createObjectURL(blob), "graphmind-export.csv");
+  const { columns, records } = useQueryStore.getState(); if (!columns.length) return;
+  const csv = [columns.join(","), ...records.map((r) => r.map((c) => { const s = String(c ?? ""); return s.includes(",") || s.includes('"') ? `"${s.replace(/"/g, '""')}"` : s; }).join(","))].join("\n");
+  triggerDownload(URL.createObjectURL(new Blob([csv], { type: "text/csv" })), "graphmind-export.csv");
 }
-
 function exportJSON() {
   const { nodes, edges } = useGraphStore.getState();
-  const json = JSON.stringify({ nodes, edges }, null, 2);
-  const blob = new Blob([json], { type: "application/json" });
-  triggerDownload(URL.createObjectURL(blob), "graphmind-export.json");
+  triggerDownload(URL.createObjectURL(new Blob([JSON.stringify({ nodes, edges }, null, 2)], { type: "application/json" })), "graphmind-export.json");
 }
-
-// ---------------------------------------------------------------------------
-// InlineColorPicker
-// ---------------------------------------------------------------------------
-
-function InlineColorPicker({
-  currentColor,
-  onSelect,
-}: {
-  currentColor: string;
-  onSelect: (color: string) => void;
-}) {
-  return (
-    <div className="flex flex-wrap gap-1 p-1.5">
-      {PRESET_COLORS.map((color) => (
-        <button
-          key={color}
-          type="button"
-          className={`h-4 w-4 rounded-sm transition-transform hover:scale-110 ${
-            currentColor === color
-              ? "ring-2 ring-white/70 ring-offset-1 ring-offset-transparent"
-              : ""
-          }`}
-          style={{ backgroundColor: color }}
-          onClick={() => onSelect(color)}
-          title={color}
-        />
-      ))}
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Floating Legend Panel
-// ---------------------------------------------------------------------------
-
-function FloatingLegend() {
-  const nodes = useGraphStore((s) => s.nodes);
-  const edges = useGraphStore((s) => s.edges);
-  const setLabelColor = useGraphSettingsStore((s) => s.setLabelColor);
-  const setEdgeColor = useGraphSettingsStore((s) => s.setEdgeColor);
-  const labelIcons = useGraphSettingsStore((s) => s.labelIcons);
-  const setLabelIcon = useGraphSettingsStore((s) => s.setLabelIcon);
-  const resetLabelIcon = useGraphSettingsStore((s) => s.resetLabelIcon);
-
-  const [collapsed, setCollapsed] = useState(false);
-  const [pickerTarget, setPickerTarget] = useState<{
-    kind: "label" | "edge" | "icon";
-    name: string;
-  } | null>(null);
-
-  const labelCounts = useMemo(() => {
-    const map = new Map<string, number>();
-    for (const node of nodes) {
-      const label = node.labels[0] ?? "Node";
-      map.set(label, (map.get(label) ?? 0) + 1);
-    }
-    return Array.from(map.entries()).sort((a, b) => b[1] - a[1]);
-  }, [nodes]);
-
-  const edgeTypeCounts = useMemo(() => {
-    const map = new Map<string, number>();
-    for (const edge of edges) {
-      map.set(edge.type, (map.get(edge.type) ?? 0) + 1);
-    }
-    return Array.from(map.entries()).sort((a, b) => b[1] - a[1]);
-  }, [edges]);
-
-  if (nodes.length === 0 && edges.length === 0) return null;
-
-  return (
-    <div
-      className="rounded-xl shadow-lg w-full"
-      style={glassStyle()}
-    >
-      {/* Toggle header */}
-      <button
-        type="button"
-        onClick={() => setCollapsed((prev) => !prev)}
-        className="flex items-center gap-1.5 w-full px-3 py-2 text-xs font-semibold text-foreground/80 hover:text-foreground transition-colors"
-      >
-        {collapsed ? (
-          <ChevronRight className="h-3 w-3" />
-        ) : (
-          <ChevronDown className="h-3 w-3" />
-        )}
-        Legend
-      </button>
-
-      {!collapsed && (
-        <div className="max-h-[60vh] overflow-y-auto px-3 pb-3">
-          {/* Node labels */}
-          {labelCounts.length > 0 && (
-            <>
-              <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mb-1">
-                Node Labels
-              </div>
-              {labelCounts.map(([label, count]) => {
-                const color = getCustomColorForLabel(label);
-                const iconName = labelIcons[label];
-                const icon = iconName ? NODE_ICON_CATALOG.find((i) => i.name === iconName) : null;
-                return (
-                  <div key={label} className="rounded-md hover:bg-accent/20 transition-colors">
-                    <div className="flex items-center gap-1.5 px-1.5 py-1">
-                      {/* Color swatch */}
-                      <button
-                        type="button"
-                        className="h-3.5 w-3.5 rounded-full flex-shrink-0 ring-1 ring-black/10 hover:ring-2 hover:ring-primary/50 transition-all"
-                        style={{ backgroundColor: color }}
-                        onClick={() =>
-                          setPickerTarget(
-                            pickerTarget?.kind === "label" && pickerTarget.name === label
-                              ? null
-                              : { kind: "label", name: label },
-                          )
-                        }
-                        title="Change color"
-                      />
-                      {/* Icon button */}
-                      <button
-                        type="button"
-                        className="h-5 w-5 flex-shrink-0 flex items-center justify-center rounded hover:bg-accent/40 transition-colors"
-                        onClick={() =>
-                          setPickerTarget(
-                            pickerTarget?.kind === "icon" && pickerTarget.name === label
-                              ? null
-                              : { kind: "icon", name: label },
-                          )
-                        }
-                        title="Change icon"
-                      >
-                        {icon && icon.path ? (
-                          <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" style={{ color }}>
-                            <path d={icon.path} fill="currentColor" />
-                          </svg>
-                        ) : (
-                          <div className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: color, opacity: 0.5 }} />
-                        )}
-                      </button>
-                      <span className="flex-1 text-xs font-medium text-foreground/90 truncate">
-                        {label}
-                      </span>
-                      <span className="text-[10px] font-mono text-muted-foreground tabular-nums bg-muted/50 px-1.5 py-0.5 rounded">
-                        {count}
-                      </span>
-                    </div>
-                    {/* Color picker */}
-                    {pickerTarget?.kind === "label" && pickerTarget.name === label && (
-                      <div className="mt-1">
-                        <InlineColorPicker
-                          currentColor={color}
-                          onSelect={(c) => {
-                            setLabelColor(label, c);
-                            setPickerTarget(null);
-                          }}
-                        />
-                      </div>
-                    )}
-                    {/* Icon picker */}
-                    {pickerTarget?.kind === "icon" && pickerTarget.name === label && (
-                      <div className="mt-1.5 p-2 rounded-lg border border-border/50 bg-card/80 max-h-[300px] overflow-y-auto">
-                        {(() => {
-                          const categories = [...new Set(NODE_ICON_CATALOG.filter(ic => ic.path).map(ic => ic.category))];
-                          return categories.map((cat) => (
-                            <div key={cat} className="mb-2 last:mb-0">
-                              <div className="text-[9px] font-semibold text-muted-foreground uppercase tracking-wider mb-0.5">{cat}</div>
-                              <div className="grid grid-cols-7 gap-0.5">
-                                {NODE_ICON_CATALOG.filter(ic => ic.category === cat && ic.path).map((ic) => (
-                                  <button
-                                    key={ic.name}
-                                    type="button"
-                                    className={`h-6 w-6 flex items-center justify-center rounded transition-colors ${
-                                      iconName === ic.name
-                                        ? "bg-primary text-primary-foreground ring-1 ring-primary"
-                                        : "hover:bg-accent text-foreground/60 hover:text-foreground"
-                                    }`}
-                                    onClick={() => { setLabelIcon(label, ic.name); setPickerTarget(null); }}
-                                    title={ic.name}
-                                  >
-                                    <svg viewBox="0 0 24 24" className="h-3.5 w-3.5"><path d={ic.path} fill="currentColor" /></svg>
-                                  </button>
-                                ))}
-                              </div>
-                            </div>
-                          ));
-                        })()}
-                        <div className="border-t border-border/30 mt-1.5 pt-1.5">
-                          <button
-                            type="button"
-                            className="w-full text-center text-[10px] text-muted-foreground hover:text-foreground transition-colors py-0.5"
-                            onClick={() => { resetLabelIcon(label); setPickerTarget(null); }}
-                          >
-                            Reset to default circle
-                          </button>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </>
-          )}
-
-          {/* Edge types */}
-          {edgeTypeCounts.length > 0 && (
-            <>
-              <div className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mt-3 mb-1">
-                Edge Types
-              </div>
-              {edgeTypeCounts.map(([edgeType, count]) => {
-                const color = getCustomEdgeColor(edgeType);
-                return (
-                  <div key={edgeType} className="py-0.5">
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        className="h-3 w-3 rounded-full flex-shrink-0 hover:ring-2 hover:ring-white/40 transition"
-                        style={{ backgroundColor: color }}
-                        onClick={() =>
-                          setPickerTarget(
-                            pickerTarget?.kind === "edge" &&
-                              pickerTarget.name === edgeType
-                              ? null
-                              : { kind: "edge", name: edgeType },
-                          )
-                        }
-                        title="Change color"
-                      />
-                      <span className="flex-1 text-xs text-foreground/80 truncate">
-                        {edgeType}
-                      </span>
-                      <span className="text-[10px] text-muted-foreground tabular-nums">
-                        {count}
-                      </span>
-                    </div>
-                    {pickerTarget?.kind === "edge" &&
-                      pickerTarget.name === edgeType && (
-                        <div className="mt-1">
-                          <InlineColorPicker
-                            currentColor={color}
-                            onSelect={(c) => {
-                              setEdgeColor(edgeType, c);
-                              setPickerTarget(null);
-                            }}
-                          />
-                        </div>
-                      )}
-                  </div>
-                );
-              })}
-            </>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Floating Search Bar
-// ---------------------------------------------------------------------------
-
-function FloatingSearch({
-  searchText,
-  onSearchChange,
-  matchCount,
-  totalCount,
-}: {
-  searchText: string;
-  onSearchChange: (value: string) => void;
-  matchCount: number | null;
-  totalCount: number;
-}) {
-  return (
-    <div
-      className="rounded-xl shadow-lg flex items-center gap-2 px-3 py-2 w-full"
-      style={glassStyle()}
-    >
-      <Search className="h-4 w-4 text-muted-foreground flex-shrink-0" />
-      <input
-        type="text"
-        value={searchText}
-        onChange={(e) => onSearchChange(e.target.value)}
-        placeholder="Search nodes..."
-        className="flex-1 bg-transparent text-sm text-foreground placeholder:text-muted-foreground focus:outline-none min-w-0"
-      />
-      {matchCount !== null && (
-        <span className="text-[10px] text-muted-foreground whitespace-nowrap tabular-nums">
-          {matchCount}/{totalCount}
-        </span>
-      )}
-      {searchText && (
-        <button
-          type="button"
-          onClick={() => onSearchChange("")}
-          className="text-muted-foreground hover:text-foreground transition-colors"
-          title="Clear search"
-        >
-          <X className="h-3.5 w-3.5" />
-        </button>
-      )}
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Minimap
-// ---------------------------------------------------------------------------
-
-function Minimap() {
-  const nodes = useGraphStore((s) => s.nodes);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-
-  useEffect(() => {
-    const minimapCanvas = canvasRef.current;
-    if (!minimapCanvas) return;
-    const ctx = minimapCanvas.getContext("2d");
-    if (!ctx) return;
-
-    let animId = 0;
-    let stopped = false;
-
-    function snapshot() {
-      if (stopped || !ctx || !minimapCanvas) return;
-
-      // Find the main ForceGraph canvas in the DOM
-      const container = minimapCanvas.closest("[data-fullscreen-explorer]");
-      const mainCanvas = container?.querySelector(
-        'canvas:not([data-minimap])',
-      ) as HTMLCanvasElement | null;
-
-      ctx.clearRect(0, 0, 150, 100);
-
-      if (mainCanvas && mainCanvas.width > 0 && mainCanvas.height > 0) {
-        // Scale the main canvas into the minimap
-        ctx.drawImage(mainCanvas, 0, 0, 150, 100);
-
-        // Draw viewport rectangle
-        ctx.strokeStyle = isDark()
-          ? "rgba(255,255,255,0.6)"
-          : "rgba(0,0,0,0.5)";
-        ctx.lineWidth = 1;
-        ctx.strokeRect(20, 15, 110, 70);
-      }
-
-      animId = window.setTimeout(() => {
-        if (!stopped) snapshot();
-      }, 500);
-    }
-
-    snapshot();
-
-    return () => {
-      stopped = true;
-      clearTimeout(animId);
-    };
-  }, [nodes]);
-
-  return (
-    <div
-      className="absolute bottom-3 right-3 rounded-xl shadow-lg overflow-hidden"
-      style={glassStyle()}
-    >
-      <canvas
-        ref={canvasRef}
-        data-minimap
-        width={150}
-        height={100}
-        className="block"
-        style={{ width: 150, height: 100 }}
-      />
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Toolbar button
-// ---------------------------------------------------------------------------
-
-function ToolbarButton({
-  title,
-  active = false,
-  onClick,
-  children,
-}: {
-  title: string;
-  active?: boolean;
-  onClick: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      title={title}
-      className={`rounded-md p-1.5 transition-colors ${
-        active
-          ? "bg-primary text-primary-foreground"
-          : "text-foreground/70 hover:text-foreground hover:bg-foreground/10"
-      }`}
-    >
-      {children}
-    </button>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// FullscreenExplorer
-// ---------------------------------------------------------------------------
 
 export function FullscreenExplorer({ open, onClose }: FullscreenExplorerProps) {
   const nodes = useGraphStore((s) => s.nodes);
   const selectedNode = useGraphStore((s) => s.selectedNode);
   const selectedEdge = useGraphStore((s) => s.selectedEdge);
 
-  const highlightMode = useGraphSettingsStore((s) => s.highlightMode);
-  const toggleHighlightMode = useGraphSettingsStore(
-    (s) => s.toggleHighlightMode,
-  );
+  // Read/write shared view store
+  const layout = useGraphViewStore((s) => s.layout);
+  const triggerLayout = useGraphViewStore((s) => s.triggerLayout);
+  const triggerFit = useGraphViewStore((s) => s.triggerFit);
+  const searchQuery = useGraphViewStore((s) => s.searchQuery);
+  const setSearchQuery = useGraphViewStore((s) => s.setSearchQuery);
+  const focusedLabels = useGraphViewStore((s) => s.focusedLabels);
+  const toggleFocusLabel = useGraphViewStore((s) => s.toggleFocusLabel);
+  const incremental = useGraphViewStore((s) => s.incremental);
+  const toggleIncremental = useGraphViewStore((s) => s.toggleIncremental);
+  const pathMode = useGraphViewStore((s) => s.pathMode);
+  const pathSource = useGraphViewStore((s) => s.pathSource);
+  const pathTarget = useGraphViewStore((s) => s.pathTarget);
+  const pathResult = useGraphViewStore((s) => s.pathResult);
+  const togglePathMode = useGraphViewStore((s) => s.togglePathMode);
 
-  const [searchText, setSearchText] = useState("");
+  const [showLegend, setShowLegend] = useState(true);
   const [exportOpen, setExportOpen] = useState(false);
-
   const exportRef = useRef<HTMLDivElement>(null);
-  const layoutRef = useRef<HTMLDivElement>(null);
-  const graphRef = useRef<ForceGraphHandle>(null);
-  const [layoutOpen, setLayoutOpen] = useState(false);
-  const [currentLayout, setCurrentLayout] = useState("force");
-  const [spMode, setSpMode] = useState(false);
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; nodeId: string | null } | null>(null);
 
-  // Compute search match count
-  const matchCount = useMemo(() => {
-    if (!searchText.trim()) return null;
-    const lower = searchText.toLowerCase();
-    let count = 0;
-    for (const node of nodes) {
-      const values = Object.values(node.properties);
-      const matches = values.some((v) =>
-        String(v ?? "")
-          .toLowerCase()
-          .includes(lower),
-      );
-      if (matches) count++;
-    }
-    return count;
-  }, [searchText, nodes]);
+  // Debounced search for display
+  const [localSearch, setLocalSearch] = useState("");
+  useEffect(() => { const t = setTimeout(() => setSearchQuery(localSearch), 300); return () => clearTimeout(t); }, [localSearch, setSearchQuery]);
+  // Sync local on open
+  useEffect(() => { if (open) setLocalSearch(searchQuery); }, [open, searchQuery]);
 
   // Close on Escape
   useEffect(() => {
     if (!open) return;
-    function handleKey(e: KeyboardEvent) {
-      if (e.key === "Escape") onClose();
-    }
-    document.addEventListener("keydown", handleKey);
-    return () => document.removeEventListener("keydown", handleKey);
-  }, [open, onClose]);
+    const h = (e: KeyboardEvent) => { if (e.key === "Escape") { if (contextMenu) setContextMenu(null); else onClose(); } };
+    document.addEventListener("keydown", h); return () => document.removeEventListener("keydown", h);
+  }, [open, onClose, contextMenu]);
 
-  // Auto-fit graph when fullscreen opens (after canvas has time to resize)
+  // Close dropdowns
   useEffect(() => {
-    if (!open) return;
-    const timer = setTimeout(() => {
-      graphRef.current?.fitToScreen();
-    }, 200);
-    return () => clearTimeout(timer);
-  }, [open]);
+    if (!exportOpen && !contextMenu) return;
+    const h = () => { setExportOpen(false); setContextMenu(null); };
+    document.addEventListener("click", h, true); return () => document.removeEventListener("click", h, true);
+  }, [exportOpen, contextMenu]);
 
-  // Close export dropdown on outside click
-  useEffect(() => {
-    if (!exportOpen && !layoutOpen) return;
-    function handleClick(e: MouseEvent) {
-      if (exportOpen && exportRef.current && !exportRef.current.contains(e.target as Node)) {
-        setExportOpen(false);
-      }
-      if (layoutOpen && layoutRef.current && !layoutRef.current.contains(e.target as Node)) {
-        setLayoutOpen(false);
-      }
-    }
-    document.addEventListener("click", handleClick, true);
-    return () => document.removeEventListener("click", handleClick, true);
-  }, [exportOpen, layoutOpen]);
+  const searchMatchCount = useMemo(() => {
+    const q = localSearch.trim().toLowerCase(); if (!q) return null;
+    return nodes.filter((n) => Object.values(n.properties).some((v) => typeof v === "string" && v.toLowerCase().includes(q))).length;
+  }, [localSearch, nodes]);
 
-  const handleSearchChange = useCallback((value: string) => {
-    setSearchText(value);
+  const handleExpandNeighbors = useCallback(async (nodeId: string) => {
+    setContextMenu(null);
+    try {
+      const r = await executeQuery(`MATCH (n)-[r]-(m) WHERE id(n) = ${nodeId} RETURN n, r, m`);
+      if (r.error) return;
+      useGraphViewStore.getState().setIncremental(true);
+      useGraphStore.getState().addGraphData(r.nodes, r.edges);
+    } catch {}
   }, []);
+
+  const handleViewAllRelationships = useCallback(async () => {
+    setContextMenu(null);
+    const state = useGraphStore.getState(); if (state.nodes.length === 0) return;
+    try {
+      const r = await executeQuery("MATCH (n)-[r]->(m) RETURN n, r, m"); if (r.error) return;
+      const ids = new Set(state.nodes.map((n) => n.id));
+      useGraphViewStore.getState().setIncremental(true);
+      useGraphStore.getState().addGraphData([], r.edges.filter((e) => ids.has(e.source) && ids.has(e.target)));
+    } catch {}
+  }, []);
+
+  const nodeLabel = useCallback((id: string | null) => {
+    if (!id) return ""; const f = nodes.find((n) => n.id === id); if (!f) return id;
+    return getNodeCaption(f.labels[0] ?? "Node", f.properties);
+  }, [nodes]);
 
   if (!open) return null;
 
-  return (
-    <div
-      className="fixed inset-0 z-50 bg-background flex flex-col"
-      data-fullscreen-explorer
-    >
-      {/* Top bar */}
-      <div className="flex items-center justify-between px-3 py-2 border-b border-border/50 bg-background/80 backdrop-blur-sm z-20">
-        {/* Left: Close */}
-        <button
-          type="button"
-          onClick={onClose}
-          title="Close fullscreen (Esc)"
-          className="rounded-md p-1.5 text-foreground/70 hover:text-foreground hover:bg-foreground/10 transition-colors"
-        >
-          <X className="h-5 w-5" />
-        </button>
+  return createPortal(
+    <div className="fixed inset-0 z-[52] flex flex-col" style={{ pointerEvents: "none", overflow: "hidden" }}>
 
-        {/* Right: Controls */}
-        <div className="flex items-center gap-0.5">
-          {/* Layout selector */}
-          <div ref={layoutRef} className="relative">
-            <ToolbarButton
-              title={`Layout: ${currentLayout}`}
-              onClick={() => { setLayoutOpen((p) => !p); setExportOpen(false); }}
-            >
-              <LayoutGrid className="h-4 w-4" />
-            </ToolbarButton>
-            {layoutOpen && (
-              <div className="absolute right-0 top-full mt-1 min-w-[130px] rounded-md border bg-popover text-popover-foreground shadow-md py-1 z-10">
-                {["force", "circular", "hierarchical", "grid"].map((layout) => (
-                  <button
-                    key={layout}
-                    type="button"
-                    className={`w-full text-left px-3 py-1.5 text-sm transition-colors ${
-                      currentLayout === layout ? "bg-accent text-accent-foreground" : "hover:bg-accent/50"
-                    }`}
-                    onClick={() => { setCurrentLayout(layout); setLayoutOpen(false); graphRef.current?.applyLayout(layout); }}
-                  >
-                    {layout.charAt(0).toUpperCase() + layout.slice(1)}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-
-          <div className="w-px h-5 bg-border mx-0.5" />
-
-          <ToolbarButton
-            title="Toggle highlight mode"
-            active={highlightMode}
-            onClick={toggleHighlightMode}
-          >
-            <Highlighter className="h-4 w-4" />
-          </ToolbarButton>
-
-          <ToolbarButton
-            title="Shortest path mode"
-            active={spMode}
-            onClick={() => {
-              const next = !spMode;
-              setSpMode(next);
-              graphRef.current?.setShortestPathMode(next);
-            }}
-          >
-            <Route className="h-4 w-4" />
-          </ToolbarButton>
-
-          <div className="w-px h-5 bg-border mx-0.5" />
-
-          <ToolbarButton title="Zoom in" onClick={() => graphRef.current?.zoomIn()}>
-            <ZoomIn className="h-4 w-4" />
-          </ToolbarButton>
-
-          <ToolbarButton title="Zoom out" onClick={() => graphRef.current?.zoomOut()}>
-            <ZoomOut className="h-4 w-4" />
-          </ToolbarButton>
-
-          <ToolbarButton title="Fit to screen" onClick={() => graphRef.current?.fitToScreen()}>
-            <Maximize className="h-4 w-4" />
-          </ToolbarButton>
-
-          <div className="w-px h-5 bg-border mx-0.5" />
-
-          {/* Export dropdown */}
-          <div ref={exportRef} className="relative">
-            <ToolbarButton
-              title="Export"
-              onClick={() => { setExportOpen((p) => !p); setLayoutOpen(false); }}
-            >
-              <Download className="h-4 w-4" />
-            </ToolbarButton>
-
-            {exportOpen && (
-              <div className="absolute right-0 top-full mt-1 min-w-[120px] rounded-md border bg-popover text-popover-foreground shadow-md py-1 z-10">
-                <button
-                  type="button"
-                  className="w-full text-left px-3 py-1.5 text-sm hover:bg-accent hover:text-accent-foreground transition-colors"
-                  onClick={() => { exportPNG(); setExportOpen(false); }}
-                >
-                  Export PNG
-                </button>
-                <button
-                  type="button"
-                  className="w-full text-left px-3 py-1.5 text-sm hover:bg-accent hover:text-accent-foreground transition-colors"
-                  onClick={() => { exportCSV(); setExportOpen(false); }}
-                >
-                  Export CSV
-                </button>
-                <button
-                  type="button"
-                  className="w-full text-left px-3 py-1.5 text-sm hover:bg-accent hover:text-accent-foreground transition-colors"
-                  onClick={() => { exportJSON(); setExportOpen(false); }}
-                >
-                  Export JSON
-                </button>
-              </div>
-            )}
-          </div>
+      {/* Search (top-left) */}
+      <div style={{ position: "absolute", top: 14, left: 14, zIndex: 20, display: "flex", alignItems: "center", gap: 6, pointerEvents: "auto" }}>
+        <div style={{ position: "relative", display: "flex", alignItems: "center" }}>
+          <span style={{ position: "absolute", left: 10, fontSize: 12, color: "var(--th-text-dim)", pointerEvents: "none" }}>&#x2315;</span>
+          <input type="text" placeholder="Search nodes..." value={localSearch} onChange={(e) => setLocalSearch(e.target.value)}
+            style={{ width: 200, padding: "7px 10px 7px 28px", fontSize: 11, fontFamily: '"Inter",sans-serif', color: "var(--th-text)",
+              background: "var(--th-overlay-blur)", backdropFilter: "blur(8px)", WebkitBackdropFilter: "blur(8px)",
+              border: "1px solid var(--th-border-subtle)", borderRadius: 6, outline: "none" }} />
+          {localSearch && <button onClick={() => setLocalSearch("")} style={{ position: "absolute", right: 8, background: "none", border: "none", color: "var(--th-text-dim)", cursor: "pointer", fontSize: 12, padding: "0 2px", lineHeight: 1 }}>&times;</button>}
         </div>
-      </div>
-
-      {/* Canvas area (fills remaining space) */}
-      <div className="flex-1 min-h-0 relative">
-        <ForceGraph ref={graphRef} searchQuery={searchText} hideToolbar />
-
-        {/* Left column: search + legend */}
-        <div className="absolute top-3 left-3 z-10 flex flex-col gap-2 w-[220px]">
-          <FloatingSearch
-            searchText={searchText}
-            onSearchChange={handleSearchChange}
-            matchCount={matchCount}
-            totalCount={nodes.length}
-          />
-          <FloatingLegend />
-        </div>
-
-        {/* Floating inspector (right side, appears when node/edge selected) */}
-        {(selectedNode || selectedEdge) && (
-          <div
-            className="absolute top-3 right-3 z-10 w-[280px] max-h-[70vh] overflow-y-auto rounded-xl shadow-lg"
-            style={glassStyle()}
-          >
-            <PropertyInspector />
-          </div>
+        {localSearch && searchMatchCount !== null && (
+          <span style={{ fontSize: 9, color: searchMatchCount > 0 ? "var(--th-text-muted)" : "#ef4444", background: "var(--th-overlay-blur)", padding: "4px 8px", borderRadius: 4, border: "1px solid var(--th-border-subtle)" }}>
+            {searchMatchCount > 0 ? `${searchMatchCount} found` : "No matches"}
+          </span>
         )}
-
-        {/* Minimap */}
-        <Minimap />
       </div>
-    </div>
+
+      {/* Path mode status */}
+      {pathMode && (
+        <div style={{ position: "absolute", top: 14, left: "50%", transform: "translateX(-50%)", zIndex: 20, display: "flex", alignItems: "center", gap: 10, padding: "8px 16px", pointerEvents: "auto",
+          background: "var(--th-overlay)", backdropFilter: "blur(12px)", border: "1px solid #10b98144", borderRadius: 8, fontSize: 10.5, color: "var(--th-text)", boxShadow: "0 4px 20px rgba(0,0,0,0.15)" }}>
+          <span style={{ color: "#10b981", fontSize: 14 }}>&#x2B95;</span>
+          {!pathSource && <span style={{ color: "var(--th-text-muted)" }}>Click the <strong style={{ color: "#10b981" }}>source</strong> node</span>}
+          {pathSource && !pathTarget && <span style={{ color: "var(--th-text-muted)" }}><strong style={{ color: "var(--th-text)" }}>{nodeLabel(pathSource)}</strong> &rarr; Click the <strong style={{ color: "#10b981" }}>target</strong></span>}
+          {pathSource && pathTarget && pathResult && (
+            pathResult.distance === Infinity
+              ? <span style={{ color: "#ef4444" }}>No path between <strong>{nodeLabel(pathSource)}</strong> and <strong>{nodeLabel(pathTarget)}</strong></span>
+              : <span>
+                  <span style={{ color: "#10b981" }}>{pathResult.nodeLabels.join(" → ")}</span>
+                  <span style={{ color: "var(--th-text-faint)", marginLeft: 8 }}>{pathResult.distance} hop{pathResult.distance !== 1 ? "s" : ""}</span>
+                </span>
+          )}
+          {pathSource && pathTarget && !pathResult && <span style={{ color: "var(--th-text-muted)" }}>Computing...</span>}
+          <button onClick={togglePathMode} style={{ background: "none", border: "none", color: "var(--th-text-dim)", cursor: "pointer", fontSize: 13, lineHeight: 1, padding: "0 2px", marginLeft: 4 }}>&times;</button>
+        </div>
+      )}
+
+      {/* Toolbar (top-right) */}
+      <div style={{ position: "absolute", top: 12, right: 12, zIndex: 20, display: "flex", alignItems: "center", gap: 4, padding: "4px 6px", borderRadius: 8, pointerEvents: "auto",
+        border: "1px solid var(--th-border-subtle)", background: "var(--th-overlay)", backdropFilter: "blur(12px)" }}>
+        {([
+          { id: "force" as const, icon: "◎", tip: "Force" },
+          { id: "hierarchical" as const, icon: "⊥", tip: "Hierarchy" },
+          { id: "circular" as const, icon: "○", tip: "Circle" },
+          { id: "grid" as const, icon: "⊞", tip: "Grid" },
+        ] as const).map((l) => (
+          <IconButton key={l.id} icon={l.icon} tip={l.tip} active={layout === l.id} onClick={() => triggerLayout(l.id)} />
+        ))}
+        <span style={{ width: 1, height: 18, background: "var(--th-border-subtle)", margin: "0 2px" }} />
+        <IconButton icon="⇢" tip="Shortest Path" active={pathMode} color="#10b981" onClick={togglePathMode} />
+        <IconButton icon="↻" tip="Incremental layout" active={incremental} color="#f59e0b" onClick={toggleIncremental} />
+        <IconButton icon="⊡" tip="Fit to screen" onClick={triggerFit} />
+        <span style={{ width: 1, height: 18, background: "var(--th-border-subtle)", margin: "0 2px" }} />
+        <IconButton icon="☰" tip="Legend" active={showLegend} onClick={() => setShowLegend((v) => !v)} />
+        <div ref={exportRef} style={{ position: "relative" }}>
+          <IconButton icon="⤓" tip="Export" onClick={() => setExportOpen((v) => !v)} />
+          {exportOpen && (
+            <div style={{ position: "absolute", right: 0, top: "100%", marginTop: 4, minWidth: 120, borderRadius: 6, border: "1px solid var(--th-border-subtle)",
+              background: "var(--th-overlay)", backdropFilter: "blur(12px)", boxShadow: "0 4px 20px rgba(0,0,0,0.15)", padding: "4px 0", zIndex: 30 }}>
+              {[{ label: "Export PNG", fn: exportPNG }, { label: "Export CSV", fn: exportCSV }, { label: "Export JSON", fn: exportJSON }].map((item) => (
+                <button key={item.label} onClick={() => { item.fn(); setExportOpen(false); }}
+                  style={{ display: "block", width: "100%", textAlign: "left", padding: "6px 12px", fontSize: 11, color: "var(--th-text)", background: "transparent", border: "none", cursor: "pointer" }}
+                  onMouseEnter={(e) => (e.currentTarget.style.background = "var(--th-bg-elevated)")} onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}>
+                  {item.label}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+        <span style={{ width: 1, height: 18, background: "var(--th-border-subtle)", margin: "0 2px" }} />
+        <IconButton icon="⊙" tip="Exit fullscreen (Esc)" onClick={onClose} />
+      </div>
+
+      {/* Hint */}
+      {!selectedNode && !selectedEdge && !localSearch && !pathMode && (
+        <div style={{ position: "absolute", bottom: 20, left: "50%", transform: "translateX(-50%)", fontSize: 10, color: "var(--th-text-faint)",
+          pointerEvents: "none", letterSpacing: "0.06em", textAlign: "center", lineHeight: 1.8, zIndex: 5 }}>
+          Scroll to zoom · Drag to pan · Click a node to inspect · Right-click for actions
+        </div>
+      )}
+
+      {/* Legend */}
+      {showLegend && <div style={{ pointerEvents: "auto" }}><LegendPanel focusedLabels={focusedLabels} onToggleFocus={toggleFocusLabel} onClose={() => setShowLegend(false)} /></div>}
+
+      {/* Inspector */}
+      {(selectedNode || selectedEdge) && (
+        <div style={{ position: "absolute", top: 56, right: 14, zIndex: 20, width: 280, maxHeight: "70vh", overflowY: "auto", pointerEvents: "auto",
+          background: "var(--th-overlay)", backdropFilter: "blur(12px)", border: "1px solid var(--th-border-subtle)", borderRadius: 10, boxShadow: "0 8px 32px rgba(0,0,0,0.18)" }}>
+          <button onClick={() => useGraphStore.getState().clearSelection()} style={{ position: "absolute", right: 8, top: 8, background: "none", border: "none", color: "var(--th-text-dim)", cursor: "pointer", fontSize: 14, lineHeight: 1, zIndex: 10 }}>&times;</button>
+          <PropertyInspector />
+        </div>
+      )}
+
+      {/* Context menu */}
+      {contextMenu && (
+        <div style={{ position: "fixed", left: contextMenu.x, top: contextMenu.y, zIndex: 60, minWidth: 200, pointerEvents: "auto", background: "var(--th-overlay)", backdropFilter: "blur(12px)",
+          border: "1px solid var(--th-border-subtle)", borderRadius: 8, boxShadow: "0 8px 32px rgba(0,0,0,0.18)", padding: "4px 0" }} onClick={(e) => e.stopPropagation()}>
+          {contextMenu.nodeId && (
+            <>
+              <div style={{ padding: "6px 12px", fontSize: 9, color: "var(--th-text-dim)", textTransform: "uppercase", letterSpacing: "0.1em" }}>Node actions</div>
+              <button onClick={() => handleExpandNeighbors(contextMenu.nodeId!)}
+                style={{ display: "block", width: "100%", textAlign: "left", padding: "8px 12px", fontSize: 11, color: "var(--th-text)", background: "transparent", border: "none", cursor: "pointer" }}
+                onMouseEnter={(e) => (e.currentTarget.style.background = "var(--th-bg-elevated)")} onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}>
+                Expand Neighbors
+              </button>
+              <div style={{ margin: "2px 8px", borderTop: "1px solid var(--th-border-subtle)" }} />
+            </>
+          )}
+          <button onClick={handleViewAllRelationships}
+            style={{ display: "block", width: "100%", textAlign: "left", padding: "8px 12px", fontSize: 11, color: "var(--th-text)", background: "transparent", border: "none", cursor: "pointer" }}
+            onMouseEnter={(e) => (e.currentTarget.style.background = "var(--th-bg-elevated)")} onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}>
+            Load All Relationships
+          </button>
+        </div>
+      )}
+    </div>,
+    document.body,
   );
 }
 

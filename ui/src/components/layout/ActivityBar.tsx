@@ -1,7 +1,6 @@
 import { useState, useRef, useEffect } from "react";
 import {
   Terminal,
-  Compass,
   MessageSquare,
   Database,
   Shield,
@@ -15,7 +14,6 @@ import { cn } from "@/lib/utils";
 
 const tabs = [
   { id: "query" as const, icon: Terminal, label: "Query Editor" },
-  { id: "explore" as const, icon: Compass, label: "Explore Graph" },
   { id: "nlq" as const, icon: MessageSquare, label: "Natural Language" },
   { id: "schema" as const, icon: Database, label: "Schema Browser" },
   { id: "admin" as const, icon: Shield, label: "Administration" },

@@ -5,6 +5,7 @@ interface GraphSettings {
   // Custom colors: label/type -> hex color. If not set, falls back to default.
   labelColors: Record<string, string>;
   edgeColors: Record<string, string>;
+  edgeDashed: Record<string, boolean>;
 
   // Which property to show as caption on nodes, per label.
   // e.g. { "Person": "name", "City": "name", "Car": "make" }
@@ -20,6 +21,7 @@ interface GraphSettings {
   // Actions
   setLabelColor: (label: string, color: string) => void;
   setEdgeColor: (edgeType: string, color: string) => void;
+  setEdgeDashed: (edgeType: string, dashed: boolean) => void;
   resetLabelColor: (label: string) => void;
   resetEdgeColor: (edgeType: string) => void;
   setCaptionProperty: (label: string, property: string) => void;
@@ -28,6 +30,7 @@ interface GraphSettings {
   setImageProperty: (label: string, propertyName: string) => void;
   resetImageProperty: (label: string) => void;
   toggleHighlightMode: () => void;
+  toggleEdgeDashed: (edgeType: string) => void;
   resetAll: () => void;
 }
 
@@ -36,6 +39,7 @@ export const useGraphSettingsStore = create<GraphSettings>()(
     (set) => ({
       labelColors: {},
       edgeColors: {},
+      edgeDashed: {},
       captionProperty: {},
       labelIcons: {},
       imageProperty: {},
@@ -49,6 +53,11 @@ export const useGraphSettingsStore = create<GraphSettings>()(
       setEdgeColor: (edgeType, color) =>
         set((state) => ({
           edgeColors: { ...state.edgeColors, [edgeType]: color },
+        })),
+
+      setEdgeDashed: (edgeType, dashed) =>
+        set((state) => ({
+          edgeDashed: { ...state.edgeDashed, [edgeType]: dashed },
         })),
 
       resetLabelColor: (label) =>
@@ -97,10 +106,16 @@ export const useGraphSettingsStore = create<GraphSettings>()(
       toggleHighlightMode: () =>
         set((state) => ({ highlightMode: !state.highlightMode })),
 
+      toggleEdgeDashed: (edgeType) =>
+        set((state) => ({
+          edgeDashed: { ...state.edgeDashed, [edgeType]: !state.edgeDashed[edgeType] },
+        })),
+
       resetAll: () =>
         set({
           labelColors: {},
           edgeColors: {},
+          edgeDashed: {},
           captionProperty: {},
           labelIcons: {},
           imageProperty: {},
@@ -112,6 +127,7 @@ export const useGraphSettingsStore = create<GraphSettings>()(
       partialize: (state) => ({
         labelColors: state.labelColors,
         edgeColors: state.edgeColors,
+        edgeDashed: state.edgeDashed,
         captionProperty: state.captionProperty,
         labelIcons: state.labelIcons,
         imageProperty: state.imageProperty,
