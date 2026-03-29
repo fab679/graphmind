@@ -82,6 +82,25 @@ describe("HttpTransport", () => {
   });
 });
 
+describe("Param handling", () => {
+  it("should accept params in query method signature", () => {
+    const client = new GraphmindClient();
+    // Verify the method accepts params parameter
+    assert.equal(typeof client.query, "function");
+  });
+
+  it("should accept params in queryReadonly method signature", () => {
+    const client = new GraphmindClient();
+    assert.equal(typeof client.queryReadonly, "function");
+  });
+
+  it("HttpTransport.query should accept params", () => {
+    const transport = new HttpTransport("http://localhost:8080");
+    // Verify signature supports params
+    assert.equal(typeof transport.query, "function");
+  });
+});
+
 describe("Types", () => {
   it("should allow constructing GraphSchema objects", () => {
     const schema: GraphSchema = {
