@@ -7803,7 +7803,8 @@ impl PhysicalOperator for PerRowMergeOperator {
                 if var == &start_var {
                     let val = eval_expression(expr, &record, store)?;
                     if let Value::Property(pv) = val {
-                        store.set_node_property(tenant_id, node_id, prop.clone(), pv)
+                        store
+                            .set_node_property(tenant_id, node_id, prop.clone(), pv)
                             .map_err(|e| ExecutionError::RuntimeError(e.to_string()))?;
                     }
                 }
@@ -7816,7 +7817,8 @@ impl PhysicalOperator for PerRowMergeOperator {
                 let _ = store.add_label_to_node(tenant_id, node_id, label.clone());
             }
             for (k, v) in &resolved_props {
-                store.set_node_property(tenant_id, node_id, k.clone(), v.clone())
+                store
+                    .set_node_property(tenant_id, node_id, k.clone(), v.clone())
                     .map_err(|e| ExecutionError::RuntimeError(e.to_string()))?;
             }
             record.bind(start_var.clone(), Value::NodeRef(node_id));
@@ -7824,7 +7826,8 @@ impl PhysicalOperator for PerRowMergeOperator {
                 if var == &start_var {
                     let val = eval_expression(expr, &record, store)?;
                     if let Value::Property(pv) = val {
-                        store.set_node_property(tenant_id, node_id, prop.clone(), pv)
+                        store
+                            .set_node_property(tenant_id, node_id, prop.clone(), pv)
                             .map_err(|e| ExecutionError::RuntimeError(e.to_string()))?;
                     }
                 }
@@ -7877,7 +7880,8 @@ impl PhysicalOperator for PerRowMergeOperator {
                 }
                 if let Some(req_props) = target_props {
                     for (k, v) in req_props {
-                        store.set_node_property(tenant_id, tid, k.clone(), v.clone())
+                        store
+                            .set_node_property(tenant_id, tid, k.clone(), v.clone())
                             .map_err(|e| ExecutionError::RuntimeError(e.to_string()))?;
                     }
                 }
@@ -10094,7 +10098,8 @@ impl PhysicalOperator for MergeOperator {
                 if var == &start_var {
                     let val = eval_expression(expr, &record, store)?;
                     if let Value::Property(pv) = val {
-                        store.set_node_property(tenant_id, node_id, prop.clone(), pv)
+                        store
+                            .set_node_property(tenant_id, node_id, prop.clone(), pv)
                             .map_err(|e| ExecutionError::RuntimeError(e.to_string()))?;
                     }
                 }
@@ -10109,7 +10114,8 @@ impl PhysicalOperator for MergeOperator {
 
             if let Some(required_props) = props {
                 for (k, v) in required_props {
-                    store.set_node_property(tenant_id, node_id, k.clone(), v.clone())
+                    store
+                        .set_node_property(tenant_id, node_id, k.clone(), v.clone())
                         .map_err(|e| ExecutionError::RuntimeError(e.to_string()))?;
                 }
             }
@@ -10120,7 +10126,8 @@ impl PhysicalOperator for MergeOperator {
                 if var == &start_var {
                     let val = eval_expression(expr, &record, store)?;
                     if let Value::Property(pv) = val {
-                        store.set_node_property(tenant_id, node_id, prop.clone(), pv)
+                        store
+                            .set_node_property(tenant_id, node_id, prop.clone(), pv)
                             .map_err(|e| ExecutionError::RuntimeError(e.to_string()))?;
                     }
                 }
@@ -10182,7 +10189,8 @@ impl PhysicalOperator for MergeOperator {
                 }
                 if let Some(req_props) = target_props {
                     for (k, v) in req_props {
-                        store.set_node_property(tenant_id, tid, k.clone(), v.clone())
+                        store
+                            .set_node_property(tenant_id, tid, k.clone(), v.clone())
                             .map_err(|e| ExecutionError::RuntimeError(e.to_string()))?;
                     }
                 }

@@ -6940,15 +6940,9 @@ mod tests {
     fn test_merge_updates_property_index() {
         let mut store = GraphStore::new();
         // Create a property index
-        exec_mut(
-            &mut store,
-            "CREATE INDEX FOR (p:Project) ON (p.name)",
-        );
+        exec_mut(&mut store, "CREATE INDEX FOR (p:Project) ON (p.name)");
         // Create node via MERGE
-        exec_mut(
-            &mut store,
-            "MERGE (p:Project {name: 'my-project'})",
-        );
+        exec_mut(&mut store, "MERGE (p:Project {name: 'my-project'})");
         // The node should be findable via MATCH with inline property filter (uses index)
         let result = exec_read(
             &store,
@@ -6964,18 +6958,12 @@ mod tests {
     #[test]
     fn test_merge_on_create_set_updates_index() {
         let mut store = GraphStore::new();
-        exec_mut(
-            &mut store,
-            "CREATE INDEX FOR (p:Project) ON (p.status)",
-        );
+        exec_mut(&mut store, "CREATE INDEX FOR (p:Project) ON (p.status)");
         exec_mut(
             &mut store,
             "MERGE (p:Project {name: 'proj1'}) ON CREATE SET p.status = 'active'",
         );
-        let result = exec_read(
-            &store,
-            "MATCH (p:Project {status: 'active'}) RETURN p.name",
-        );
+        let result = exec_read(&store, "MATCH (p:Project {status: 'active'}) RETURN p.name");
         assert_eq!(
             result.records.len(),
             1,
@@ -6986,10 +6974,7 @@ mod tests {
     #[test]
     fn test_merge_on_match_set_updates_index() {
         let mut store = GraphStore::new();
-        exec_mut(
-            &mut store,
-            "CREATE INDEX FOR (p:Project) ON (p.status)",
-        );
+        exec_mut(&mut store, "CREATE INDEX FOR (p:Project) ON (p.status)");
         // First create the node
         exec_mut(
             &mut store,
@@ -7000,10 +6985,7 @@ mod tests {
             &mut store,
             "MERGE (p:Project {name: 'proj1'}) ON MATCH SET p.status = 'active'",
         );
-        let result = exec_read(
-            &store,
-            "MATCH (p:Project {status: 'active'}) RETURN p.name",
-        );
+        let result = exec_read(&store, "MATCH (p:Project {status: 'active'}) RETURN p.name");
         assert_eq!(
             result.records.len(),
             1,
@@ -7023,7 +7005,11 @@ mod tests {
         let query = parse_query(query_str).unwrap();
         let mut executor = MutQueryExecutor::new(&mut store, "default".to_string());
         let result = executor.execute(&query);
-        assert!(result.is_ok(), "MATCH + MERGE with different variables should not error: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "MATCH + MERGE with different variables should not error: {:?}",
+            result.err()
+        );
         // Verify the merge created the node
         let nodes = store.get_nodes_by_label(&Label::new("Project"));
         assert_eq!(nodes.len(), 1, "MERGE should have created the Project node");
@@ -9133,19 +9119,29 @@ mod tests {
         assert_eq!(count_before, 0, "Index should be empty before insert");
 
         // Step 2: Create a node with an embedding
-        engine.execute_mut(
-            "CREATE (t:DecisionTrace {name: 'test', embedding: [0.1, 0.2, 0.3]})",
-            &mut store,
-            "default",
-        ).unwrap();
+        engine
+            .execute_mut(
+                "CREATE (t:DecisionTrace {name: 'test', embedding: [0.1, 0.2, 0.3]})",
+                &mut store,
+                "default",
+            )
+            .unwrap();
 
         // Step 3: Check that the vector was indexed
-        let idx = store.vector_index.get_index("DecisionTrace", "embedding").unwrap();
+        let idx = store
+            .vector_index
+            .get_index("DecisionTrace", "embedding")
+            .unwrap();
         let count_after = idx.read().unwrap().len();
-        assert_eq!(count_after, 1, "Vector index should have 1 vector after CREATE node");
+        assert_eq!(
+            count_after, 1,
+            "Vector index should have 1 vector after CREATE node"
+        );
 
         // Step 4: Search should find it
-        let results = store.vector_index.search("DecisionTrace", "embedding", &[0.1, 0.2, 0.3], 5);
+        let results = store
+            .vector_index
+            .search("DecisionTrace", "embedding", &[0.1, 0.2, 0.3], 5);
         assert!(results.is_ok(), "Search should not error");
         let results = results.unwrap();
         assert_eq!(results.len(), 1, "Search should find 1 result");

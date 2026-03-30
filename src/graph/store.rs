@@ -389,7 +389,8 @@ impl GraphStore {
                                     .collect();
                                 if vec.len() == arr.len() && !vec.is_empty() {
                                     for label in &labels {
-                                        let _ = vector_index.add_vector(label.as_str(), key, id, &vec);
+                                        let _ =
+                                            vector_index.add_vector(label.as_str(), key, id, &vec);
                                     }
                                 }
                             }
@@ -1667,7 +1668,12 @@ impl GraphStore {
                                 .collect();
                             if vec.len() == arr.len() && !vec.is_empty() {
                                 for label in &labels {
-                                    let _ = self.vector_index.add_vector(label.as_str(), &key, id, &vec);
+                                    let _ = self.vector_index.add_vector(
+                                        label.as_str(),
+                                        &key,
+                                        id,
+                                        &vec,
+                                    );
                                 }
                             }
                         }
@@ -1726,7 +1732,8 @@ impl GraphStore {
                             .collect();
                         if vec.len() == arr.len() && !vec.is_empty() {
                             for label in &labels {
-                                let _ = self.vector_index.add_vector(label.as_str(), &key, id, &vec);
+                                let _ =
+                                    self.vector_index.add_vector(label.as_str(), &key, id, &vec);
                             }
                         }
                     }
@@ -1754,7 +1761,8 @@ impl GraphStore {
                                 })
                                 .collect();
                             if vec.len() == arr.len() && !vec.is_empty() {
-                                let _ = self.vector_index.add_vector(label.as_str(), &key, id, &vec);
+                                let _ =
+                                    self.vector_index.add_vector(label.as_str(), &key, id, &vec);
                             }
                         }
                         _ => {}

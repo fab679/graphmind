@@ -153,11 +153,27 @@ enum HnswBackend {
 }
 
 impl HnswBackend {
-    fn new(m: usize, max_elements: usize, max_layer: usize, ef: usize, metric: DistanceMetric) -> Self {
+    fn new(
+        m: usize,
+        max_elements: usize,
+        max_layer: usize,
+        ef: usize,
+        metric: DistanceMetric,
+    ) -> Self {
         match metric {
-            DistanceMetric::Cosine => HnswBackend::Cosine(Hnsw::new(m, max_elements, max_layer, ef, CosineDistance)),
-            DistanceMetric::L2 => HnswBackend::L2(Hnsw::new(m, max_elements, max_layer, ef, L2Distance)),
-            DistanceMetric::InnerProduct => HnswBackend::InnerProduct(Hnsw::new(m, max_elements, max_layer, ef, InnerProductDistance)),
+            DistanceMetric::Cosine => {
+                HnswBackend::Cosine(Hnsw::new(m, max_elements, max_layer, ef, CosineDistance))
+            }
+            DistanceMetric::L2 => {
+                HnswBackend::L2(Hnsw::new(m, max_elements, max_layer, ef, L2Distance))
+            }
+            DistanceMetric::InnerProduct => HnswBackend::InnerProduct(Hnsw::new(
+                m,
+                max_elements,
+                max_layer,
+                ef,
+                InnerProductDistance,
+            )),
         }
     }
 

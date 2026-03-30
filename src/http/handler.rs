@@ -49,8 +49,7 @@ fn json_params_to_property_values(
                 serde_json::Value::Array(arr) => {
                     // Check if all elements are numeric — if so, create a Vector
                     // (used for embedding/vector properties)
-                    let all_numeric = !arr.is_empty()
-                        && arr.iter().all(|item| item.is_number());
+                    let all_numeric = !arr.is_empty() && arr.iter().all(|item| item.is_number());
                     if all_numeric {
                         let floats: Vec<f32> = arr
                             .iter()
@@ -1670,11 +1669,14 @@ mod tests {
         {
             let store = state.stores.get_store("default").await;
             let mut guard = store.write().await;
-            state.engine.execute_mut(
-                "CREATE (t:Trace {name: 'test', embedding: [0.1, 0.2, 0.3]})",
-                &mut guard,
-                "default",
-            ).unwrap();
+            state
+                .engine
+                .execute_mut(
+                    "CREATE (t:Trace {name: 'test', embedding: [0.1, 0.2, 0.3]})",
+                    &mut guard,
+                    "default",
+                )
+                .unwrap();
         }
 
         // Step 3: Verify vector index is populated (read-only, like SHOW VECTOR INDEXES)
@@ -1684,7 +1686,10 @@ mod tests {
             let idx = guard.vector_index.get_index("Trace", "embedding");
             assert!(idx.is_some(), "Vector index should exist");
             let count = idx.unwrap().read().unwrap().len();
-            assert_eq!(count, 1, "Vector index should have 1 vector after CREATE node via separate lock");
+            assert_eq!(
+                count, 1,
+                "Vector index should have 1 vector after CREATE node via separate lock"
+            );
         }
     }
 
