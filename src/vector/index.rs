@@ -81,7 +81,8 @@ pub struct VectorPoint {
     pub vector: Vec<f32>,
 }
 
-/// Cosine distance implementation for hnsw_rs
+/// Cosine distance implementation for hnsw_rs.
+/// Clamps result to [0, 2] to avoid floating-point edge cases where sim > 1.0.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct CosineDistance;
 
@@ -101,13 +102,28 @@ impl Distance<f32> for CosineDistance {
             return 1.0;
         }
 
-        // Cosine distance = 1.0 - cosine similarity
         let sim = dot / (norm_a.sqrt() * norm_b.sqrt());
-        1.0 - sim
+        (1.0 - sim).max(0.0) // clamp: floating-point can produce sim > 1.0
     }
 }
 
-/// Inner Product distance implementation for hnsw_rs
+/// L2 (Euclidean) distance implementation for hnsw_rs
+#[derive(Clone, Copy, Debug, Default)]
+pub struct L2Distance;
+
+impl Distance<f32> for L2Distance {
+    fn eval(&self, va: &[f32], vb: &[f32]) -> f32 {
+        let mut sum = 0.0f32;
+        for (a, b) in va.iter().zip(vb.iter()) {
+            let d = a - b;
+            sum += d * d;
+        }
+        sum.sqrt()
+    }
+}
+
+/// Inner Product distance implementation for hnsw_rs.
+/// Clamps to >= 0 since dot > 1 is possible with unnormalized vectors.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct InnerProductDistance;
 
@@ -117,8 +133,7 @@ impl Distance<f32> for InnerProductDistance {
         for (a, b) in va.iter().zip(vb.iter()) {
             dot += a * b;
         }
-        // Inner product distance = 1.0 - dot product (for normalized vectors)
-        1.0 - dot
+        (1.0 - dot).max(0.0)
     }
 }
 
@@ -129,14 +144,48 @@ pub struct StoredVector {
     pub vector: Vec<f32>,
 }
 
+/// HNSW backend enum — one concrete HNSW type per distance metric.
+/// This avoids the `Default` trait issue with dynamic dispatch in hnsw_rs.
+enum HnswBackend {
+    Cosine(Hnsw<'static, f32, CosineDistance>),
+    L2(Hnsw<'static, f32, L2Distance>),
+    InnerProduct(Hnsw<'static, f32, InnerProductDistance>),
+}
+
+impl HnswBackend {
+    fn new(m: usize, max_elements: usize, max_layer: usize, ef: usize, metric: DistanceMetric) -> Self {
+        match metric {
+            DistanceMetric::Cosine => HnswBackend::Cosine(Hnsw::new(m, max_elements, max_layer, ef, CosineDistance)),
+            DistanceMetric::L2 => HnswBackend::L2(Hnsw::new(m, max_elements, max_layer, ef, L2Distance)),
+            DistanceMetric::InnerProduct => HnswBackend::InnerProduct(Hnsw::new(m, max_elements, max_layer, ef, InnerProductDistance)),
+        }
+    }
+
+    fn insert(&self, data: (&Vec<f32>, usize)) {
+        match self {
+            HnswBackend::Cosine(h) => h.insert(data),
+            HnswBackend::L2(h) => h.insert(data),
+            HnswBackend::InnerProduct(h) => h.insert(data),
+        }
+    }
+
+    fn search(&self, query: &[f32], k: usize, ef_search: usize) -> Vec<Neighbour> {
+        match self {
+            HnswBackend::Cosine(h) => h.search(query, k, ef_search),
+            HnswBackend::L2(h) => h.search(query, k, ef_search),
+            HnswBackend::InnerProduct(h) => h.search(query, k, ef_search),
+        }
+    }
+}
+
 /// Wrapper around HNSW index
 pub struct VectorIndex {
     /// Number of dimensions
     dimensions: usize,
     /// Distance metric
     metric: DistanceMetric,
-    /// The actual HNSW index
-    hnsw: Hnsw<'static, f32, CosineDistance>,
+    /// The actual HNSW index (type-safe per metric)
+    hnsw: HnswBackend,
     /// All inserted vectors (for persistence — HNSW doesn't expose iteration)
     stored_vectors: Vec<StoredVector>,
 }
@@ -154,12 +203,11 @@ impl std::fmt::Debug for VectorIndex {
 impl VectorIndex {
     /// Create a new vector index
     pub fn new(dimensions: usize, metric: DistanceMetric) -> Self {
-        // HNSW parameters
         let max_elements = 100_000;
         let m = 16;
         let ef_construction = 200;
 
-        let hnsw = Hnsw::new(m, max_elements, 16, ef_construction, CosineDistance);
+        let hnsw = HnswBackend::new(m, max_elements, 16, ef_construction, metric);
 
         Self {
             dimensions,
@@ -256,7 +304,7 @@ impl VectorIndex {
         let max_elements = (stored_vectors.len() + 10_000).max(100_000);
         let m = 16;
         let ef_construction = 200;
-        let hnsw = Hnsw::new(m, max_elements, 16, ef_construction, CosineDistance);
+        let hnsw = HnswBackend::new(m, max_elements, 16, ef_construction, metric);
 
         // Re-insert all vectors
         for sv in &stored_vectors {

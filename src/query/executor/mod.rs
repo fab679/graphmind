@@ -548,6 +548,10 @@ fn substitute_params(
     if let Some(uw) = &mut query.unwind_clause {
         substitute_expr(&mut uw.expression, params)?;
     }
+    // Substitute in UNION subqueries
+    for (union_query, _is_all) in &mut query.union_queries {
+        substitute_params(union_query, params)?;
+    }
     // Substitute in multi-part stages
     for stage in &mut query.multi_part_stages {
         for cc in &mut stage.create_clauses {
@@ -6930,6 +6934,119 @@ mod tests {
         );
     }
 
+    // --- 5b. MERGE with property indexes (Issue 0 regression test) ---
+
+    #[test]
+    fn test_merge_updates_property_index() {
+        let mut store = GraphStore::new();
+        // Create a property index
+        exec_mut(
+            &mut store,
+            "CREATE INDEX FOR (p:Project) ON (p.name)",
+        );
+        // Create node via MERGE
+        exec_mut(
+            &mut store,
+            "MERGE (p:Project {name: 'my-project'})",
+        );
+        // The node should be findable via MATCH with inline property filter (uses index)
+        let result = exec_read(
+            &store,
+            "MATCH (p:Project {name: 'my-project'}) RETURN p.name",
+        );
+        assert_eq!(
+            result.records.len(),
+            1,
+            "MERGE-created node should be findable via property index"
+        );
+    }
+
+    #[test]
+    fn test_merge_on_create_set_updates_index() {
+        let mut store = GraphStore::new();
+        exec_mut(
+            &mut store,
+            "CREATE INDEX FOR (p:Project) ON (p.status)",
+        );
+        exec_mut(
+            &mut store,
+            "MERGE (p:Project {name: 'proj1'}) ON CREATE SET p.status = 'active'",
+        );
+        let result = exec_read(
+            &store,
+            "MATCH (p:Project {status: 'active'}) RETURN p.name",
+        );
+        assert_eq!(
+            result.records.len(),
+            1,
+            "ON CREATE SET properties should be indexed"
+        );
+    }
+
+    #[test]
+    fn test_merge_on_match_set_updates_index() {
+        let mut store = GraphStore::new();
+        exec_mut(
+            &mut store,
+            "CREATE INDEX FOR (p:Project) ON (p.status)",
+        );
+        // First create the node
+        exec_mut(
+            &mut store,
+            "CREATE (p:Project {name: 'proj1', status: 'draft'})",
+        );
+        // Then MERGE with ON MATCH SET to update it
+        exec_mut(
+            &mut store,
+            "MERGE (p:Project {name: 'proj1'}) ON MATCH SET p.status = 'active'",
+        );
+        let result = exec_read(
+            &store,
+            "MATCH (p:Project {status: 'active'}) RETURN p.name",
+        );
+        assert_eq!(
+            result.records.len(),
+            1,
+            "ON MATCH SET should update the property index"
+        );
+    }
+
+    // --- 5c. MATCH + MERGE variable scoping (Issue 3 regression test) ---
+
+    #[test]
+    fn test_match_then_merge_different_variables() {
+        let mut store = GraphStore::new();
+        exec_mut(&mut store, "CREATE (t:Trace {name: 'trace1'})");
+        // Verify the planner accepts MATCH + MERGE with different variables
+        // (previously failed with "Variable 'p' already declared")
+        let query_str = "MATCH (t:Trace {name: 'trace1'}) MERGE (p:Project {name: 'proj1'})";
+        let query = parse_query(query_str).unwrap();
+        let mut executor = MutQueryExecutor::new(&mut store, "default".to_string());
+        let result = executor.execute(&query);
+        assert!(result.is_ok(), "MATCH + MERGE with different variables should not error: {:?}", result.err());
+        // Verify the merge created the node
+        let nodes = store.get_nodes_by_label(&Label::new("Project"));
+        assert_eq!(nodes.len(), 1, "MERGE should have created the Project node");
+    }
+
+    // --- 5d. WITH carry-forward + aggregation (Issue 1/2 regression test) ---
+
+    #[test]
+    fn test_with_carry_forward_plus_collect() {
+        // Validates that the planner accepts carry-forward variables alongside aggregation.
+        // Previously failed with "Ambiguous aggregation expression: 'engineers' is not a grouping key"
+        let store = GraphStore::new();
+        let query_str = "MATCH (a:Person {team: 'eng'}) WITH collect(a) AS engineers MATCH (b:Person {team: 'design'}) WITH engineers + collect(b) AS allPeople UNWIND allPeople AS person RETURN person.name";
+        let query = parse_query(query_str).unwrap();
+        let planner = QueryPlanner::new();
+        let result = planner.plan(&query, &store);
+        assert!(
+            result.is_ok(),
+            "Carry-forward variable + collect() should be accepted by planner: {:?}",
+            result.err()
+        );
+    }
+
     // --- 6. DELETE and DETACH DELETE ---
 
     #[test]
@@ -7572,6 +7689,41 @@ mod tests {
             result.records.len() >= 2,
             "UNION ALL should return at least 2 records, got {}",
             result.records.len()
+        );
+    }
+
+    // --- 3b. UNION ALL with parameters (Issue 4 regression test) ---
+
+    #[test]
+    fn test_union_all_with_params() {
+        use std::collections::HashMap;
+        let mut store = GraphStore::new();
+        let a = store.create_node("Agent");
+        store
+            .set_node_property("default", a, "name", "code-reviewer")
+            .unwrap();
+        let p = store.create_node("Project");
+        store
+            .set_node_property("default", p, "name", "code-reviewer")
+            .unwrap();
+
+        let q = parse_query(
+            "MATCH (a:Agent) WHERE a.name = $name RETURN a.name UNION ALL MATCH (p:Project) WHERE p.name = $name RETURN p.name",
+        )
+        .unwrap();
+        let mut params = HashMap::new();
+        params.insert(
+            "name".to_string(),
+            crate::graph::PropertyValue::String("code-reviewer".to_string()),
+        );
+        let result = QueryExecutor::new(&store)
+            .with_params(params)
+            .execute(&q)
+            .unwrap();
+        assert_eq!(
+            result.records.len(),
+            2,
+            "UNION ALL with params should resolve $name in both subqueries"
         );
     }
 
@@ -8960,5 +9112,42 @@ mod tests {
             "default",
         );
         assert!(r2.is_ok(), "IF NOT EXISTS should not error: {:?}", r2.err());
+    }
+
+    #[test]
+    fn test_vector_index_populated_after_create_node() {
+        let engine = crate::query::QueryEngine::new();
+        let mut store = GraphStore::new();
+
+        // Step 1: Create vector index
+        engine.execute_mut(
+            "CREATE VECTOR INDEX traceIdx FOR (n:DecisionTrace) ON (n.embedding) OPTIONS {dimensions: 3, similarity: 'cosine'}",
+            &mut store,
+            "default",
+        ).unwrap();
+
+        // Verify index exists with 0 vectors
+        let idx = store.vector_index.get_index("DecisionTrace", "embedding");
+        assert!(idx.is_some(), "Vector index should exist");
+        let count_before = idx.as_ref().unwrap().read().unwrap().len();
+        assert_eq!(count_before, 0, "Index should be empty before insert");
+
+        // Step 2: Create a node with an embedding
+        engine.execute_mut(
+            "CREATE (t:DecisionTrace {name: 'test', embedding: [0.1, 0.2, 0.3]})",
+            &mut store,
+            "default",
+        ).unwrap();
+
+        // Step 3: Check that the vector was indexed
+        let idx = store.vector_index.get_index("DecisionTrace", "embedding").unwrap();
+        let count_after = idx.read().unwrap().len();
+        assert_eq!(count_after, 1, "Vector index should have 1 vector after CREATE node");
+
+        // Step 4: Search should find it
+        let results = store.vector_index.search("DecisionTrace", "embedding", &[0.1, 0.2, 0.3], 5);
+        assert!(results.is_ok(), "Search should not error");
+        let results = results.unwrap();
+        assert_eq!(results.len(), 1, "Search should find 1 result");
     }
 }

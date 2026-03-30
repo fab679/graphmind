@@ -7803,9 +7803,8 @@ impl PhysicalOperator for PerRowMergeOperator {
                 if var == &start_var {
                     let val = eval_expression(expr, &record, store)?;
                     if let Value::Property(pv) = val {
-                        if let Some(node) = store.get_node_mut(node_id) {
-                            node.set_property(prop.clone(), pv);
-                        }
+                        store.set_node_property(tenant_id, node_id, prop.clone(), pv)
+                            .map_err(|e| ExecutionError::RuntimeError(e.to_string()))?;
                     }
                 }
             }
@@ -7814,23 +7813,19 @@ impl PhysicalOperator for PerRowMergeOperator {
             let label_str = labels.first().map(|l| l.as_str()).unwrap_or("Node");
             node_id = store.create_node(label_str);
             for label in labels.iter().skip(1) {
-                if let Some(node) = store.get_node_mut(node_id) {
-                    node.labels.insert(label.clone());
-                }
+                let _ = store.add_label_to_node(tenant_id, node_id, label.clone());
             }
             for (k, v) in &resolved_props {
-                if let Some(node) = store.get_node_mut(node_id) {
-                    node.set_property(k.clone(), v.clone());
-                }
+                store.set_node_property(tenant_id, node_id, k.clone(), v.clone())
+                    .map_err(|e| ExecutionError::RuntimeError(e.to_string()))?;
             }
             record.bind(start_var.clone(), Value::NodeRef(node_id));
             for (var, prop, expr) in &self.on_create_set {
                 if var == &start_var {
                     let val = eval_expression(expr, &record, store)?;
                     if let Value::Property(pv) = val {
-                        if let Some(node) = store.get_node_mut(node_id) {
-                            node.set_property(prop.clone(), pv);
-                        }
+                        store.set_node_property(tenant_id, node_id, prop.clone(), pv)
+                            .map_err(|e| ExecutionError::RuntimeError(e.to_string()))?;
                     }
                 }
             }
@@ -7878,15 +7873,12 @@ impl PhysicalOperator for PerRowMergeOperator {
                 let label_str = target_labels.first().map(|l| l.as_str()).unwrap_or("Node");
                 let tid = store.create_node(label_str);
                 for label in target_labels.iter().skip(1) {
-                    if let Some(node) = store.get_node_mut(tid) {
-                        node.labels.insert(label.clone());
-                    }
+                    let _ = store.add_label_to_node(tenant_id, tid, label.clone());
                 }
                 if let Some(req_props) = target_props {
                     for (k, v) in req_props {
-                        if let Some(node) = store.get_node_mut(tid) {
-                            node.set_property(k.clone(), v.clone());
-                        }
+                        store.set_node_property(tenant_id, tid, k.clone(), v.clone())
+                            .map_err(|e| ExecutionError::RuntimeError(e.to_string()))?;
                     }
                 }
                 tid
@@ -10051,7 +10043,7 @@ impl PhysicalOperator for MergeOperator {
     fn next_mut(
         &mut self,
         store: &mut GraphStore,
-        _tenant_id: &str,
+        tenant_id: &str,
     ) -> ExecutionResult<Option<Record>> {
         if self.executed {
             return Ok(None);
@@ -10102,9 +10094,8 @@ impl PhysicalOperator for MergeOperator {
                 if var == &start_var {
                     let val = eval_expression(expr, &record, store)?;
                     if let Value::Property(pv) = val {
-                        if let Some(node) = store.get_node_mut(node_id) {
-                            node.set_property(prop.clone(), pv);
-                        }
+                        store.set_node_property(tenant_id, node_id, prop.clone(), pv)
+                            .map_err(|e| ExecutionError::RuntimeError(e.to_string()))?;
                     }
                 }
             }
@@ -10113,16 +10104,13 @@ impl PhysicalOperator for MergeOperator {
             node_id = store.create_node(label_str);
 
             for label in labels.iter().skip(1) {
-                if let Some(node) = store.get_node_mut(node_id) {
-                    node.labels.insert(label.clone());
-                }
+                let _ = store.add_label_to_node(tenant_id, node_id, label.clone());
             }
 
             if let Some(required_props) = props {
                 for (k, v) in required_props {
-                    if let Some(node) = store.get_node_mut(node_id) {
-                        node.set_property(k.clone(), v.clone());
-                    }
+                    store.set_node_property(tenant_id, node_id, k.clone(), v.clone())
+                        .map_err(|e| ExecutionError::RuntimeError(e.to_string()))?;
                 }
             }
 
@@ -10132,9 +10120,8 @@ impl PhysicalOperator for MergeOperator {
                 if var == &start_var {
                     let val = eval_expression(expr, &record, store)?;
                     if let Value::Property(pv) = val {
-                        if let Some(node) = store.get_node_mut(node_id) {
-                            node.set_property(prop.clone(), pv);
-                        }
+                        store.set_node_property(tenant_id, node_id, prop.clone(), pv)
+                            .map_err(|e| ExecutionError::RuntimeError(e.to_string()))?;
                     }
                 }
             }
@@ -10191,15 +10178,12 @@ impl PhysicalOperator for MergeOperator {
                 let label_str = target_labels.first().map(|l| l.as_str()).unwrap_or("Node");
                 let tid = store.create_node(label_str);
                 for label in target_labels.iter().skip(1) {
-                    if let Some(node) = store.get_node_mut(tid) {
-                        node.labels.insert(label.clone());
-                    }
+                    let _ = store.add_label_to_node(tenant_id, tid, label.clone());
                 }
                 if let Some(req_props) = target_props {
                     for (k, v) in req_props {
-                        if let Some(node) = store.get_node_mut(tid) {
-                            node.set_property(k.clone(), v.clone());
-                        }
+                        store.set_node_property(tenant_id, tid, k.clone(), v.clone())
+                            .map_err(|e| ExecutionError::RuntimeError(e.to_string()))?;
                     }
                 }
                 tid

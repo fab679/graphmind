@@ -20,6 +20,7 @@ import { SavedQueries } from "@/components/editor/SavedQueries";
 import { ParamsPanel } from "@/components/editor/ParamsPanel";
 import { useQueryStore } from "@/stores/queryStore";
 import { useGraphStore } from "@/stores/graphStore";
+import { useGraphViewStore } from "@/stores/graphViewStore";
 import { useUiStore } from "@/stores/uiStore";
 import { useTheme } from "@/components/theme-provider";
 import { executeScript, executeQuery } from "@/api/client";
@@ -138,9 +139,11 @@ export function QueryTab() {
   const handleExpandNeighbors = useCallback(async (nodeId: string) => {
     setContextMenu(null);
     try {
+      const graph = useUiStore.getState().activeGraph;
       const query = `MATCH (n)-[r]-(m) WHERE id(n) = ${nodeId} RETURN n, r, m`;
-      const result = await executeQuery(query);
+      const result = await executeQuery(query, graph);
       if (result.error) return;
+      useGraphViewStore.getState().setIncremental(true);
       useGraphStore.getState().addGraphData(result.nodes, result.edges);
     } catch (err) {
       console.error("Expand neighbors failed:", err);
@@ -152,24 +155,31 @@ export function QueryTab() {
     const state = useGraphStore.getState();
     if (state.nodes.length === 0) return;
     try {
-      const result = await executeQuery("MATCH (n)-[r]->(m) RETURN n, r, m");
+      const graph = useUiStore.getState().activeGraph;
+      const result = await executeQuery("MATCH (n)-[r]->(m) RETURN n, r, m", graph);
       if (result.error) return;
       const canvasNodeIds = new Set(state.nodes.map((n) => n.id));
       const newEdges = result.edges.filter(
         (e) => canvasNodeIds.has(e.source) && canvasNodeIds.has(e.target),
       );
+      useGraphViewStore.getState().setIncremental(true);
       useGraphStore.getState().addGraphData([], newEdges);
     } catch (err) {
       console.error("View all relationships failed:", err);
     }
   }, []);
 
-  // Close context menu
+  // Close context menu on outside click (bubble phase so button onClick fires first)
   useEffect(() => {
     if (!contextMenu) return;
     const handler = () => setContextMenu(null);
-    document.addEventListener("click", handler, true);
-    return () => document.removeEventListener("click", handler, true);
+    const timer = setTimeout(() => {
+      document.addEventListener("click", handler);
+    }, 0);
+    return () => {
+      clearTimeout(timer);
+      document.removeEventListener("click", handler);
+    };
   }, [contextMenu]);
 
   const showGraph = (forceView === "graph" || (forceView === "auto" && hasGraphResult)) &&

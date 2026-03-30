@@ -10,7 +10,9 @@ const panel: CSSProperties = {
   position: "absolute",
   bottom: 16,
   left: 16,
-  width: 280,
+  minWidth: 280,
+  maxWidth: 420,
+  width: "auto",
   background: "var(--th-overlay)",
   backdropFilter: "blur(12px)",
   WebkitBackdropFilter: "blur(12px)",
@@ -37,6 +39,7 @@ const row: CSSProperties = {
   alignItems: "center",
   gap: 8,
   padding: "6px 14px",
+  minWidth: 0,
 };
 
 const colorInput: CSSProperties = { width: 22, height: 22, flexShrink: 0 };
@@ -46,6 +49,10 @@ const labelText: CSSProperties = {
   color: "var(--th-text-2)",
   fontFamily: '"Inter", sans-serif',
   flex: 1,
+  minWidth: 0,
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
 };
 
 const microBtn = (active: boolean, expanded: boolean): CSSProperties => ({
@@ -178,6 +185,7 @@ function NodeLabelRow({
             borderRadius: 4,
             overflow: "hidden",
             border: "1px solid var(--th-border-subtle)",
+            flexShrink: 0,
           }}
         >
           <button

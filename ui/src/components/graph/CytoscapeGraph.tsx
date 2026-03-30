@@ -67,7 +67,7 @@ function buildStylesheet(t: CyTheme, labels: string[], edgeTypes: string[], s: {
 const LAYOUTS: Record<string, LayoutOptions> = {
   force: { name: "fcose", animate: true, animationDuration: 800, randomize: true,
     nodeRepulsion: 45000, idealEdgeLength: 200, edgeElasticity: 0.1, gravity: 0.02, gravityRange: 3.8,
-    numIter: 5000, quality: "default", nodeSeparation: 150, fit: true, padding: 80 } as LayoutOptions,
+    numIter: 5000, quality: "default", nodeSeparation: 150, componentSpacing: 200, fit: true, padding: 80 } as LayoutOptions,
   circular: { name: "circle", animate: true, animationDuration: 600, fit: true, padding: 80, spacingFactor: 1.6 },
   grid: { name: "grid", animate: true, animationDuration: 600, fit: true, padding: 80, rows: 4, spacingFactor: 1.4 },
   hierarchical: { name: "breadthfirst", animate: true, animationDuration: 600, fit: true, padding: 80, directed: true, spacingFactor: 2.0 },
@@ -228,10 +228,29 @@ export function CytoscapeGraph({ resolvedTheme, onContextMenu }: CytoscapeGraphP
       }
     }
     if (toAdd.length > 0 || toRemove.length > 0) {
-      const w = containerRef.current.clientWidth; const h = containerRef.current.clientHeight;
-      const nc = cy.nodes().length; const pad = layoutPadding(nc);
-      if (!useGraphViewStore.getState().incremental) cy.nodes().positions({ x: w / 2, y: h / 2 });
-      cy.layout({ ...LAYOUTS.force, padding: pad } as LayoutOptions).run();
+      const nc = cy.nodes().length; const ec = cy.edges().length; const pad = layoutPadding(nc);
+      const isIncremental = useGraphViewStore.getState().incremental;
+      if (isIncremental) {
+        // Incremental update (expand/load): position new nodes near connected existing nodes
+        const addedNodeIds = new Set(toAdd.filter((el) => el.group === "nodes").map((el) => el.data.id));
+        for (const nid of addedNodeIds) {
+          const newNode = cy.getElementById(nid);
+          if (newNode.length === 0) continue;
+          const neighbors = newNode.connectedEdges().connectedNodes().filter((n: NodeSingular) => !addedNodeIds.has(n.id()));
+          if (neighbors.length > 0) {
+            const neighbor = neighbors.first() as NodeSingular;
+            const pos = neighbor.position();
+            newNode.position({ x: pos.x + (Math.random() - 0.5) * 100, y: pos.y + (Math.random() - 0.5) * 100 });
+          }
+        }
+        cy.layout({ ...LAYOUTS.force, padding: pad, randomize: false, animate: true } as LayoutOptions).run();
+        useGraphViewStore.getState().setIncremental(false);
+      } else if (ec === 0 && nc > 1) {
+        // No edges: use grid layout so disconnected nodes spread apart
+        cy.layout({ name: "grid", animate: true, animationDuration: 400, fit: true, padding: pad, rows: Math.ceil(Math.sqrt(nc)), spacingFactor: 1.5 } as LayoutOptions).run();
+      } else {
+        cy.layout({ ...LAYOUTS.force, padding: pad } as LayoutOptions).run();
+      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nodes, edges, labelIcons, imageProperty, captionProperty]);

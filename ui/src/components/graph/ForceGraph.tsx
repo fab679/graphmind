@@ -5,6 +5,8 @@ import {
   forceLink,
   forceManyBody,
   forceSimulation,
+  forceX,
+  forceY,
 } from "d3-force";
 import { select } from "d3-selection";
 import { zoom, zoomIdentity } from "d3-zoom";
@@ -12,6 +14,7 @@ import type { D3ZoomEvent, ZoomBehavior } from "d3-zoom";
 import type { Simulation, SimulationNodeDatum } from "d3-force";
 import type { GraphEdge, GraphNode } from "@/types/api";
 import { useGraphStore } from "@/stores/graphStore";
+import { useUiStore } from "@/stores/uiStore";
 import { useQueryStore } from "@/stores/queryStore";
 import { useGraphSettingsStore } from "@/stores/graphSettingsStore";
 import { getCustomColorForLabel, getCustomEdgeColor, getNodeCaption } from "@/lib/colors";
@@ -1129,9 +1132,15 @@ export const ForceGraph = forwardRef<ForceGraphHandle, ForceGraphProps>(function
 
     // --- 3. Create and PRE-RUN simulation ---
     const nodeCount = simNodes.length;
+    const linkCount = simLinks.length;
     const linkDist = nodeCount > 200 ? 120 : nodeCount > 50 ? 100 : 80;
-    const chargeStr = nodeCount > 200 ? -100 : nodeCount > 50 ? -150 : -200;
-    const distMax = nodeCount > 200 ? 300 : nodeCount > 50 ? 500 : Infinity;
+    // Boost repulsion when nodes have few/no relationships so they spread apart
+    const sparse = nodeCount > 0 && linkCount / nodeCount < 0.5;
+    const chargeStr = sparse
+      ? (nodeCount > 200 ? -300 : nodeCount > 50 ? -500 : -600)
+      : (nodeCount > 200 ? -100 : nodeCount > 50 ? -150 : -200);
+    const distMax = sparse ? Infinity : (nodeCount > 200 ? 300 : nodeCount > 50 ? 500 : Infinity);
+    const collideRadius = sparse ? 40 : 4;
 
     const sim = forceSimulation<SimNode>(simNodes)
       .force(
@@ -1146,9 +1155,18 @@ export const ForceGraph = forwardRef<ForceGraphHandle, ForceGraphProps>(function
           .strength(chargeStr)
           .distanceMax(distMax),
       )
-      .force("center", forceCenter(cw / 2, ch / 2))
-      .force("collide", forceCollide<SimNode>().radius((d) => d.radius + 4))
-      .alphaDecay(0.03)
+      .force("collide", forceCollide<SimNode>().radius((d) => d.radius + collideRadius));
+
+    // Use gentle positioning forces for sparse/disconnected graphs
+    // so nodes don't pile up at center. Strong forceCenter overwhelms charge repulsion.
+    if (sparse) {
+      sim.force("x", forceX<SimNode>(cw / 2).strength(0.02));
+      sim.force("y", forceY<SimNode>(ch / 2).strength(0.02));
+    } else {
+      sim.force("center", forceCenter(cw / 2, ch / 2));
+    }
+
+    sim.alphaDecay(0.03)
       .velocityDecay(0.4)
       .stop(); // DON'T auto-start
 
@@ -1579,8 +1597,9 @@ export const ForceGraph = forwardRef<ForceGraphHandle, ForceGraphProps>(function
   async function handleExpandNeighbors(nodeId: string) {
     setContextMenu(null);
     try {
+      const graph = useUiStore.getState().activeGraph;
       const query = `MATCH (n)-[r]-(m) WHERE id(n) = ${nodeId} RETURN n, r, m`;
-      const result = await executeQuery(query);
+      const result = await executeQuery(query, graph);
       if (result.error) {
         console.error("Expand neighbors error:", result.error);
         return;
@@ -1623,7 +1642,8 @@ export const ForceGraph = forwardRef<ForceGraphHandle, ForceGraphProps>(function
       const existingEdgeIds = new Set(state.edges.map((e) => e.id));
       const mergedEdges = [...state.edges];
 
-      const result = await executeQuery("MATCH (n)-[r]->(m) RETURN n, r, m");
+      const graph = useUiStore.getState().activeGraph;
+      const result = await executeQuery("MATCH (n)-[r]->(m) RETURN n, r, m", graph);
       if (result.error) {
         console.error("View all relationships error:", result.error);
         return;

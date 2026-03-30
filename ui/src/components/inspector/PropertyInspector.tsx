@@ -244,52 +244,6 @@ export function PropertyInspector() {
         </select>
       </div>
 
-      {/* Connected edges */}
-      {connectedEdges.length > 0 && (
-        <div>
-          <div style={sectionTitle}>Connected ({connectedEdges.length})</div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
-            {connectedEdges.slice(0, 20).map((e) => {
-              const edgeColor = getCustomEdgeColor(e.type);
-              const srcNode = nodes.find((n) => n.id === e.source);
-              const tgtNode = nodes.find((n) => n.id === e.target);
-              const srcName = srcNode
-                ? getNodeCaption(srcNode.labels[0] ?? "", srcNode.properties)
-                : e.source;
-              const tgtName = tgtNode
-                ? getNodeCaption(tgtNode.labels[0] ?? "", tgtNode.properties)
-                : e.target;
-
-              return (
-                <div
-                  key={e.id}
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 4,
-                    fontSize: 9.5,
-                    fontFamily: '"Inter", sans-serif',
-                    color: "var(--th-text-muted, #64748b)",
-                    padding: "3px 0",
-                  }}
-                >
-                  <span style={{ color: "var(--th-text, #0f172a)" }}>{srcName}</span>
-                  <span style={{ color: edgeColor, fontSize: 8 }}>&rarr;</span>
-                  <TypeBadge type={e.type} color={edgeColor} />
-                  <span style={{ color: edgeColor, fontSize: 8 }}>&rarr;</span>
-                  <span style={{ color: "var(--th-text, #0f172a)" }}>{tgtName}</span>
-                </div>
-              );
-            })}
-            {connectedEdges.length > 20 && (
-              <span style={{ fontSize: 9, color: "var(--th-text-faint, #94a3b8)" }}>
-                +{connectedEdges.length - 20} more
-              </span>
-            )}
-          </div>
-        </div>
-      )}
-
       {/* Properties */}
       {dataEntries.length > 0 && (
         <div style={{ minHeight: 0 }}>

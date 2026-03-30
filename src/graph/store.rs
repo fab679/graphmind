@@ -372,10 +372,28 @@ impl GraphStore {
                     properties,
                 } => {
                     for (key, value) in &properties {
-                        if let PropertyValue::Vector(vec) = value {
-                            for label in &labels {
-                                let _ = vector_index.add_vector(label.as_str(), key, id, vec);
+                        match value {
+                            PropertyValue::Vector(vec) => {
+                                for label in &labels {
+                                    let _ = vector_index.add_vector(label.as_str(), key, id, vec);
+                                }
                             }
+                            PropertyValue::Array(arr) => {
+                                let vec: Vec<f32> = arr
+                                    .iter()
+                                    .filter_map(|v| match v {
+                                        PropertyValue::Float(f) => Some(*f as f32),
+                                        PropertyValue::Integer(i) => Some(*i as f32),
+                                        _ => None,
+                                    })
+                                    .collect();
+                                if vec.len() == arr.len() && !vec.is_empty() {
+                                    for label in &labels {
+                                        let _ = vector_index.add_vector(label.as_str(), key, id, &vec);
+                                    }
+                                }
+                            }
+                            _ => {}
                         }
                         for label in &labels {
                             property_index.index_insert(label, key, value.clone(), id);
@@ -498,10 +516,28 @@ impl GraphStore {
                     for label in &labels {
                         property_index.index_insert(label, &key, new_value.clone(), id);
                     }
-                    if let PropertyValue::Vector(vec) = &new_value {
-                        for label in &labels {
-                            let _ = vector_index.add_vector(label.as_str(), &key, id, vec);
+                    match &new_value {
+                        PropertyValue::Vector(vec) => {
+                            for label in &labels {
+                                let _ = vector_index.add_vector(label.as_str(), &key, id, vec);
+                            }
                         }
+                        PropertyValue::Array(arr) => {
+                            let vec: Vec<f32> = arr
+                                .iter()
+                                .filter_map(|v| match v {
+                                    PropertyValue::Float(f) => Some(*f as f32),
+                                    PropertyValue::Integer(i) => Some(*i as f32),
+                                    _ => None,
+                                })
+                                .collect();
+                            if vec.len() == arr.len() && !vec.is_empty() {
+                                for label in &labels {
+                                    let _ = vector_index.add_vector(label.as_str(), &key, id, &vec);
+                                }
+                            }
+                        }
+                        _ => {}
                     }
 
                     // Auto-Embed check
@@ -594,8 +630,24 @@ impl GraphStore {
                     properties,
                 } => {
                     for (key, value) in properties {
-                        if let PropertyValue::Vector(vec) = &value {
-                            let _ = vector_index.add_vector(label.as_str(), &key, id, vec);
+                        match &value {
+                            PropertyValue::Vector(vec) => {
+                                let _ = vector_index.add_vector(label.as_str(), &key, id, vec);
+                            }
+                            PropertyValue::Array(arr) => {
+                                let vec: Vec<f32> = arr
+                                    .iter()
+                                    .filter_map(|v| match v {
+                                        PropertyValue::Float(f) => Some(*f as f32),
+                                        PropertyValue::Integer(i) => Some(*i as f32),
+                                        _ => None,
+                                    })
+                                    .collect();
+                                if vec.len() == arr.len() && !vec.is_empty() {
+                                    let _ = vector_index.add_vector(label.as_str(), &key, id, &vec);
+                                }
+                            }
+                            _ => {}
                         }
                         property_index.index_insert(&label, &key, value.clone(), id);
 
@@ -1598,10 +1650,28 @@ impl GraphStore {
                 properties,
             } => {
                 for (key, value) in properties {
-                    if let PropertyValue::Vector(vec) = &value {
-                        for label in &labels {
-                            let _ = self.vector_index.add_vector(label.as_str(), &key, id, vec);
+                    match &value {
+                        PropertyValue::Vector(vec) => {
+                            for label in &labels {
+                                let _ = self.vector_index.add_vector(label.as_str(), &key, id, vec);
+                            }
                         }
+                        PropertyValue::Array(arr) => {
+                            let vec: Vec<f32> = arr
+                                .iter()
+                                .filter_map(|v| match v {
+                                    PropertyValue::Float(f) => Some(*f as f32),
+                                    PropertyValue::Integer(i) => Some(*i as f32),
+                                    _ => None,
+                                })
+                                .collect();
+                            if vec.len() == arr.len() && !vec.is_empty() {
+                                for label in &labels {
+                                    let _ = self.vector_index.add_vector(label.as_str(), &key, id, &vec);
+                                }
+                            }
+                        }
+                        _ => {}
                     }
                     for label in &labels {
                         self.property_index
@@ -1638,10 +1708,29 @@ impl GraphStore {
                     self.property_index
                         .index_insert(label, &key, new_value.clone(), id);
                 }
-                if let PropertyValue::Vector(vec) = &new_value {
-                    for label in &labels {
-                        let _ = self.vector_index.add_vector(label.as_str(), &key, id, vec);
+                match &new_value {
+                    PropertyValue::Vector(vec) => {
+                        for label in &labels {
+                            let _ = self.vector_index.add_vector(label.as_str(), &key, id, vec);
+                        }
                     }
+                    PropertyValue::Array(arr) => {
+                        // Also handle Array of numerics as vector data
+                        let vec: Vec<f32> = arr
+                            .iter()
+                            .filter_map(|v| match v {
+                                PropertyValue::Float(f) => Some(*f as f32),
+                                PropertyValue::Integer(i) => Some(*i as f32),
+                                _ => None,
+                            })
+                            .collect();
+                        if vec.len() == arr.len() && !vec.is_empty() {
+                            for label in &labels {
+                                let _ = self.vector_index.add_vector(label.as_str(), &key, id, &vec);
+                            }
+                        }
+                    }
+                    _ => {}
                 }
             }
             LabelAdded {
@@ -1651,8 +1740,24 @@ impl GraphStore {
                 properties,
             } => {
                 for (key, value) in properties {
-                    if let PropertyValue::Vector(vec) = &value {
-                        let _ = self.vector_index.add_vector(label.as_str(), &key, id, vec);
+                    match &value {
+                        PropertyValue::Vector(vec) => {
+                            let _ = self.vector_index.add_vector(label.as_str(), &key, id, vec);
+                        }
+                        PropertyValue::Array(arr) => {
+                            let vec: Vec<f32> = arr
+                                .iter()
+                                .filter_map(|v| match v {
+                                    PropertyValue::Float(f) => Some(*f as f32),
+                                    PropertyValue::Integer(i) => Some(*i as f32),
+                                    _ => None,
+                                })
+                                .collect();
+                            if vec.len() == arr.len() && !vec.is_empty() {
+                                let _ = self.vector_index.add_vector(label.as_str(), &key, id, &vec);
+                            }
+                        }
+                        _ => {}
                     }
                     self.property_index
                         .index_insert(&label, &key, value.clone(), id);

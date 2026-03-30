@@ -47,22 +47,34 @@ fn json_params_to_property_values(
                 }
                 serde_json::Value::String(s) => PropertyValue::String(s.clone()),
                 serde_json::Value::Array(arr) => {
-                    let items: Vec<PropertyValue> = arr
-                        .iter()
-                        .map(|item| match item {
-                            serde_json::Value::String(s) => PropertyValue::String(s.clone()),
-                            serde_json::Value::Number(n) => {
-                                if let Some(i) = n.as_i64() {
-                                    PropertyValue::Integer(i)
-                                } else {
-                                    PropertyValue::Float(n.as_f64().unwrap_or(0.0))
+                    // Check if all elements are numeric — if so, create a Vector
+                    // (used for embedding/vector properties)
+                    let all_numeric = !arr.is_empty()
+                        && arr.iter().all(|item| item.is_number());
+                    if all_numeric {
+                        let floats: Vec<f32> = arr
+                            .iter()
+                            .map(|item| item.as_f64().unwrap_or(0.0) as f32)
+                            .collect();
+                        PropertyValue::Vector(floats)
+                    } else {
+                        let items: Vec<PropertyValue> = arr
+                            .iter()
+                            .map(|item| match item {
+                                serde_json::Value::String(s) => PropertyValue::String(s.clone()),
+                                serde_json::Value::Number(n) => {
+                                    if let Some(i) = n.as_i64() {
+                                        PropertyValue::Integer(i)
+                                    } else {
+                                        PropertyValue::Float(n.as_f64().unwrap_or(0.0))
+                                    }
                                 }
-                            }
-                            serde_json::Value::Bool(b) => PropertyValue::Boolean(*b),
-                            _ => PropertyValue::Null,
-                        })
-                        .collect();
-                    PropertyValue::Array(items)
+                                serde_json::Value::Bool(b) => PropertyValue::Boolean(*b),
+                                _ => PropertyValue::Null,
+                            })
+                            .collect();
+                        PropertyValue::Array(items)
+                    }
                 }
                 serde_json::Value::Object(_) => PropertyValue::String(v.to_string()),
             };
@@ -93,6 +105,7 @@ pub async fn query_handler(
         || trimmed_upper.starts_with("MERGE")
         || trimmed_upper.starts_with("DELETE")
         || trimmed_upper.starts_with("DETACH")
+        || trimmed_upper.starts_with("DROP")
         || trimmed_upper.starts_with("CALL")
         || trimmed_upper.starts_with("SET")
         || trimmed_upper.contains(" CREATE ")
@@ -104,6 +117,8 @@ pub async fn query_handler(
         || trimmed_upper.contains(" REMOVE ")
         || trimmed_upper.contains("\nREMOVE ")
         || trimmed_upper.contains(" CALL ")
+        || trimmed_upper.contains(" DROP ")
+        || trimmed_upper.contains("\nDROP ")
         || trimmed_upper.contains(';');
 
     let start = std::time::Instant::now();
@@ -1632,6 +1647,45 @@ mod tests {
         assert_eq!(edges.len(), 1);
         assert_eq!(edges[0]["type"], "FRIENDS");
         assert_eq!(edges[0]["properties"]["since"], 2020);
+    }
+
+    #[tokio::test]
+    async fn test_vector_index_populated_via_http_flow() {
+        // Simulate the user's flow: CREATE VECTOR INDEX, then CREATE node with embedding,
+        // then verify the vector index is populated.
+        let (_app, state) = test_app();
+
+        // Step 1: Create vector index
+        {
+            let store = state.stores.get_store("default").await;
+            let mut guard = store.write().await;
+            state.engine.execute_mut(
+                "CREATE VECTOR INDEX traceIdx FOR (n:Trace) ON (n.embedding) OPTIONS {dimensions: 3, similarity: 'cosine'}",
+                &mut guard,
+                "default",
+            ).unwrap();
+        }
+
+        // Step 2: Create a node with embedding (separate request = separate lock)
+        {
+            let store = state.stores.get_store("default").await;
+            let mut guard = store.write().await;
+            state.engine.execute_mut(
+                "CREATE (t:Trace {name: 'test', embedding: [0.1, 0.2, 0.3]})",
+                &mut guard,
+                "default",
+            ).unwrap();
+        }
+
+        // Step 3: Verify vector index is populated (read-only, like SHOW VECTOR INDEXES)
+        {
+            let store = state.stores.get_store("default").await;
+            let guard = store.read().await;
+            let idx = guard.vector_index.get_index("Trace", "embedding");
+            assert!(idx.is_some(), "Vector index should exist");
+            let count = idx.unwrap().read().unwrap().len();
+            assert_eq!(count, 1, "Vector index should have 1 vector after CREATE node via separate lock");
+        }
     }
 
     // ==================== query_handler graph param tests ====================

@@ -1016,7 +1016,9 @@ impl QueryPlanner {
             }
         }
 
-        // Validate MERGE re-binding: MATCH/CREATE (a) MERGE (a:NewLabel) should fail
+        // Validate MERGE re-binding: MATCH (a) MERGE (a:NewLabel) should fail
+        // Only check against variables from MATCH and WITH (prior scope), not CREATE
+        // (CREATE may come after MERGE and reference MERGE-introduced variables).
         if let Some(mc) = &query.merge_clause {
             let mut bound_node_vars: HashSet<String> = HashSet::new();
             for m in &query.match_clauses {
@@ -1031,27 +1033,12 @@ impl QueryPlanner {
                     }
                 }
             }
-            if let Some(cc) = &query.create_clause {
-                for path in &cc.pattern.paths {
-                    if let Some(v) = &path.start.variable {
+            if let Some(wc) = &query.with_clause {
+                for item in &wc.items {
+                    if let Some(a) = &item.alias {
+                        bound_node_vars.insert(a.clone());
+                    } else if let Expression::Variable(v) = &item.expression {
                         bound_node_vars.insert(v.clone());
-                    }
-                    for seg in &path.segments {
-                        if let Some(v) = &seg.node.variable {
-                            bound_node_vars.insert(v.clone());
-                        }
-                    }
-                }
-            }
-            for cc in &query.create_clauses {
-                for path in &cc.pattern.paths {
-                    if let Some(v) = &path.start.variable {
-                        bound_node_vars.insert(v.clone());
-                    }
-                    for seg in &path.segments {
-                        if let Some(v) = &seg.node.variable {
-                            bound_node_vars.insert(v.clone());
-                        }
                     }
                 }
             }
@@ -1455,6 +1442,10 @@ impl QueryPlanner {
         }
 
         // Validate: ambiguous aggregation expressions in RETURN/WITH
+        //
+        // Carry-forward variables from a previous WITH clause are valid alongside
+        // aggregate functions (they act as implicit grouping keys / constants).
+        // E.g. `WITH created + collect(t) AS allNodes` — `created` is a carry-forward.
         fn validate_aggregation_mixing(
             items: &[crate::query::ast::ReturnItem],
         ) -> ExecutionResult<()> {
@@ -1462,8 +1453,8 @@ impl QueryPlanner {
             if !has_agg {
                 return Ok(());
             }
-            // Collect grouping keys: only simple Variable and Property references
-            let grouping_keys: HashSet<String> = items
+            // Collect explicit grouping keys: standalone non-aggregate items
+            let mut grouping_keys: HashSet<String> = items
                 .iter()
                 .filter(|i| !contains_aggregation(&i.expression))
                 .filter_map(|i| match &i.expression {
@@ -1474,6 +1465,54 @@ impl QueryPlanner {
                     _ => None,
                 })
                 .collect();
+
+            // Also collect implicit grouping keys: variable references that appear
+            // outside aggregate function calls within aggregate-containing expressions.
+            // These are carry-forward variables from a prior WITH scope that act as
+            // constants in the current aggregation context.
+            fn collect_non_agg_vars(expr: &Expression, out: &mut HashSet<String>) {
+                match expr {
+                    Expression::Function { name, args, .. } => {
+                        let is_agg = matches!(
+                            name.to_lowercase().as_str(),
+                            "count"
+                                | "sum"
+                                | "avg"
+                                | "min"
+                                | "max"
+                                | "collect"
+                                | "percentiledisc"
+                                | "percentilecont"
+                                | "stdev"
+                                | "stdevp"
+                        );
+                        if !is_agg {
+                            for arg in args {
+                                collect_non_agg_vars(arg, out);
+                            }
+                        }
+                        // Skip inside aggregate calls — those args are aggregated, not grouping keys
+                    }
+                    Expression::Binary { left, right, .. } => {
+                        collect_non_agg_vars(left, out);
+                        collect_non_agg_vars(right, out);
+                    }
+                    Expression::Variable(v) => {
+                        out.insert(v.clone());
+                    }
+                    Expression::Property { variable, property } => {
+                        out.insert(format!("{}.{}", variable, property));
+                    }
+                    Expression::Unary { expr, .. } => collect_non_agg_vars(expr, out),
+                    _ => {}
+                }
+            }
+            for item in items {
+                if contains_aggregation(&item.expression) {
+                    collect_non_agg_vars(&item.expression, &mut grouping_keys);
+                }
+            }
+
             for item in items {
                 if contains_aggregation(&item.expression) {
                     if let Err(bad) = check_non_agg_parts_strict(&item.expression, &grouping_keys) {
@@ -1491,6 +1530,9 @@ impl QueryPlanner {
         }
         if let Some(wc) = &query.with_clause {
             validate_aggregation_mixing(&wc.items)?;
+        }
+        for (extra_with, _, _, _) in &query.extra_with_stages {
+            validate_aggregation_mixing(&extra_with.items)?;
         }
 
         // Validate: aggregation in ORDER BY after RETURN
